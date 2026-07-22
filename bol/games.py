@@ -12,14 +12,32 @@ from .util import asset_url, download, gh_releases, load_settings, save_settings
 
 def list_mc_versions(include_beta=True):
     out = []
-    for r in gh_releases(GAME_ARCHIVE_REPO, 60):
+    for r in gh_releases(GAME_ARCHIVE_REPO, fetch_all=True):
+        tag = r["tag_name"]
+        
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?", tag)
+        if not m:
+            continue
+            
+        major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        build = int(m.group(4)) if m.group(4) else 0
+        
+        is_beta = bool(r.get("prerelease"))
+        if is_beta:
+            if (major, minor, patch, build) < (1, 21, 120, 21):
+                continue
+            if not include_beta:
+                continue
+        else:
+            if (major, minor, patch, build) < (1, 21, 120, 0):
+                continue
+                
         url, name, size = asset_url(
             r, lambda n: n.lower().endswith(".zip") and "minecraft" in n.lower())
         if not url:
             continue
-        if r.get("prerelease") and not include_beta:
-            continue
-        out.append({"tag": r["tag_name"], "beta": bool(r.get("prerelease")),
+            
+        out.append({"tag": tag, "beta": is_beta,
                     "url": url, "name": name, "size": size})
     return out
 

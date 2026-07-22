@@ -45,6 +45,8 @@ def main():
     )
     sub.add_parser("update", help="check for and install launcher updates")
 
+    sub.add_parser("changelog", help="display the launcher's release changelog history")
+
     a = p.parse_args()
     try:
         if a.cmd == "setup":
@@ -91,6 +93,22 @@ def main():
             cmd_import(a.files)
         elif a.cmd == "repair":
             reset_prefix()
+        elif a.cmd == "changelog":
+            try:
+                from .util import gh_latest
+                from .config import SELF_REPO
+                rel = gh_latest(SELF_REPO)
+                if not rel:
+                    print("No release found.")
+                    return
+                tag = rel.get("tag_name", "Unknown")
+                date = (rel.get("published_at") or "").split("T")[0]
+                body = rel.get("body") or ""
+                print(f"Release {tag} ({date})")
+                print("-" * (len(tag) + len(date) + 11))
+                print(body.strip())
+            except Exception as e:
+                print(f"Error fetching changelog: {e}")
         elif a.cmd == "gui":
             gui()
         else:

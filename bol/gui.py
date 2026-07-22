@@ -18,15 +18,6 @@ from .auth import (
     msa_signed_in,
     msa_gamertag,
 )
-from .config import (
-    LOGS,
-    PRETTY,
-    VERSION,
-    get_install_location,
-    set_install_location,
-    clear_install_location,
-    default_install_location,
-)
 from .content import _mojang_dir, import_content
 from .games import list_mc_versions
 from .gamesetup import do_setup
@@ -387,7 +378,7 @@ def gui():
         if ll:
             ll.configure(fg_color=c)
             
-    for w in (icon_btn, ll):
+    for w in [icon_btn, ll]:
         w.bind("<Button-1>", _open_github)
         w.bind("<Enter>", lambda e: _icon_hover(True))
         w.bind("<Leave>", lambda e: _icon_hover(False))

@@ -104,10 +104,13 @@ def apply_custom_env(env, custom_env):
             env[key] = value
 
 
-def http_json(url):
-    req = urllib.request.Request(
-        url, headers={"User-Agent": APP, "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
+def http_json(url, timeout=10):
+    headers = {"User-Agent": APP, "Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"token {token}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
 
@@ -197,13 +200,160 @@ def download(url, dest: Path, label=None, progress=None, attempts=5):
     die(f"Download failed after {attempts} attempts: {url}\n{last_err}")
 
 
+def _fetch_with_fallback(cache_file, url, ttl=3600):
+    cache_path = CACHE / cache_file
+    if cache_path.exists():
+        try:
+            mtime = cache_path.stat().st_mtime
+            if time.time() - mtime < ttl:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+
+    try:
+        data = http_json(url)
+        if data:
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+            except Exception:
+                pass
+            return data
+    except Exception:
+        if cache_path.exists():
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        raise
+
+
 def gh_latest(repo):
-    return http_json(f"https://api.github.com/repos/{repo}/releases/latest")
+    cache_file = f"releases_latest_{repo.replace('/', '_')}.json"
+    return _fetch_with_fallback(cache_file, f"https://api.github.com/repos/{repo}/releases/latest")
 
 
-def gh_releases(repo, per_page=50):
-    return http_json(
-        f"https://api.github.com/repos/{repo}/releases?per_page={per_page}")
+def gh_releases(repo, per_page=100, fetch_all=False, ignore_cache=False):
+    cache_file = f"releases_{repo.replace('/', '_')}_{'all' if fetch_all else per_page}.json"
+    cache_path = CACHE / cache_file
+    
+    if cache_path.exists() and not ignore_cache:
+        try:
+            if time.time() - cache_path.stat().st_mtime < 43200:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+
+    try:
+        if not fetch_all:
+            data = http_json(f"https://api.github.com/repos/{repo}/releases?per_page={per_page}")
+        else:
+            data = []
+            page = 1
+            while True:
+                chunk = http_json(f"https://api.github.com/repos/{repo}/releases?per_page=100&page={page}")
+                if not chunk: break
+                data.extend(chunk)
+                if len(chunk) < 100: break
+                page += 1
+                
+        if data:
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+            except Exception:
+                pass
+            return data
+    except Exception:
+        if cache_path.exists():
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        raise
+    return []
+
+
+def mc_releases(fetch_all=True, ignore_cache=False):
+    beta = load_settings().get("show_betas", False)
+    
+    def fetch_section(section):
+        cache_file = f"releases_mc_{section}_{'all' if fetch_all else '100'}.json"
+        cache_path = CACHE / cache_file
+        
+        if cache_path.exists() and not ignore_cache:
+            try:
+                if time.time() - cache_path.stat().st_mtime < 43200:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+            except Exception:
+                pass
+                
+        try:
+            articles = []
+            url = f"https://feedback.minecraft.net/api/v2/help_center/en-us/sections/{section}/articles.json?per_page=100"
+            while url:
+                data = http_json(url)
+                if not data or "articles" not in data:
+                    break
+                articles.extend(data["articles"])
+                if not fetch_all:
+                    break
+                url = data.get("next_page")
+                
+            res = {"articles": articles}
+            if articles:
+                try:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(cache_path, "w", encoding="utf-8") as f:
+                        json.dump(res, f, indent=2)
+                except Exception:
+                    pass
+                return res
+        except Exception:
+            if cache_path.exists():
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception:
+                    pass
+            raise
+        return {"articles": []}
+
+    import re
+    def extract_versions(title):
+        matches = re.findall(r"(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?", title)
+        res = []
+        for m in matches:
+            parts = [int(x) if x else 0 for x in m]
+            if parts[0] > 10:
+                parts = [1, parts[0], parts[1], parts[2]]
+            res.append(tuple(parts))
+        return res
+
+    official = fetch_section("360001186971")["articles"]
+    articles = []
+    
+    for a in official:
+        vs = extract_versions(a.get("title", ""))
+        if not vs or any(v >= (1, 21, 120, 0) for v in vs):
+            articles.append(a)
+    
+    if beta:
+        betas = fetch_section("360001185332")["articles"]
+        for a in betas:
+            vs = extract_versions(a.get("title", ""))
+            if not vs or any(v >= (1, 21, 120, 21) for v in vs):
+                articles.append(a)
+        
+    articles.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return {"articles": articles}
 
 
 def asset_url(release, predicate):
@@ -211,6 +361,22 @@ def asset_url(release, predicate):
         if predicate(a["name"]):
             return a["browser_download_url"], a["name"], a.get("size", 0)
     return None, None, 0
+
+
+def format_display_version(text, is_beta=False):
+    import re
+    def repl(m):
+        prefix = m.group(1)
+        major = int(m.group(2))
+        rest = m.group(3)
+        if not is_beta:
+            parts = rest.split('.')
+            if len(parts) == 3:
+                rest = '.' + parts[1]
+        if major >= 22:
+            return str(major) + rest
+        return prefix + str(major) + rest
+    return re.sub(r"(?<!\d)(v?1\.)(\d+)(\.\d+(?:\.\d+)?)", repl, text)
 
 
 def _screen_wh(runner=None):

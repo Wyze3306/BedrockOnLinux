@@ -64,6 +64,14 @@ def msa_signed_in():
     return bool(msa_load().get("refresh_token"))
 
 
+def msa_gamertag():
+    if not msa_signed_in():
+        return None
+    try:
+        j = json.loads((DATA / "winegdk-preauth" / "device.json").read_text())
+        return j.get("xbl_gamertag")
+    except Exception:
+        return None
 
 
 def msa_logout():
