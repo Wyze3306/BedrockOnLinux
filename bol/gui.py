@@ -22,10 +22,10 @@ from .config import (
     LOGS,
     PRETTY,
     VERSION,
-    clear_install_location,
-    default_install_location,
     get_install_location,
     set_install_location,
+    clear_install_location,
+    default_install_location,
 )
 from .content import _mojang_dir, import_content
 from .games import list_mc_versions
@@ -1459,6 +1459,7 @@ def gui():
         gamescope_entry.bind("<FocusOut>", save_gamescope)
         gamescope_entry.bind("<Return>", lambda e: "break")
 
+        # ===== Game files location =====
         ctk.CTkLabel(tab_advanced, text="Game files location",
                      text_color=T.SUB, font=font(11, "bold"),
                      anchor="w").pack(anchor="w", pady=(12, 4), padx=4)
@@ -1594,7 +1595,7 @@ def gui():
                      text_color=T.MUTED, font=font(10), anchor="w",
                      justify="left", wraplength=340
                      ).pack(anchor="w", pady=(2, 8), padx=4)
-
+        
         # ---- Tools --------------------------------------------------
         imp_status = tk.StringVar(value="")
 
