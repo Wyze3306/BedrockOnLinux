@@ -387,7 +387,7 @@ def gui():
         if ll:
             ll.configure(fg_color=c)
             
-    for w in [icon_btn, ll]:
+    for w in (icon_btn, ll):
         w.bind("<Button-1>", _open_github)
         w.bind("<Enter>", lambda e: _icon_hover(True))
         w.bind("<Leave>", lambda e: _icon_hover(False))
@@ -1459,7 +1459,7 @@ def gui():
         gamescope_entry.bind("<FocusOut>", save_gamescope)
         gamescope_entry.bind("<Return>", lambda e: "break")
 
-        # ===== Game files location =====
+        # ===== Game files location (improved) =====
         ctk.CTkLabel(tab_advanced, text="Game files location",
                      text_color=T.SUB, font=font(11, "bold"),
                      anchor="w").pack(anchor="w", pady=(12, 4), padx=4)
@@ -1468,10 +1468,26 @@ def gui():
         loc_row.pack(fill="x", pady=(0, 2), padx=4)
 
         loc_var = tk.StringVar(value=get_install_location())
-        loc_field = ctk.CTkLabel(
-            loc_row, textvariable=loc_var, text_color=T.FG, font=font(12),
-            fg_color=T.CARD_3, corner_radius=8, anchor="w", height=36)
+        # Use a readonly Entry so the user can select and copy the path.
+        loc_field = ctk.CTkEntry(
+            loc_row, textvariable=loc_var, state="readonly",
+            fg_color=T.CARD_3, text_color=T.FG, font=font(12),
+            corner_radius=8, height=36)
         loc_field.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        # Tooltip to explain that changes require a restart.
+        Tooltip(loc_field, "Changing this location requires a restart.")
+
+        # Add a small copy button next to the path.
+        def copy_path():
+            root.clipboard_clear()
+            root.clipboard_append(loc_var.get())
+            # brief visual feedback
+            copy_path_btn.configure(text="✓")
+            root.after(1200, lambda: copy_path_btn.configure(text="Copy"))
+
+        copy_path_btn = mkbtn(loc_row, "Copy", copy_path, kind="flat",
+                              width=60, height=30, font=font(11))
+        copy_path_btn.pack(side="right", padx=(0, 4))
 
         loc_status = tk.StringVar(value="")
         loc_move_v = tk.BooleanVar(value=True)
