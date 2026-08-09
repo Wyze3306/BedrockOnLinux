@@ -13,6 +13,8 @@ from .gpu_safety import (
     gpu_safety_acknowledgement_status,
 )
 from .log import BolError, info, ok, warn
+from .ntsync import inproc_sync_problem, inproc_sync_summary
+from .util import custom_env_map, load_settings
 
 
 def gpu_crash_acknowledgement_status():
@@ -100,6 +102,20 @@ def doctor(acknowledge_gpu_crash=False):
     if gpu_problem:
         warn("Unsafe graphics session: " + gpu_problem + ". Repair the host "
              "GPU driver and reboot; no Vulkan probe was attempted.")
+    # Wine 11 has no esync/fsync; without ntsync every wait is a wineserver
+    # round-trip and the game behaves as if it were single-threaded. Import
+    # lazily so the ordinary doctor keeps not depending on the Wine modules.
+    from .proton import proton_path
+
+    engine = proton_path()
+    # Launch drops an inherited PROTON_NO_NTSYNC, so only the Advanced
+    # custom-environment field can really disable the fast path; report on
+    # the same basis rather than on this shell's environment.
+    custom = custom_env_map(load_settings().get("custom_env") or "")
+    print(f"  {'fast sync':12} : {inproc_sync_summary(engine, environ=custom)}")
+    sync_problem = inproc_sync_problem(engine, environ=custom)
+    if sync_problem:
+        warn(sync_problem)
     if miss:
         warn("To install: " + hint.format(" ".join(sorted(set(miss)))))
         return False

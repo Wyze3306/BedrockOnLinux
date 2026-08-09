@@ -34,6 +34,8 @@ readonly VENDORED_CONTEXT_CALLBACK_PATCH_SHA256="33afb0b3bcd7678e828a955d639d338
 readonly VENDORED_CLIENT_SURFACE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0005-winex11-use-client-surface-origin.patch"
 readonly VENDORED_CLIENT_SURFACE_PATCH_SHA256="464da914667bd9c683fb79bc7c2a4477546a73060c66f29809cfa93783cbc1c8"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
+readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
+readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
 # Fixed build paths so Wine's embedded __FILE__ strings are stable run to run.
 readonly SRC=/winegdk/source
 readonly BUILD=/winegdk/build
@@ -56,6 +58,33 @@ export DEBIAN_FRONTEND=noninteractive
 bash "$PROJECT_ROOT/scripts/pin-apt-snapshot.sh" bullseye
 apt-get update -qq
 apt-get install -y --no-install-recommends git "${BUILD_PACKAGES[@]}" >/dev/null
+
+echo "== Installing the vendored linux/ntsync.h UAPI header"
+# Bullseye's linux-libc-dev is kernel 5.10 and predates ntsync, so configure
+# would leave HAVE_LINUX_NTSYNC_H undefined and compile Wine's whole
+# in-process synchronization backend out to stubs. Every Win32 wait would then
+# be a wineserver round-trip, which serialises Minecraft's worker threads and
+# makes the game behave as if it were single-threaded (issues #63/#139/#143/
+# #148/#150). The header is a frozen ioctl ABI; see third_party/linux-uapi.
+[ -f "$NTSYNC_UAPI_HEADER" ] \
+  || { echo "!! missing vendored linux/ntsync.h" >&2; exit 1; }
+[ "$(sha256sum "$NTSYNC_UAPI_HEADER" | cut -d' ' -f1)" = \
+  "$NTSYNC_UAPI_HEADER_SHA256" ] \
+  || { echo "!! vendored linux/ntsync.h hash mismatch" >&2; exit 1; }
+if cmp -s "$NTSYNC_UAPI_HEADER" /usr/include/linux/ntsync.h 2>/dev/null; then
+  : # already the reviewed header
+elif [ -e /usr/include/linux/ntsync.h ] \
+     && grep -q "NTSYNC_IOC_EVENT_READ" /usr/include/linux/ntsync.h; then
+  # Complete but not ours: a build-input change that needs review, not a
+  # silent build against an unreviewed ABI.
+  echo "!! /usr/include/linux/ntsync.h differs from the vendored copy" >&2
+  exit 1
+else
+  # Absent, or the 6.10-6.13 preview UAPI with only two ioctls. That preview
+  # defines HAVE_LINUX_NTSYNC_H so configure looks satisfied, yet Wine gates
+  # the backend on NTSYNC_IOC_EVENT_READ and still compiles it out.
+  install -D -m 0644 "$NTSYNC_UAPI_HEADER" /usr/include/linux/ntsync.h
+fi
 
 echo "== Exporting pinned WineGDK source ($EXPECTED_COMMIT)"
 git config --global --add safe.directory '*'
@@ -124,6 +153,20 @@ echo "== Configuring + building WineGDK (i386 + x86_64)"
 # Wine's installed headers embed the builder's absolute source path and are not
 # runtime material; drop them so the prefix is relocatable + reproducible.
 rm -rf "$PREFIX/include"
+
+# Fail closed if the in-process synchronization backend was compiled out. The
+# "/dev/ntsync" literal only survives when NTSYNC_IOC_EVENT_READ was defined,
+# so this is a direct check that the ntsync path is really in the artifact.
+echo "== Verifying in-process synchronization (ntsync) is compiled in"
+ntsync_servers=0
+for server in "$PREFIX"/bin/wineserver "$PREFIX"/bin-wow64/wineserver; do
+  [ -f "$server" ] || continue
+  ntsync_servers=$((ntsync_servers + 1))
+  grep -qa "/dev/ntsync" "$server" \
+    || { echo "!! $server has no ntsync path — in-process sync compiled out" >&2; exit 1; }
+done
+[ "$ntsync_servers" -gt 0 ] \
+  || { echo "!! no wineserver below $PREFIX to verify" >&2; exit 1; }
 
 # ntdll.so links libunwind (configure autodetects libunwind-dev), but the
 # pressure-vessel/sniper runtime ships no libunwind, so bundle the exact bullseye

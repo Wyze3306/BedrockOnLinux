@@ -153,9 +153,12 @@ removing the local override. Never merge two non-empty data roots blindly.
   `VK_NV_device_generated_commands`. The managed vkd3d-proton 3.0.1 payload
   contains both implementations and chooses inside the game process.
 - GPUs permanently limited to Vulkan 1.2 can try **Settings ▸ Advanced ▸
-  Legacy compatibility renderer**. This selects WineD3D, which bypasses
-  DXVK’s Vulkan 1.3 gate. It is not a promise that every
-  D3D12 path becomes OpenGL-only, and performance/rendering are not guaranteed.
+  Legacy compatibility renderer**. This is a last resort: it swaps the whole
+  Direct3D stack — D3D9 through **D3D12** — to WineD3D, so both DXVK and
+  vkd3d-proton are dropped. Minecraft renders exclusively through D3D12, so
+  the option replaces the renderer the game actually uses; visual artifacts
+  are common and ray tracing is unavailable. Performance is not guaranteed to
+  improve.
 - Enough free storage for the game, compressed engine and temporary
   extraction. A `No space left on device` error is non-destructive: free space
   and retry **PLAY**.

@@ -34,6 +34,7 @@ from .gpu_safety import (
     retire_idle_current_boot_marker,
 )
 from .log import BolError, die, info, ok, warn
+from .ntsync import inproc_sync_problem
 from .prefix import (
     active_prefix,
     boot_prefix,
@@ -46,6 +47,7 @@ from .proton import custom_proton, patch_proton, proton_path
 from .util import (
     _screen_wh,
     apply_custom_env,
+    custom_env_map,
     LAUNCHER_OWNED_ENV,
     LAUNCHER_OWNED_ENV_ALTERNATIVE,
     launcher_owned_overrides,
@@ -147,6 +149,30 @@ def _warn_if_dgc_unavailable(environ=None):
     cards = intel_dgpus_on_legacy_driver()
     if cards:
         warn(dgc_warning_message(cards))
+
+
+def _warn_if_inproc_sync_unavailable(settings, environ=None):
+    """Pre-launch heads-up when Wine has no fast synchronization path.
+
+    Wine 11 dropped esync/fsync, so without the kernel ntsync backend every
+    Win32 wait is a wineserver round-trip and Minecraft's worker threads end
+    up serialised behind it — the "the game runs on one thread" performance
+    reports. File/stat inspection only, no Wine process and no ioctl.
+    Advisory, not a block; BOL_SKIP_NTSYNC_CHECK=1 silences it.
+
+    PROTON_NO_NTSYNC is read from the Advanced custom-environment field rather
+    than the host environment: an inherited copy is dropped as a
+    launcher-owned variable, so only the field can actually disable the
+    fast path.
+    """
+    source = os.environ if environ is None else environ
+    if source.get("BOL_SKIP_NTSYNC_CHECK") == "1":
+        return
+    problem = inproc_sync_problem(
+        proton_path(),
+        environ=custom_env_map(settings.get("custom_env") or ""))
+    if problem:
+        warn(problem)
 
 
 def _configure_runtime_compat(env, settings, backend, host_wayland,
@@ -270,6 +296,9 @@ def _launch_once(lock_fds=()):
     # GPU-free advisory: an Intel dGPU on i915 cannot expose the DGC the
     # menu needs; warn before the cryptic page fault instead of after it.
     _warn_if_dgc_unavailable()
+    # Same idea for the synchronization fast path: name the cause of the
+    # "runs on one thread" stutter before the game starts, not after.
+    _warn_if_inproc_sync_unavailable(s)
     # Only completed, idle wrappers can retire a current-boot marker.
     retire_idle_current_boot_marker()
     require_safe_graphics_session()

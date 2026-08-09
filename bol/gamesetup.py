@@ -213,9 +213,13 @@ def diagnose():
     )
     if lacks_vulkan_13 and no_dxvk_adapter and not software_only:
         hits.append("DXVK found no usable Vulkan 1.3 adapter — choose the "
-                    "Legacy compatibility renderer (WineD3D/DXVK fallback; "
-                    "renderer=opengl) in Settings for GPUs whose Vulkan "
-                    "driver cannot provide Vulkan 1.3.")
+                    "Legacy compatibility renderer (renderer=opengl) in "
+                    "Settings for GPUs whose Vulkan driver cannot provide "
+                    "Vulkan 1.3. It is a last resort: it swaps the whole "
+                    "Direct3D stack, D3D12 included, to WineD3D, so both "
+                    "DXVK and vkd3d-proton are dropped. Minecraft renders "
+                    "exclusively through D3D12, so expect visual artifacts "
+                    "and no ray tracing.")
     # Check the field itself, not the log: an override that breaks the launch
     # can leave nothing in the log to match on, which is how issue #134 ended
     # in three full reinstalls.

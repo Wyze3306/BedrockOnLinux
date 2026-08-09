@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### Performance
+
+- Build the engine with Wine's in-process synchronization (ntsync) backend,
+  which had been silently compiled out. Wine 11 has no esync/fsync any more,
+  so `/dev/ntsync` is its only fast synchronization path — but the engine is
+  built in Debian 11 to hold the `GLIBC_2.31` ABI ceiling, and Bullseye's
+  `linux-libc-dev` is kernel 5.10 and ships no `linux/ntsync.h`. `configure`
+  therefore left `HAVE_LINUX_NTSYNC_H` undefined and reduced the whole backend
+  to stubs, so every Win32 wait, `SetEvent`, mutex and semaphore became a
+  wineserver round-trip. Because the wineserver serialises those requests,
+  Minecraft's worker threads queued behind one another and the game behaved as
+  if it were single-threaded: chunk generation stalled, the GPU was left idle
+  while one core saturated, and server TPS collapsed. The reviewed upstream
+  UAPI header is now vendored in `third_party/linux-uapi/` and installed into
+  the build container, and both build scripts fail closed if the resulting
+  `wineserver` does not carry the ntsync code path. Checking for the header is
+  not enough: kernels 6.10 to 6.13 shipped a two-ioctl preview that satisfies
+  `HAVE_LINUX_NTSYNC_H` while Wine's `NTSYNC_IOC_EVENT_READ` gate still
+  compiles the backend out, which is why building the engine yourself on, say,
+  Debian 13 produced a stubbed engine too
+  ([#63](https://github.com/Wyze3306/BedrockOnLinux/issues/63),
+  [#139](https://github.com/Wyze3306/BedrockOnLinux/issues/139),
+  [#143](https://github.com/Wyze3306/BedrockOnLinux/issues/143),
+  [#148](https://github.com/Wyze3306/BedrockOnLinux/issues/148),
+  [#150](https://github.com/Wyze3306/BedrockOnLinux/issues/150)).
+- Say so before the game starts when that fast path is still unusable, instead
+  of leaving the stutter unexplained. PLAY and Doctor now report whether the
+  installed engine carries the backend and whether the running kernel exposes
+  `/dev/ntsync` (mainline Linux 6.14 and later, module `ntsync`), with the
+  matching remedy. Silence the notice with `BOL_SKIP_NTSYNC_CHECK=1`.
+- Describe the Legacy compatibility renderer accurately. Settings, the
+  diagnostic hint and the README all implied it merely "bypasses DXVK", but
+  `PROTON_USE_WINED3D=1` swaps the entire Direct3D stack — D3D9 through
+  **D3D12** — to WineD3D, dropping DXVK *and* vkd3d-proton. Minecraft renders
+  exclusively through D3D12, so the option replaces the renderer the game
+  actually uses, which is why following that advice produced artifacts and
+  "weird blocks" rather than a speed-up
+  ([#63](https://github.com/Wyze3306/BedrockOnLinux/issues/63)).
+- Ignore an inherited `PROTON_NO_NTSYNC`, so a stale global export can no
+  longer serialise every worker thread behind the wineserver. The Advanced
+  custom-environment field remains the supported way to turn the fast path off.
+
 ## 2.1.2 — 2026-08-03
 
 ### Friends, Realms and Xbox Live

@@ -59,6 +59,16 @@ Notes:
   binaries, so the workflow always builds to the same path; changing it changes
   the bytes (the Wine analogue of pinning a timestamp). Two builds to the same
   fixed prefix in the pinned environment are byte-identical.
+  Holding the glibc ceiling has one cost worth knowing about: Bullseye's
+  `linux-libc-dev` is kernel 5.10, so it has no `linux/ntsync.h` and
+  `configure` used to compile Wine's in-process synchronization backend out to
+  stubs — every Win32 wait became a wineserver round-trip, which serialised
+  Minecraft's worker threads. The reviewed upstream UAPI header is therefore
+  vendored in `third_party/linux-uapi/` and installed into the build
+  environment (hash-verified, refusing to overwrite a differing copy), and both
+  build scripts assert afterwards that the built `wineserver` really carries
+  the `/dev/ntsync` code path. Anything that changes the base image's headers
+  must keep that assertion passing.
 - **Engine** is assembled from the public, SHA-pinned `Weather-OS/GDK-Proton`
   `release10-32` base. `scripts/package-engine.sh` overlays the WineGDK prefix,
   installs the universal vkd3d DLLs, reconciles the `files/bin` wow64 launch

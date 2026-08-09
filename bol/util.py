@@ -125,6 +125,11 @@ LAUNCHER_OWNED_ENV = (
     "PROTON_USE_WINED3D",
     "PROTON_LOG",
     "PROTON_LOG_DIR",
+    # Wine 11 has no esync/fsync, so ntsync is the only fast synchronization
+    # path left. A stale global export of this must not silently serialise
+    # every Minecraft worker thread behind the wineserver; the Advanced
+    # custom-environment field remains the supported way to turn it off.
+    "PROTON_NO_NTSYNC",
 )
 
 # The Settings control which configures a launcher-owned variable properly,
@@ -166,6 +171,16 @@ def custom_env_keys(custom_env):
     already emits when it applies the same string.
     """
     return [key for key, _ in _custom_env_pairs(custom_env, quiet=True)]
+
+
+def custom_env_map(custom_env):
+    """The KEY=VALUE pairs the custom-environment field would set.
+
+    Inspection only, like ``custom_env_keys``: never reports a syntax error,
+    so reading the field to explain a performance or crash symptom cannot
+    double up the warning ``apply_custom_env`` already emits.
+    """
+    return dict(_custom_env_pairs(custom_env, quiet=True))
 
 
 def launcher_owned_overrides(custom_env):

@@ -35,6 +35,8 @@ readonly VENDORED_CLIENT_SURFACE_PATCH="$PROJECT_ROOT/third_party/winegdk-native
 readonly VENDORED_CLIENT_SURFACE_PATCH_SHA256="464da914667bd9c683fb79bc7c2a4477546a73060c66f29809cfa93783cbc1c8"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly SOURCE_SHA256SUMS_SHA256="2dc69fe66823ab29cc3fd54b92605d9f9149eb8006486c0e7450192b2857cbb6"
+readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
+readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
 readonly GLIBC_CEILING="2.31"
 readonly DEBIAN_SUITE="bullseye"
 readonly DEBIAN_MIRROR="https://deb.debian.org/debian"
@@ -216,6 +218,52 @@ EOF
   chroot "$rootfs" apt-get clean
   chroot "$rootfs" dpkg-query -W -f='${binary:Package}\t${Version}\n' \
     >"$work_root/package-versions.tsv"
+  install_ntsync_header "$rootfs"
+}
+
+install_ntsync_header() {
+  # Bullseye's linux-libc-dev is kernel 5.10 and predates ntsync, so configure
+  # would leave HAVE_LINUX_NTSYNC_H undefined and compile Wine's whole
+  # in-process synchronization backend out to stubs. Every Win32 wait would
+  # then be a wineserver round-trip, which serialises Minecraft's worker
+  # threads and makes the game behave as if it were single-threaded (issues
+  # #63/#139/#143/#148/#150). The header is a frozen ioctl ABI; see
+  # third_party/linux-uapi/README.md. Installed after apt so no package
+  # can overwrite it.
+  local rootfs="$1" target="$1/usr/include/linux/ntsync.h"
+  [[ -f "$NTSYNC_UAPI_HEADER" ]] || die "vendored linux/ntsync.h is missing"
+  [[ "$(sha256sum "$NTSYNC_UAPI_HEADER" | cut -d' ' -f1)" == \
+      "$NTSYNC_UAPI_HEADER_SHA256" ]] ||
+    die "vendored linux/ntsync.h SHA-256 mismatch"
+  if [[ -e "$target" ]]; then
+    if cmp -s "$NTSYNC_UAPI_HEADER" "$target"; then
+      return
+    fi
+    # Kernels 6.10 to 6.13 shipped a preview UAPI with only two ioctls. It
+    # defines HAVE_LINUX_NTSYNC_H, so configure looks satisfied, yet Wine
+    # gates the backend on NTSYNC_IOC_EVENT_READ and still compiles it out.
+    # Debian 13's linux-libc-dev 6.12 is exactly this case, so replace an
+    # incomplete header rather than dead-ending the build on it.
+    if grep -q "NTSYNC_IOC_EVENT_READ" "$target"; then
+      die "chroot linux/ntsync.h differs from the vendored copy"
+    fi
+    printf 'note: replacing an incomplete linux/ntsync.h (no %s)\n' \
+      "NTSYNC_IOC_EVENT_READ"
+  fi
+  install -D -m 0644 "$NTSYNC_UAPI_HEADER" "$target"
+}
+
+assert_inproc_sync_enabled() {
+  # The "/dev/ntsync" literal only survives when NTSYNC_IOC_EVENT_READ was
+  # defined, so this is a direct check that the in-process synchronization
+  # path is really in the artifact rather than silently stubbed out.
+  local prefix="$1" server found=0
+  while IFS= read -r -d '' server; do
+    found=1
+    grep -qa "/dev/ntsync" "$server" ||
+      die "${server#"$prefix"/} has no ntsync path — in-process sync compiled out"
+  done < <(find "$prefix" -type f -name wineserver -print0)
+  ((found > 0)) || die "no wineserver found below $prefix"
 }
 
 internal_build_stage() {
@@ -313,6 +361,9 @@ finalize_build() {
 
   printf '==> Enforcing GLIBC_%s ABI ceiling\n' "$GLIBC_CEILING"
   scan_glibc_requirements "$work_root"
+
+  printf '==> Verifying in-process synchronization (ntsync) is compiled in\n'
+  assert_inproc_sync_enabled "$work_root/prefix"
 
   # Bind the installed bytes to the reviewed source/build inputs.  The engine
   # packager requires this machine-readable record; a caller-supplied commit

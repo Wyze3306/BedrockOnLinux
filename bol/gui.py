@@ -1927,7 +1927,8 @@ def gui():
         ctk.CTkSwitch(
             tab_advanced,
             text="Legacy compatibility renderer\n"
-                 "(bypasses DXVK on Vulkan 1.2 GPUs such as Intel Haswell)",
+                 "(last resort for GPUs without Vulkan 1.3: swaps D3D9–D3D12\n"
+                 "to WineD3D, dropping DXVK and vkd3d — artifacts likely)",
             variable=legacy_renderer_v, command=save_renderer,
             progress_color=T.THEME_ACCENT, font=font(13),
         ).pack(anchor="w", pady=(0, 12), padx=4)
