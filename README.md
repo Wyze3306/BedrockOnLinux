@@ -115,11 +115,18 @@ build, on a prefix the launcher prepares, with the GameInput controller stack,
 the CA bundle, the stack-reserve fix and the UI patches all applied exactly as
 on Linux, because every one of those operates on Windows files.
 
-Build the application bundle on a Mac with:
+Build the application bundle with:
 
 ```bash
 scripts/build-macos-app.sh
 ```
+
+It runs on a Mac and, just as well, on Linux: nothing in the bundle is
+compiled, and pip resolves the macOS universal2 wheels by tag, so a Linux box
+produces the same `BedrockOnLinux.app` — unsigned, and with the icon written by
+`scripts/png2icns.py` in place of `iconutil`. Cross-building needs `zip` and
+Pillow; the script checks that every bundled binary really is Mach-O before it
+packages anything.
 
 Run `bedrock-on-linux doctor` there first: it names the Windows runtime it
 found, and says which of the checks above simply do not apply.
