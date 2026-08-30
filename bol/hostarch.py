@@ -12,6 +12,8 @@ the player as a missing WebKitGTK or an engine that would not start.
 import platform
 from pathlib import Path
 
+from .platform import IS_MAC
+
 BINFMT = Path("/proc/sys/fs/binfmt_misc")
 _X86_64 = {"x86_64", "amd64"}
 
@@ -53,7 +55,9 @@ def x86_64_emulator(binfmt=BINFMT):
 
 def problem(binfmt=BINFMT):
     """Why x86-64 programs cannot run here, or None when they can."""
-    if native() or x86_64_emulator(binfmt):
+    # A Mac runs them through Rosetta 2, not binfmt_misc; whether Rosetta is
+    # there is bol.winemac.rosetta_problem()'s to say.
+    if IS_MAC or native() or x86_64_emulator(binfmt):
         return None
     return (
         f"This computer's processor is {platform.machine() or 'not x86-64'}, "
@@ -68,6 +72,8 @@ def summary(binfmt=BINFMT):
     name = platform.machine() or "unknown"
     if native():
         return f"OK ({name})"
+    if IS_MAC:
+        return f"{name}, x86-64 programs through Rosetta 2"
     emulator = x86_64_emulator(binfmt)
     if emulator:
         return f"{name}, x86-64 programs through {emulator} (experimental)"

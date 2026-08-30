@@ -51,6 +51,7 @@ from .config import (
     XODUS_REV,
 )
 from .log import BolError, info, ok, warn
+from .platform import IS_MAC
 from .util import _fetch_with_fallback, asset_url, download, gh_releases
 
 
@@ -282,7 +283,26 @@ def version_catalogue(edition_id, ignore_cache=False):
 # ---------------------------------------------------------------- binary
 
 
+# Why none of this works on macOS. xodus-cli is a Linux ELF binary -- it is
+# built by .github/workflows/build-xodus.yml for x86-64 Linux and it links
+# wry/tao against WebKitGTK, which is a GTK library and does not exist on
+# macOS. Nothing in the launcher can substitute for it: it holds the Microsoft
+# Store licence call and the XVD decryption, both of which live in Xodus's own
+# Rust crates. So on a Mac the download is unavailable and so is starting an
+# encrypted Store package -- what is left, and what works, is a game folder
+# that is already decrypted.
+MAC_UNSUPPORTED = (
+    "Downloading Minecraft from the Microsoft Store needs xodus-cli, which is "
+    "built for Linux only (it links WebKitGTK) and has no macOS build. On "
+    "macOS, point the launcher at a Minecraft for Windows folder you already "
+    "have -- one whose Minecraft.Windows.exe is not encrypted -- and it will "
+    "run that."
+)
+
+
 def cli_available():
+    if IS_MAC:
+        return False
     return XODUS_BIN.is_file() and os.access(XODUS_BIN, os.X_OK)
 
 
@@ -292,6 +312,8 @@ def ensure_cli():
     Mirrors fixups.ensure_openssl_xcurl_set(), except that a failure here is
     fatal: without xodus-cli there is no way to install the game at all.
     """
+    if IS_MAC:
+        raise XodusError(MAC_UNSUPPORTED)
     marker = XODUS_DIR / ".rev"
     if cli_available() and marker.exists() and \
             marker.read_text().strip() == XODUS_REV:

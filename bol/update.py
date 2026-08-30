@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .config import CACHE, SELF_REPO, VERSION
 from .log import BolError
+from .platform import IS_MAC
 from .util import asset_url, download, gh_latest
 from .xdg_migration import is_flatpak
 
@@ -109,6 +110,13 @@ def update_kind():
     # bol/__main__.py, so argv[0] is inside the package, not beside .git.
     if (p.parent / ".git").is_dir() or (package.parent / ".git").is_dir():
         return "git"
+    if IS_MAC and ".app/Contents/" in str(p):
+        # Inside an application bundle. Swapping the one file this process
+        # runs from would leave the rest of the bundle -- Info.plist, the
+        # icon, the frameworks, the code signature -- at the old version, and
+        # a signed bundle whose contents changed under it will not launch
+        # again. Replacing a bundle is a download-and-drag, so say that.
+        return "system"
     # pip, or a distribution's build of the wheel (#306): argv[0] is the
     # console script, writable in a venv or ~/.local/bin, and swapping a .pyz
     # in for it would leave the installed package behind, still the old one.
@@ -302,6 +310,11 @@ def self_update(rel, progress=None):
         if kind in ("deb", "rpm"):
             return _package_update(rel, kind, progress)
         if kind == "system":
+            if IS_MAC and ".app/Contents/" in str(_self_path()):
+                return ("system",
+                        f"Download v{rel['version']} from {rel['url']} and "
+                        "drag it into Applications, replacing this one — an "
+                        "application bundle updates by being replaced whole.")
             if is_flatpak():
                 return ("system", _flatpak_update_message(
                     rel, flatpak_installation()))

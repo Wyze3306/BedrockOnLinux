@@ -11,7 +11,6 @@ import shutil
 import signal
 import socket
 import stat
-import subprocess
 import sys
 import threading
 import time
@@ -49,6 +48,7 @@ from . import saves
 from .navigation import ControllerNav
 from . import log, supervision
 from .log import BolError, _LEVELS, desktop_notify, warn
+from .platform import IS_MAC, open_path
 from .prefix import _mc_running, kill_wine, prefix_operation_lock, reset_prefix
 from .profiles import (
     create_profile, current_profile_info, current_profile_name, delete_profile,
@@ -217,6 +217,8 @@ def icon_candidates(module_file=None):
         here.parent / "data/icon.png",
         here / "data/icon.png",
         *wheel,
+        # macOS application bundle: Contents/Resources, beside Contents/MacOS
+        here.parent.parent / "Resources/icon.png",
         # Flatpak: the manifest installs the icon under the app-id name only
         Path("/app/share/icons/hicolor/256x256/apps/"
              "io.github.wyze3306.BedrockOnLinux.png"),
@@ -924,7 +926,11 @@ class AccountRow(QWidget):
     def show_state(self, dot_color, status, action, danger=False):
         self.dot.setStyleSheet(f"color:{dot_color};")
         self.status.setText(status)
-        self.button.setText(action)
+        # No action means there is nothing this row can do here -- the Store
+        # download on macOS, where the downloader itself does not exist. Hide
+        # the button rather than leave a labelless one to be clicked.
+        self.button.setVisible(bool(action))
+        self.button.setText(action or "")
         self.button.setStyleSheet(
             f"background:{danger}; color:white;" if danger else "")
 
@@ -1300,8 +1306,7 @@ class MainWindow(QMainWindow):
         return row
 
     def _open_github(self):
-        subprocess.Popen(["xdg-open", "https://github.com/Wyze3306/BedrockOnLinux"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        open_path("https://github.com/Wyze3306/BedrockOnLinux")
 
     # ------------------------------------------------------------ hero
     def _build_hero(self) -> QWidget:
@@ -1834,6 +1839,11 @@ class MainWindow(QMainWindow):
 
     def _store_state(self):
         """The same, for the download account."""
+        if IS_MAC:
+            # There is no downloader to sign in to on a Mac: xodus-cli is a
+            # Linux binary. Say that in the row instead of offering a button
+            # whose only possible outcome is an error.
+            return (self.theme.sub, "Not available on macOS", None, None)
         if self.ui_state.get("store_login_active"):
             # A sign-in window that stops making progress is the whole of
             # issue #214, and a row that can only say "Signing in…" leaves
@@ -1995,6 +2005,10 @@ class MainWindow(QMainWindow):
         which resumes on its own once it is there instead of making the player
         press it again.
         """
+        from . import xodus
+        if IS_MAC:
+            self.set_status(xodus.MAC_UNSUPPORTED)
+            return
         if self.ui_state.get("store_login_active"):
             # Returning quietly here is how a sign-in that never finished
             # turned every later attempt into a button that does nothing
@@ -2002,7 +2016,6 @@ class MainWindow(QMainWindow):
             # the only thing that leads anywhere.
             self._store_login_already_open()
             return
-        from . import xodus
         self.ui_state["store_login_active"] = True
         self._refresh_store_row()
         self.set_status("Finish the Microsoft sign-in in the window that opens…")
@@ -2300,8 +2313,7 @@ class MainWindow(QMainWindow):
         step1.setStyleSheet("font-weight:700;")
         cv.addWidget(step1)
         cv.addWidget(btn("Open Microsoft sign-in \u2197",
-                        lambda: subprocess.Popen(["xdg-open", full_url],
-                                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                        lambda: open_path(full_url),
                         kind="primary", h=42))
 
         step2 = QLabel("2. Enter this code")
@@ -2896,8 +2908,7 @@ class MainWindow(QMainWindow):
         return row
 
     def _open_folder(self, path):
-        subprocess.Popen(["xdg-open", str(path)],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        open_path(path)
 
     def _open_backups(self):
         saves.BACKUPS.mkdir(parents=True, exist_ok=True)
@@ -3060,8 +3071,7 @@ class MainWindow(QMainWindow):
         return row
 
     def _open_build(self, build):
-        subprocess.Popen(["xdg-open", str(build["path"])],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        open_path(build["path"])
 
     def _remove_build(self, build):
         if self.ui_state.get("launch_active") or _mc_running():
@@ -3146,23 +3156,40 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
 
         graphics = card_section(v, "Graphics")
-        rt = self._switch("Ray tracing", self.settings.get("ray_tracing", True),
-                        "Hands DXR to Minecraft for its Ray Traced mode. Needs an "
-                        "RTX-class GPU and a ray-tracing-capable world.")
-        rt.toggled.connect(lambda on: self._save_setting("ray_tracing", on))
-        graphics.addWidget(rt)
+        # Every switch in this card configures vkd3d-proton, the Linux Vulkan
+        # payload. On macOS Direct3D is translated by the Wine backend's own
+        # layer (D3DMetal), which takes none of these — so instead of showing
+        # three controls that do nothing, the card says which runtime is in
+        # use and where to change it.
+        if IS_MAC:
+            from . import winemac
 
-        fr = self._switch("Limit frame rate to the display",
-                        self.settings.get("limit_frame_rate", True),
-                        "Only applies when Minecraft has no limit of its own.")
-        fr.toggled.connect(lambda on: self._save_setting("limit_frame_rate", on))
-        graphics.addWidget(fr)
+            graphics.addWidget(QLabel(
+                "Windows runtime: " + winemac.summary()))
+            hint = QLabel(
+                "Direct3D is translated by this runtime's own layer, so the "
+                "ray-tracing, frame-limit and renderer settings do not apply "
+                "on macOS. Set BOL_WINE to use a different Wine.")
+            hint.setWordWrap(True)
+            graphics.addWidget(hint)
+        else:
+            rt = self._switch("Ray tracing", self.settings.get("ray_tracing", True),
+                            "Hands DXR to Minecraft for its Ray Traced mode. Needs an "
+                            "RTX-class GPU and a ray-tracing-capable world.")
+            rt.toggled.connect(lambda on: self._save_setting("ray_tracing", on))
+            graphics.addWidget(rt)
 
-        lr = self._switch("Legacy compatibility renderer",
-                        self.settings.get("renderer", "auto") == "opengl",
-                        "Last resort for GPUs without Vulkan 1.3 — drops DXVK/vkd3d.")
-        lr.toggled.connect(lambda on: self._save_setting("renderer", "opengl" if on else "auto"))
-        graphics.addWidget(lr)
+            fr = self._switch("Limit frame rate to the display",
+                            self.settings.get("limit_frame_rate", True),
+                            "Only applies when Minecraft has no limit of its own.")
+            fr.toggled.connect(lambda on: self._save_setting("limit_frame_rate", on))
+            graphics.addWidget(fr)
+
+            lr = self._switch("Legacy compatibility renderer",
+                            self.settings.get("renderer", "auto") == "opengl",
+                            "Last resort for GPUs without Vulkan 1.3 — drops DXVK/vkd3d.")
+            lr.toggled.connect(lambda on: self._save_setting("renderer", "opengl" if on else "auto"))
+            graphics.addWidget(lr)
 
         graphics.addLayout(self._gpu_choice_row())
 
@@ -3173,11 +3200,15 @@ class MainWindow(QMainWindow):
         env_entry.textChanged.connect(lambda t: self._save_setting("custom_env", t))
         env.addWidget(env_entry)
 
-        env.addWidget(QLabel("Gamescope arguments"))
-        gs_entry = QLineEdit(self.settings.get("gamescope") or "")
-        gs_entry.setPlaceholderText("1 for auto, or e.g. -w 1920 -h 1080 -f")
-        gs_entry.textChanged.connect(lambda t: self._save_setting("gamescope", t))
-        env.addWidget(gs_entry)
+        if not IS_MAC:
+            # gamescope is a Wayland micro-compositor; there is nothing for it
+            # to nest inside on macOS.
+            env.addWidget(QLabel("Gamescope arguments"))
+            gs_entry = QLineEdit(self.settings.get("gamescope") or "")
+            gs_entry.setPlaceholderText("1 for auto, or e.g. -w 1920 -h 1080 -f")
+            gs_entry.textChanged.connect(
+                lambda t: self._save_setting("gamescope", t))
+            env.addWidget(gs_entry)
 
         self._build_storage_card(v)
 
@@ -3247,8 +3278,7 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(self.loc_label.text())
 
     def _open_install_folder(self):
-        subprocess.Popen(["xdg-open", self.loc_label.text()],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        open_path(self.loc_label.text())
 
     def _relocate_blocked(self):
         if self.ui_state.get("launch_active") or _mc_running():
@@ -3383,8 +3413,7 @@ class MainWindow(QMainWindow):
                                tip="Load a client-side .dll into the running game. "
                                    "Native / AppImage only."))
         content.addWidget(tool_row("Open Minecraft folder",
-                               lambda: subprocess.Popen(["xdg-open", str(game_content_dir())],
-                                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                               lambda: open_path(game_content_dir()),
                                tip="Open the folder holding your worlds, templates "
                                    "and screenshots in your file manager."))
 
@@ -3497,8 +3526,7 @@ class MainWindow(QMainWindow):
                     "checked, so PLAY is unblocked again.")
             maintenance.addWidget(self.gpu_ack_btn)
         maintenance.addWidget(tool_row("Open logs folder",
-                                   lambda: subprocess.Popen(["xdg-open", str(LOGS)],
-                                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                                   lambda: open_path(LOGS),
                                    tip="Open the folder with launch and activity logs, "
                                        "useful for bug reports."))
         maintenance.addWidget(tool_row("Repair (reset Wine prefix)",
@@ -3816,8 +3844,7 @@ class MainWindow(QMainWindow):
                             kind="ghost-small", w=84, h=26,
                             tip="Open this profile in another window"))
             if path is not None:
-                h.addWidget(btn("Folder", lambda: subprocess.Popen(["xdg-open", str(path)],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                h.addWidget(btn("Folder", lambda: open_path(path),
                                 kind="ghost-small", w=52, h=26))
                 h.addWidget(btn("Rename", lambda: self._rename_profile_row(name, is_active),
                                 kind="ghost-small", w=58, h=26))

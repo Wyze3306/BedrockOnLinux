@@ -23,6 +23,7 @@ from .launch import (
 )
 from .log import BolError, IS_TTY, desktop_notify, die, err, info, ok, warn
 from .network import diagnose_network
+from .platform import has_display
 from .prefix import reset_prefix
 from .profiles import (
     create_profile,
@@ -435,7 +436,11 @@ def main():
         elif a.cmd == "gui":
             _open_gui()
         else:
-            if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+            # macOS always answers yes here: a process started from Finder,
+            # from a .app or from Terminal can open a window with no display
+            # variable to look at, and requiring one would print help at every
+            # double-click.
+            if has_display():
                 _open_gui()
             else:
                 p.print_help()

@@ -93,7 +93,7 @@ class ReadyLaunchHarness:
             mock.patch.object(launch, "xbl_preauth", return_value=preauth),
             mock.patch.object(launch, "bump_stack_reserve"),
             mock.patch.object(launch, "hide_signin_button"),
-            mock.patch.object(launch, "proton_umu_cmd",
+            mock.patch.object(launch, "engine_cmd",
                               return_value=(["fake-umu"], dict(umu_env or {}))),
             mock.patch.object(launch, "patch_options",
                               side_effect=record("patch_options")),

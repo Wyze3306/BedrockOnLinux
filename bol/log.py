@@ -3,8 +3,6 @@
 
 import os
 import select
-import shutil
-import subprocess
 import sys
 
 IS_TTY = sys.stdout.isatty()
@@ -30,7 +28,7 @@ def _reader_gone(fd):
         poller = select.poll()
         poller.register(fd, select.POLLOUT)
         ready = poller.poll(0)
-    except (OSError, ValueError):
+    except (AttributeError, OSError, ValueError):
         return False
     dead = select.POLLERR | select.POLLHUP | select.POLLNVAL
     return any(mask & dead for _fd, mask in ready)
@@ -102,21 +100,13 @@ def err(m):  _emit("xx", m)
 def desktop_notify(message, summary=None):
     """Put a message on screen for runs started without a visible terminal.
 
-    A desktop or Steam shortcut discards stdout, so an unreported failure is
-    indistinguishable from the launcher doing nothing at all.
+    A desktop shortcut, a Steam shortcut and a double-clicked ``.app`` all
+    discard stdout, so an unreported failure there is indistinguishable from
+    the launcher doing nothing at all. bol.platform knows which notifier this
+    OS has -- ``notify-send`` or Notification Center through ``osascript``.
     """
-    notifier = shutil.which("notify-send")
-    if not notifier:
-        return False
-    try:
-        subprocess.run(
-            [notifier, "--app-name", "BedrockOnLinux",
-             summary or "BedrockOnLinux", str(message)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=5, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return True
+    from .platform import notify
+    return notify(message, summary)
 
 
 class BolError(Exception):
