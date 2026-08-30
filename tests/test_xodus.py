@@ -360,6 +360,18 @@ class FailureLineTests(unittest.TestCase):
     def test_nothing_printed_reports_nothing(self):
         self.assertEqual(xodus._failure_line([]), "")
 
+    def test_the_line_that_names_a_cause_beats_the_last_line(self):
+        # The download does not stop printing when it stops downloading, so
+        # its last line describes the tidying up rather than the refusal that
+        # ended it.
+        tail = [
+            "not entitled to this content: Device group is full, please "
+            "remove a device and try again.",
+            "removing temporary files",
+            "done",
+        ]
+        self.assertIn("Device group is full", xodus._failure_line(tail))
+
 
 class InstallErrorTests(unittest.TestCase):
     def setUp(self):
@@ -415,6 +427,9 @@ class InstallErrorTests(unittest.TestCase):
         self.assertIn("account.microsoft.com/devices/content", message)
         # Not an ownership failure, which is what "not entitled" looks like.
         self.assertNotIsInstance(raised.exception, xodus.NotOwned)
+        # Named, so the window can open that page instead of printing it: the
+        # remedy for this one is not in the launcher at all.
+        self.assertIsInstance(raised.exception, xodus.DeviceLimitReached)
 
     def test_a_licence_type_the_downloader_cannot_name_is_explained(self):
         # Microsoft issued the licence for a "Trial" entitlement, and the
@@ -951,6 +966,53 @@ class ProgressTests(unittest.TestCase):
             "        0 B/s [----------------------------------------]   0%",
             tail, None)
         self.assertEqual(tail, [])
+
+    def test_a_refusal_inside_half_a_frame_is_still_read(self):
+        # The other half of #242. A redraw the read cut before its "[###] 8%"
+        # is not recognised as a frame, only as what a frame leaves behind --
+        # and that took the whole line down, sentence included. This is the
+        # line an account out of Microsoft Store devices ends on, so losing it
+        # cost the player the one page that gives a device back.
+        tail, reasons = [], []
+        xodus._consume(
+            "Downloading ntfs...              183.79 MiB/    2.32 GiB   "
+            "not entitled to this content: Device group is full, please "
+            "remove a device and try again.",
+            tail, None, None, reasons)
+        self.assertEqual(
+            tail,
+            ["not entitled to this content: Device group is full, please "
+             "remove a device and try again."])
+        self.assertEqual(reasons, tail)
+
+    def test_a_reason_printed_early_outlives_the_forty_line_window(self):
+        # xodus-cli prints its refusal and then goes on printing; only the
+        # last forty lines are kept, and forty lines of tidying up is all it
+        # takes to leave the launcher with "printed no reason for it".
+        refusal = ("not entitled to this content: Device group is full, "
+                   "please remove a device and try again.")
+        tail, reasons = [], []
+        xodus._consume(refusal, tail, None, None, reasons)
+        for index in range(60):
+            xodus._consume(f"removing temporary file {index}",
+                           tail, None, None, reasons)
+        self.assertNotIn(refusal, tail)
+        kept = xodus._classifiable(reasons, tail)
+        with self.assertRaises(xodus.DeviceLimitReached):
+            xodus._raise_unretryable("\n".join(kept))
+
+    def test_a_reason_still_in_the_tail_is_not_repeated(self):
+        refusal = "not enough free disk space on /home: need 3 bytes, have 1"
+        tail, reasons = [], []
+        xodus._consume(refusal, tail, None, None, reasons)
+        self.assertEqual(xodus._classifiable(reasons, tail), [refusal])
+
+    def test_the_reasons_carried_stay_bounded(self):
+        tail, reasons = [], []
+        for index in range(50):
+            xodus._consume(f"not entitled to this content: build {index}",
+                           tail, None, None, reasons)
+        self.assertEqual(len(reasons), xodus._REASONS_KEPT)
 
     def test_the_padding_around_a_redraw_is_not_output(self):
         # A pty starts out reporting no window size at all, and indicatif pads

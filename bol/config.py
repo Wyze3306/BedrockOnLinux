@@ -4,6 +4,8 @@
 import os
 from pathlib import Path
 
+from .platform import config_home, data_home
+
 APP = "bedrock-on-linux"
 PRETTY = "BedrockOnLinux"
 VERSION = "2.2.4"
@@ -17,12 +19,17 @@ XDG_DATA_HOME = Path(
 XDG_CONFIG_HOME = Path(
     os.environ.get("XDG_CONFIG_HOME") or HOME / ".config"
 ).expanduser()
-DEFAULT_DATA = XDG_DATA_HOME / APP
+# On macOS both of these resolve under ~/Library/Application Support, which is
+# where a Mac keeps an application's state -- and where a Mac user goes to
+# throw it away. The XDG constants above stay as they are: they still name the
+# Linux locations the legacy migration and the .desktop writer look in, and on
+# macOS nothing reads them.
+DEFAULT_DATA = data_home(APP)
 LEGACY_DATA = HOME / ".local" / "share" / APP
 
 # Resolve relocation before exporting DATA; imported path constants cannot be
 # changed afterwards. BOL_HOME takes priority over the persistent pointer.
-INSTALL_LOCATION_FILE = XDG_CONFIG_HOME / APP / "install_location"
+INSTALL_LOCATION_FILE = config_home(APP) / "install_location"
 LEGACY_INSTALL_LOCATION_FILE = HOME / ".config" / APP / "install_location"
 
 _bol_home = os.environ.get("BOL_HOME", "").strip()

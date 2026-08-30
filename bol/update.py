@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .config import SELF_REPO, VERSION
 from .log import BolError
+from .platform import IS_MAC
 from .util import asset_url, download, gh_latest
 
 def _ver_tuple(s):
@@ -51,6 +52,13 @@ def update_kind():
     p = _self_path()
     if (p.parent / ".git").is_dir():       # dev checkout — leave updates to git
         return "git"
+    if IS_MAC and ".app/Contents/" in str(p):
+        # Inside an application bundle. Swapping the one file this process
+        # runs from would leave the rest of the bundle -- Info.plist, the
+        # icon, the frameworks, the code signature -- at the old version, and
+        # a signed bundle whose contents changed under it will not launch
+        # again. Replacing a bundle is a download-and-drag, so say that.
+        return "system"
     if str(p).startswith(("/usr/", "/app/", "/bin/")) or not os.access(p, os.W_OK):
         return "system"                    # packaged / read-only install
     return "file"                          # a plain user-writable script
@@ -65,6 +73,11 @@ def self_update(rel, progress=None):
         if kind == "git":
             return ("git", "This is a git checkout — run `git pull` to update.")
         if kind == "system":
+            if IS_MAC and ".app/Contents/" in str(_self_path()):
+                return ("system",
+                        f"Download v{rel['version']} from {rel['url']} and "
+                        "drag it into Applications, replacing this one — an "
+                        "application bundle updates by being replaced whole.")
             return ("system",
                     f"Installed from a package — update with your package "
                     f"manager, or download v{rel['version']} from {rel['url']}")

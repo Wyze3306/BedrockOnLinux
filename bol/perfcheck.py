@@ -30,7 +30,10 @@ ignore, and then it is worth nothing on the machine that really is starved.
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
+
+from .platform import IS_MAC
 
 MEMINFO = "/proc/meminfo"
 
@@ -87,17 +90,71 @@ def _meminfo_mib(field, meminfo_path=None):
     return int(match.group(1)) // 1024 if match else None
 
 
+def _run_text(argv):
+    """stdout of a short read-only command, or None. Never raises."""
+    try:
+        found = subprocess.run(argv, capture_output=True, text=True,
+                               timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return found.stdout if found.returncode == 0 else None
+
+
+_VM_STAT_PAGE = re.compile(r"page size of (\d+) bytes")
+_VM_STAT_LINE = re.compile(r"^(.+?):\s+(\d+)\.?$", re.MULTILINE)
+
+# The macOS counterpart of MemAvailable. Free pages alone would fire on every
+# healthy Mac -- the kernel keeps very few of them -- so this adds the classes
+# it hands back on demand, which is the same reasoning MemAvailable encodes.
+_VM_STAT_AVAILABLE = ("Pages free", "Pages inactive", "Pages speculative",
+                      "Pages purgeable")
+
+
+def _mac_available_memory_mib():
+    text = _run_text(["/usr/bin/vm_stat"])
+    if not text:
+        return None
+    page = _VM_STAT_PAGE.search(text)
+    page_size = int(page.group(1)) if page else 4096
+    counts = {name.strip(): int(value)
+              for name, value in _VM_STAT_LINE.findall(text)}
+    pages = sum(counts.get(name, 0) for name in _VM_STAT_AVAILABLE)
+    return (pages * page_size) // (1024 * 1024) if pages else None
+
+
+_SWAPUSAGE_USED = re.compile(r"used\s*=\s*([\d.]+)([KMG])", re.IGNORECASE)
+_SWAP_UNIT_MIB = {"K": 1.0 / 1024, "M": 1.0, "G": 1024.0}
+
+
+def _mac_swap_used_mib():
+    text = _run_text(["/usr/sbin/sysctl", "-n", "vm.swapusage"])
+    if not text:
+        return None
+    found = _SWAPUSAGE_USED.search(text)
+    if not found:
+        return None
+    scale = _SWAP_UNIT_MIB.get(found.group(2).upper())
+    return int(float(found.group(1)) * scale) if scale else None
+
+
 def available_memory_mib(meminfo_path=None):
     """What the kernel says a new workload can take without swapping.
 
     MemAvailable, not MemFree: reclaimable page cache is available to the
     game, and reading MemFree instead would fire on every healthy machine.
+    macOS publishes no single such field, so there it is summed out of
+    ``vm_stat`` on the same principle. An explicit ``meminfo_path`` always
+    takes the Linux parser, which is what the tests hand it.
     """
+    if IS_MAC and meminfo_path is None:
+        return _mac_available_memory_mib()
     return _meminfo_mib("MemAvailable", meminfo_path)
 
 
 def swap_used_mib(meminfo_path=None):
     """How much has already been pushed to swap, or None if unreadable."""
+    if IS_MAC and meminfo_path is None:
+        return _mac_swap_used_mib()
     total = _meminfo_mib("SwapTotal", meminfo_path)
     free = _meminfo_mib("SwapFree", meminfo_path)
     if total is None or free is None:
@@ -326,6 +383,10 @@ def session_is_composited(environ=None):
     stays silent.
     """
     source = os.environ if environ is None else environ
+    if IS_MAC and environ is None:
+        # WindowServer composites every window on macOS and cannot be turned
+        # off, so the answer here is never in doubt.
+        return True
     session = (source.get("XDG_SESSION_TYPE") or "").strip().lower()
     if session == "wayland" or source.get("WAYLAND_DISPLAY"):
         return True

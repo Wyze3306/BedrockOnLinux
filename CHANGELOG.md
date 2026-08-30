@@ -4,6 +4,32 @@
 
 ### Added
 
+- **macOS: the launcher runs natively, on a native Wine** (`macos` branch).
+  The whole launcher now works on a Mac — the same window, the same settings,
+  the same `doctor` — with its data in `~/Library/Application Support` and its
+  shortcuts as double-clickable `.command` files. Underneath, GDK-Proton and
+  umu are replaced by whichever macOS Wine is installed: Apple's Game Porting
+  Toolkit first, then CrossOver, Whisky and a plain build, with `BOL_WINE` to
+  name a specific one. Everything that is portable came along unchanged,
+  because all of it operates on Windows files: the prefix, the GameInput
+  controller stack, the CA bundle, the stack-reserve fix and the UI patches.
+  A single seam (`bol.platform`) answers every per-OS question, so the Linux
+  path is untouched — nothing was branched that did not have to be.
+
+  Two things do not work there, and the launcher says so instead of failing
+  obscurely. Minecraft cannot be **downloaded**: the Store download and the
+  decryption every launch needs both live in `xodus-cli`, which is built for
+  Linux and links WebKitGTK — so a Mac points Settings at a decrypted
+  Minecraft for Windows folder it already has, and an encrypted Store package
+  is refused by name rather than handed to Wine as ciphertext. And **Xbox
+  Live sign-in** cannot happen: that is the WineGDK XUser fork compiled into
+  GDK-Proton, which has no macOS build, so the game runs offline and on the
+  LAN and the launcher warns once at PLAY rather than spending a round of
+  network calls to arrive at the same place. `doctor` prints the Windows
+  runtime it found and marks every Linux-only check *not applicable on macOS*
+  instead of inventing an answer for it. Build the application bundle with
+  `scripts/build-macos-app.sh`.
+
 - **Settings ▸ Versions: see every Minecraft build you have downloaded, and
   remove the ones you are done with**
   ([#214](https://github.com/Wyze3306/BedrockOnLinux/issues/214)). Each build
@@ -38,6 +64,27 @@
   in silence.
 
 ### Fixed
+
+- **A download Microsoft refuses because the account is out of Store devices
+  now says so, and opens the page that gives one back**
+  ([#198](https://github.com/Wyze3306/BedrockOnLinux/issues/198),
+  [#242](https://github.com/Wyze3306/BedrockOnLinux/issues/242)). Microsoft
+  licenses Store content to a device and lets an account hold ten of them; the
+  eleventh download is refused outright, and there is no way to give a device
+  back except a page on account.microsoft.com. What arrived instead of that
+  sentence was "The Minecraft download installed no game and printed no reason
+  for it", twice over, with the launcher moving on to another Microsoft mirror
+  that was never the problem — one person worked out what it meant by
+  themselves. The refusal is printed onto the same stream three progress bars
+  are being redrawn on, so it lands in the middle of a frame; half a frame is
+  kept out of the error message by dropping the whole line it is in, and the
+  sentence went with it. Anything the launcher can name a cause from is now
+  read out of the line before the bars are stripped, and kept for the whole
+  download instead of only in its last forty lines, so no reason can be lost
+  to what happened to be drawn around it. When the reason is the device limit,
+  the launcher offers the device list, opens it, and starts the download again
+  once you are back; `bedrock-on-linux setup` prints the page and the command
+  to run after it.
 
 - **Your Xbox friends can see you again while you play**
   ([#238](https://github.com/Wyze3306/BedrockOnLinux/issues/238),

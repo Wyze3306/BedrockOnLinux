@@ -607,3 +607,77 @@ class ASignInThatNeverFinishesTests(unittest.TestCase):
                 failed = worker.return_value.failed.connect.call_args[0][0]
                 failed("Microsoft would not")
             self.assertTrue(failures)
+
+
+class DeviceLimitOpensThePageThatFixesItTests(unittest.TestCase):
+    """The download refused because the account holds its ten Microsoft Store
+    devices. Nothing in the launcher gives one back -- that happens on a
+    Microsoft page -- so this is the failure the window has to hand over
+    rather than print, and pick back up once they return."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def test_the_device_limit_is_reported_apart_from_a_failure(self):
+        worker = gui.LaunchWorker({"edition": {"id": "release"}, "tag": "1.0"})
+        seen = {"failed": [], "limit": []}
+        worker.failed.connect(seen["failed"].append)
+        worker.store_device_limit.connect(seen["limit"].append)
+        with mock.patch.object(
+                gui, "do_setup",
+                side_effect=xodus.DeviceLimitReached("ten devices")):
+            worker.run()
+        self.assertEqual(seen["failed"], [])
+        self.assertEqual(seen["limit"], ["ten devices"])
+
+    def test_taking_the_offer_opens_the_microsoft_device_list(self):
+        with headless_window() as window:
+            with mock.patch.object(window, "_offer_device_page",
+                                   return_value=True), \
+                    mock.patch.object(window, "question_box",
+                                      return_value=False), \
+                    mock.patch.object(gui, "open_path") as opened:
+                window._store_device_limit("ten devices")
+            self.assertEqual(opened.call_args[0][0], xodus.DEVICE_PAGE)
+
+    def test_coming_back_from_the_page_starts_the_download_again(self):
+        # Nothing about the download changed while they were away; the account
+        # it was refused for did.
+        with headless_window() as window:
+            with mock.patch.object(window, "_offer_device_page",
+                                   return_value=True), \
+                    mock.patch.object(window, "question_box",
+                                      return_value=True), \
+                    mock.patch.object(gui, "open_path"), \
+                    mock.patch.object(window, "do_play") as play:
+                window._store_device_limit("ten devices")
+            self.assertTrue(play.called)
+
+    def test_declining_leaves_the_launcher_idle(self):
+        with headless_window() as window:
+            with mock.patch.object(window, "_offer_device_page",
+                                   return_value=False), \
+                    mock.patch.object(gui, "open_path") as opened:
+                window._store_device_limit("ten devices")
+            self.assertFalse(opened.called)
+            self.assertFalse(window.ui_state["busy"])
+            self.assertFalse(window.ui_state["launch_active"])
+            self.assertIn("devices", window.status_label.text().lower())
+
+    def test_the_page_is_not_offered_twice_for_one_launch(self):
+        with headless_window() as window:
+            with mock.patch.object(window, "_offer_device_page",
+                                   return_value=True), \
+                    mock.patch.object(window, "question_box",
+                                      return_value=False), \
+                    mock.patch.object(gui, "open_path"):
+                window._store_device_limit("ten devices")
+            self.assertTrue(window.ui_state["device_page_offered"])
+            # The devices were already opened once for this launch and the
+            # answer has not changed: offering the same page again is a loop.
+            with mock.patch.object(window, "_offer_device_page") as offer, \
+                    mock.patch.object(window, "error_box") as box:
+                window._store_device_limit("ten devices")
+            self.assertFalse(offer.called)
+            self.assertTrue(box.called)

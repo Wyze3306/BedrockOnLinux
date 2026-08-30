@@ -23,6 +23,7 @@ from typing import Mapping, Optional
 
 from .config import GAMES, WINEGDK_BUILD_REV
 from .log import BolError, die, warn
+from .platform import IS_LINUX, IS_MAC
 from .util import env_flag, launcher_command
 
 
@@ -57,6 +58,12 @@ def acknowledge_gpu_crash_command() -> str:
 
 
 def _x11_session(env: Mapping[str, str]) -> bool:
+    # Only Linux runs the game on an X server. A Mac with XQuartz installed
+    # exports DISPLAY too, and answering "yes" there sends the RandR provider
+    # check below looking for hardware providers on a display the game never
+    # uses -- which finds none and blocks the launch outright.
+    if not IS_LINUX:
+        return False
     session = (env.get("XDG_SESSION_TYPE") or "").strip().lower()
     if session:
         return session == "x11"
@@ -195,6 +202,22 @@ def _xrandr_provider_count(env: Mapping[str, str], runner=None) -> Optional[int]
 
 
 def _boot_id() -> str:
+    """A value that changes at every boot and at no other time.
+
+    The interrupted-launch interlock is only as good as this: two boots that
+    share an id make a marker from the previous one look like this one's, and
+    an empty id makes every boot look identical. Linux publishes one directly;
+    macOS has no ``/proc``, so the equivalent is the kernel's own boot
+    timestamp, which is fixed for the life of the boot.
+    """
+    if IS_MAC:
+        try:
+            found = subprocess.run(["/usr/sbin/sysctl", "-n", "kern.boottime"],
+                                   capture_output=True, text=True, timeout=5,
+                                   check=False)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return found.stdout.strip() if found.returncode == 0 else ""
     try:
         return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     except OSError:
@@ -628,6 +651,11 @@ def _kernel_journal_text(binary: str, runner, boot: int) -> Optional[str]:
 def _kernel_driver_fault_scope(runner=None) -> Optional[str]:
     """Return ``current``/``previous`` for an unacknowledged kernel fault."""
 
+    # The whole check reads the Linux kernel journal for amdgpu/i915/nouveau
+    # resets. macOS has no such log and no such failure mode to guard against:
+    # Metal does not leave a wedged device for the next process to walk into.
+    if not IS_LINUX and runner is None:
+        return None
     binary = shutil.which("journalctl")
     if not binary and runner is not None:
         binary = "journalctl"

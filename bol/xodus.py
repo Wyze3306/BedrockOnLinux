@@ -51,6 +51,7 @@ from .config import (
     XODUS_REV,
 )
 from .log import BolError, info, ok, warn
+from .platform import IS_MAC
 from .util import _fetch_with_fallback, asset_url, download, gh_releases
 
 
@@ -64,6 +65,16 @@ class NotSignedIn(XodusError):
 
 class NotOwned(XodusError):
     """The linked account does not own the requested edition."""
+
+
+class DeviceLimitReached(XodusError):
+    """The account holds every Microsoft Store device it is allowed to hold.
+
+    Named rather than left as prose, because the remedy is not in the
+    launcher: devices are given back on a Microsoft web page, and a window
+    that knows *this* is what happened can open it instead of printing a URL
+    to be copied out of an error box by hand.
+    """
 
 
 class LoginCancelled(XodusError):
@@ -120,7 +131,15 @@ _CACHE_RACE_RETRIES = 3
 # so an account can arrive here with its ten devices taken by a bug rather than
 # by ten machines -- and Microsoft's own sentence says nothing about where they
 # are given back.
-_DEVICE_LIMIT = re.compile(r"device group is full", re.I)
+#
+# It is the licensing service that says it, not xodus-cli: a request for the
+# content licence is answered with a "satisfactionFailure" whose description
+# xodus prints behind its own words ("not entitled to this content: Device
+# group is full, please remove a device and try again."). So this has to be
+# matched before _NOT_OWNED, which the same line also matches, and both halves
+# of Microsoft's sentence are matched in case one of them is reworded.
+_DEVICE_LIMIT = re.compile(
+    r"device group is full|remove a device and try again", re.I)
 # The licence Microsoft issues for the content, and xodus-cli refusing to read
 # it. LicenseInfo/@Type names the kind of entitlement it was granted for, and
 # the deserializer names four of them -- Microsoft also issues "Trial", for an
@@ -182,6 +201,22 @@ _LINE_CAP = 1000
 # directory" is all a host without WebKitGTK ever gets to print.
 _LOADER_ERROR = re.compile(
     r"error while loading shared libraries:\s*([^:\s]+)")
+# Everything above, as one pattern: the sentences that say why a download
+# failed, recognised as they are read rather than only in what is left at the
+# end. Two things drop them otherwise, and both have happened. A reason
+# printed more than forty lines before the end falls out of the tail; and a
+# reason that arrives inside a redraw the read cut in half is dropped whole by
+# _after_bars, remnant and sentence together -- which is one of the ways an
+# account out of Store devices was reported as "installed no game and printed
+# no reason for it" rather than as the web page that gives one back.
+_REASONS = re.compile("|".join(
+    f"(?:{pattern.pattern})" for pattern in (
+        _NOT_OWNED, _DEVICE_LIMIT, _NO_CREDENTIALS, _NO_ROOM, _CACHE_SHORT,
+        _LICENSE_UNREADABLE, _LOADER_ERROR)), re.I)
+# How many of them to carry. A download prints one reason and stops; this is
+# room for the ones that come with company, and a bound on a list that is
+# otherwise as long as the output.
+_REASONS_KEPT = 12
 
 # Failures that would otherwise be repeated by every refresh of a window.
 _WARNED = {}
@@ -270,7 +305,26 @@ def version_catalogue(edition_id, ignore_cache=False):
 # ---------------------------------------------------------------- binary
 
 
+# Why none of this works on macOS. xodus-cli is a Linux ELF binary -- it is
+# built by .github/workflows/build-xodus.yml for x86-64 Linux and it links
+# wry/tao against WebKitGTK, which is a GTK library and does not exist on
+# macOS. Nothing in the launcher can substitute for it: it holds the Microsoft
+# Store licence call and the XVD decryption, both of which live in Xodus's own
+# Rust crates. So on a Mac the download is unavailable and so is starting an
+# encrypted Store package -- what is left, and what works, is a game folder
+# that is already decrypted.
+MAC_UNSUPPORTED = (
+    "Downloading Minecraft from the Microsoft Store needs xodus-cli, which is "
+    "built for Linux only (it links WebKitGTK) and has no macOS build. On "
+    "macOS, point the launcher at a Minecraft for Windows folder you already "
+    "have -- one whose Minecraft.Windows.exe is not encrypted -- and it will "
+    "run that."
+)
+
+
 def cli_available():
+    if IS_MAC:
+        return False
     return XODUS_BIN.is_file() and os.access(XODUS_BIN, os.X_OK)
 
 
@@ -280,6 +334,8 @@ def ensure_cli():
     Mirrors fixups.ensure_openssl_xcurl_set(), except that a failure here is
     fatal: without xodus-cli there is no way to install the game at all.
     """
+    if IS_MAC:
+        raise XodusError(MAC_UNSUPPORTED)
     marker = XODUS_DIR / ".rev"
     if cli_available() and marker.exists() and \
             marker.read_text().strip() == XODUS_REV:
@@ -838,11 +894,15 @@ _LICENSE_UNREADABLE_MESSAGE = (
     "same request has been answered with an ordinary licence minutes later. "
     "Leave it a few minutes and start the download again.")
 
+# Where devices are given back. Named, because it is the whole remedy for
+# _DEVICE_LIMIT_MESSAGE and the launcher opens it rather than leaving a URL to
+# be copied out of an error box.
+DEVICE_PAGE = "https://account.microsoft.com/devices/content"
+
 _DEVICE_LIMIT_MESSAGE = (
     "Microsoft will not license Minecraft to this machine: the account has "
     "reached its limit of ten Microsoft Store download devices. Remove the "
-    "ones you no longer use at https://account.microsoft.com/devices/content, "
-    "then try again.")
+    f"ones you no longer use at {DEVICE_PAGE}, then try again.")
 
 
 DOWNLOAD_LOG = LOGS / "store-download.log"
@@ -1004,7 +1064,7 @@ def _cache_short_clause(dest, needed, free):
 def _raise_unretryable(text, dest=None, needed=0):
     """Raise for the download failures another mirror cannot fix."""
     if _DEVICE_LIMIT.search(text):
-        raise XodusError(_DEVICE_LIMIT_MESSAGE)
+        raise DeviceLimitReached(_DEVICE_LIMIT_MESSAGE)
     if _NOT_OWNED.search(text):
         raise NotOwned(
             "The linked Microsoft account does not own this edition of "
@@ -1176,6 +1236,11 @@ def _failure_line(tail):
     A Rust panic ends with "note: run with RUST_BACKTRACE=1", so taking the
     last line reports the least informative one and hides the actual cause on
     the line above.
+
+    A line the launcher can name a cause from beats the last line for the same
+    reason: the download goes on printing after the refusal that ended it --
+    what it was doing when it stopped, what it is cleaning up -- and the last
+    of that says nothing about why.
     """
     lines = [line.strip() for line in tail if line.strip()]
     for index, line in enumerate(lines):
@@ -1183,6 +1248,9 @@ def _failure_line(tail):
             message = next((later for later in lines[index + 1:]
                             if not later.startswith("note:")), "")
             return message or line
+    known = [line for line in lines if _REASONS.search(line)]
+    if known:
+        return known[-1]
     return next((line for line in reversed(lines)
                  if not line.startswith("note:")), "")
 
@@ -1213,8 +1281,13 @@ def _run_streaming(cmd, progress=None, record=None):
     ``record`` is called with every line that is not a progress frame, so a
     download that fails leaves more behind than the last forty lines held in
     memory.
+
+    What comes back is those forty lines with every failure sentence seen
+    during the whole run in front of them, so classifying the failure never
+    depends on where in the output the downloader happened to say why.
     """
     tail = []
+    reasons = []
     env = _drawable_term(_env(cmd[0]))
     master, slave = pty.openpty()
     # A pty starts out reporting no size at all, and indicatif pads every
@@ -1258,7 +1331,8 @@ def _run_streaming(cmd, progress=None, record=None):
                 parts = re.split(r"[\r\n]", buffer)
                 buffer = parts.pop()
                 for line in parts:
-                    _consume(_ANSI.sub("", line), tail, progress, record)
+                    _consume(_ANSI.sub("", line), tail, progress, record,
+                             reasons)
                 continue
             if exited:
                 break
@@ -1267,11 +1341,21 @@ def _run_streaming(cmd, progress=None, record=None):
         os.close(master)
         proc.wait()
     if buffer:
-        _consume(_ANSI.sub("", buffer), tail, progress, record)
-    return proc.returncode, tail
+        _consume(_ANSI.sub("", buffer), tail, progress, record, reasons)
+    return proc.returncode, _classifiable(reasons, tail)
 
 
-def _consume(line, tail, progress, record=None):
+def _classifiable(reasons, tail):
+    """The tail, with the run's failure sentences in front of whatever is left.
+
+    Only the ones the tail no longer holds: a sentence still in it is there in
+    full, and the copy taken out of a redraw is a substring of that.
+    """
+    return [reason for reason in reasons
+            if not any(reason in line for line in tail)] + tail
+
+
+def _consume(line, tail, progress, record=None, reasons=None):
     # NULs are padding rather than output: one redraw measured here carried
     # 16 MiB of them around 438 characters of bars, and they are what a
     # message arriving in the middle of a frame gets buried in.
@@ -1286,11 +1370,18 @@ def _consume(line, tail, progress, record=None):
         total = _bytes(match.group("total"), match.group("tu"))
         if total:
             progress(min(done, total), total)
-    line = _after_bars(line)
+    # Read out of the raw line, before the bar filtering below can drop it:
+    # what the frames leave behind is not always separable from the sentence
+    # printed into them, and the sentence is the one thing that must survive.
+    reason = _reason_in(line)
+    line = _after_bars(line) or reason
     if not line:
         return
     if record:
         record(line)
+    if reason and reasons is not None and reason not in reasons:
+        reasons.append(reason)
+        del reasons[:-_REASONS_KEPT]
     tail.append(line)
     del tail[:-40]
 
@@ -1301,6 +1392,22 @@ def _after_bars(line):
     if not line or _BAR_REMNANT.search(line):
         return ""
     return line[:_LINE_CAP]
+
+
+def _reason_in(line):
+    """The failure sentence a line carries, however it arrived, or "".
+
+    xodus-cli prints from one thread while indicatif redraws from another, so
+    a message can land in the middle of a frame -- and half a frame is kept
+    from being read as output by dropping the whole line it is in, sentence
+    included. Anything the launcher knows how to name is taken out of the line
+    first, from where the sentence starts to wherever the next redraw begins,
+    so no failure is lost to the bar it happened to land on.
+    """
+    match = _REASONS.search(line)
+    if not match:
+        return ""
+    return _BAR_REMNANT.split(line[match.start():])[0].strip()[:_LINE_CAP]
 
 
 # ---------------------------------------------------------------- launching

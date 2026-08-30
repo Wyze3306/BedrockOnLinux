@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from .launch import (
 )
 from .log import BolError, IS_TTY, desktop_notify, die, err, info, ok, warn
 from .network import diagnose_network
+from .platform import has_display
 from .prefix import reset_prefix
 from .profiles import (
     create_profile,
@@ -381,12 +381,16 @@ def main():
         elif a.cmd == "gui":
             _open_gui()
         else:
-            if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+            # macOS always answers yes here: a process started from Finder,
+            # from a .app or from Terminal can open a window with no display
+            # variable to look at, and requiring one would print help at every
+            # double-click.
+            if has_display():
                 _open_gui()
             else:
                 p.print_help()
     except BolError as exc:
-        from .xodus import NotSignedIn
+        from .xodus import DEVICE_PAGE, DeviceLimitReached, NotSignedIn
         if not getattr(exc, "reported", False):
             err(str(exc))
         if isinstance(exc, NotSignedIn):
@@ -394,6 +398,12 @@ def main():
             # button. Name the command that does it rather than leaving the
             # terminal with a sign-in it cannot start.
             info(f"Sign in with:  {APP} store-login")
+        if isinstance(exc, DeviceLimitReached):
+            # The remedy is a web page and the way back is a command; the
+            # window opens the one and presses the other. Here both are simply
+            # named, so the terminal is not left with a paragraph to re-read.
+            info(f"Remove a device at:  {DEVICE_PAGE}")
+            info(f"Then run again:  {APP} {a.cmd or 'setup'}")
         if a.cmd == "play":
             _report_launch_failure(str(exc))
         sys.exit(1)

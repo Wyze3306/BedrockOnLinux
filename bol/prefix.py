@@ -34,6 +34,7 @@ from .config import (
 )
 from .log import BolError, die, info, ok, warn
 from .perfcheck import find_game_data_dirs, find_options_files
+from .platform import IS_MAC
 from .proton import proton_path
 from .util import download, sha256_file, steam_app_id
 
@@ -49,6 +50,12 @@ _MANAGED_RUNTIME_ARCH_DIRS = (
 )
 
 def ensure_umu(force=False):
+    if IS_MAC:
+        # umu is the Steam Linux Runtime's entry point; there is no such
+        # runtime on macOS and nothing here calls this, but a caller that
+        # slipped through must not silently download a Linux zipapp.
+        raise BolError("umu-launcher is a Linux runtime and cannot be used "
+                       "on macOS; this Mac runs a native Wine instead.")
     binp = UMU_DIR / "umu-run"
     if binp.is_file() and not force:
         try:
@@ -245,6 +252,21 @@ def proton_umu_cmd(exe, prefix=None):
     return [sys.executable, str(ensure_umu()), exe], env
 
 
+def engine_cmd(exe, prefix=None):
+    """Build ``(argv, env)`` for the Windows runtime this host actually has.
+
+    The one door every Wine invocation goes through. On Linux that is
+    GDK-Proton inside umu; on macOS it is the native Wine bol.winemac found.
+    Both return the same shape -- an argv whose last element is the program or
+    verb, and the environment to run it in -- so prefix creation, setup and
+    the launch itself are written once.
+    """
+    if IS_MAC:
+        from .winemac import wine_cmd
+        return wine_cmd(exe, prefix=prefix)
+    return proton_umu_cmd(exe, prefix=prefix)
+
+
 def prefix_ready(prefix: Path):
     """Return whether Wine completed the prefix, including both main hives."""
     prefix = Path(prefix)
@@ -382,8 +404,11 @@ def runtime_setup_pending():
 
     Mirrors umu-launcher's own check: it looks for an unpacked
     ``sniper_platform_*`` under the runtime directory and rebuilds the whole
-    runtime when none is there.
+    runtime when none is there. There is no such runtime on macOS, so nothing
+    is ever pending and wineboot keeps Wine's own budget.
     """
+    if IS_MAC:
+        return False
     try:
         return not any((UMU_DIR / "steamrt3").glob("sniper_platform_*"))
     except OSError:
@@ -408,7 +433,7 @@ def _wineboot_hit_rng_abort(log_path: Path, offset=0):
 
 def _run_wineboot(pfx: Path, log_path: Path, native_cryptbase):
     """Run one ``wineboot -u``; return None, or why it did not complete."""
-    cmd, env = proton_umu_cmd("wineboot", prefix=pfx)
+    cmd, env = engine_cmd("wineboot", prefix=pfx)
     cmd.append("-u")
     env = headless_setup_env(env, native_cryptbase=native_cryptbase)
     env.setdefault("WINEDEBUG", "-all")
@@ -526,7 +551,18 @@ def _environ_uses_prefix(environ, prefix):
 
 
 def prefix_processes(prefix: Path):
-    """Return live PIDs carrying this exact ``WINEPREFIX`` environment."""
+    """Return live PIDs carrying this exact ``WINEPREFIX`` environment.
+
+    macOS refuses to show one process's environment to another and has no
+    ``/proc`` to read it from anyway, so there the answer comes from
+    bol.winemac, which matches the prefix and the Wine directory in the
+    command lines ``ps`` reports. That match is best-effort by nature, which
+    is why every *decision* about idleness on macOS goes through
+    :func:`require_prefix_idle` below — it asks wineserver's own lock.
+    """
+    if IS_MAC:
+        from .winemac import prefix_processes as mac_prefix_processes
+        return mac_prefix_processes(prefix)
     found = []
     for pdir in Path("/proc").glob("[0-9]*"):
         try:
@@ -548,6 +584,17 @@ def require_prefix_idle(prefix: Path, action="modify the Wine prefix"):
             f"Cannot {action}: {len(live)} Wine/Proton process(es) still use "
             "this prefix. Close Minecraft or use 'Force stop Minecraft' first."
         )
+    if IS_MAC:
+        # The authority on macOS: a process list can miss a service spawned
+        # while its parent exits, but the server's lock is held for as long as
+        # the server lives, and it is the server that owns the registry hive
+        # these callers are about to rewrite.
+        from .winemac import prefix_busy
+        if prefix_busy(prefix):
+            raise BolError(
+                f"Cannot {action}: Wine still owns this prefix. Close "
+                "Minecraft or use 'Force stop Minecraft' first."
+            )
     return True
 
 
@@ -787,6 +834,45 @@ def refresh_managed_prefix_runtime(prefix=None):
     return changed
 
 
+def _stop_prefix_procs_mac(prefix: Path, grace=5, kill_grace=2):
+    """Stop a prefix on macOS, where the shutdown is wineserver's to run.
+
+    ``wineserver -k`` sends the whole session its termination, including the
+    services a PID snapshot would never have seen, so it does the work that
+    the TERM/KILL sweep does on Linux. The sweep still runs afterwards for
+    anything left outside the server's reach, and the verdict comes from the
+    server lock rather than from the process list.
+    """
+    from .winemac import kill_prefix, prefix_busy
+
+    before = set(prefix_processes(prefix))
+    idle = kill_prefix(prefix, timeout=max(1, grace + kill_grace))
+    forced = set()
+    deadline = time.monotonic() + max(0, kill_grace)
+    while True:
+        live = set(prefix_processes(prefix))
+        if not live and idle:
+            break
+        before.update(live)
+        for pid in live:
+            try:
+                os.kill(pid, 9)
+            except (ProcessLookupError, PermissionError):
+                pass
+            else:
+                forced.add(pid)
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+        idle = not prefix_busy(prefix)
+    if prefix_busy(prefix):
+        raise BolError(
+            "Could not stop the Wine session for this prefix; refusing "
+            "unsafe offline changes."
+        )
+    return len(before), len(forced)
+
+
 def stop_prefix_procs(prefix: Path, grace=5, kill_grace=2):
     """Stop a prefix, including children spawned during shutdown.
 
@@ -796,6 +882,8 @@ def stop_prefix_procs(prefix: Path, grace=5, kill_grace=2):
     is demonstrably idle.
     """
     prefix = Path(prefix)
+    if IS_MAC:
+        return _stop_prefix_procs_mac(prefix, grace, kill_grace)
     seen = set()
     term_sent = set()
     deadline = time.monotonic() + max(0, grace)

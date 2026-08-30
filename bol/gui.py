@@ -10,7 +10,6 @@ import re
 import shutil
 import socket
 import stat
-import subprocess
 import sys
 import threading
 from dataclasses import dataclass
@@ -44,6 +43,7 @@ from .launch import direct_launch_readiness, launch, single_window_session
 from .navigation import ControllerNav
 from . import log
 from .log import BolError, _LEVELS, desktop_notify, warn
+from .platform import IS_MAC, open_path
 from .prefix import _mc_running, kill_wine, prefix_operation_lock, reset_prefix
 from .profiles import (
     create_profile, current_profile_info, current_profile_name, delete_profile,
@@ -204,6 +204,8 @@ def icon_candidates(module_file=None):
         # (/usr/lib/bedrock-on-linux/data)
         here.parent / "data/icon.png",
         here / "data/icon.png",
+        # macOS application bundle: Contents/Resources, beside Contents/MacOS
+        here.parent.parent / "Resources/icon.png",
         # Flatpak: the manifest installs the icon under the app-id name only
         Path("/app/share/icons/hicolor/256x256/apps/"
              "io.github.wyze3306.BedrockOnLinux.png"),
@@ -867,7 +869,11 @@ class AccountRow(QWidget):
     def show_state(self, dot_color, status, action, danger=False):
         self.dot.setStyleSheet(f"color:{dot_color};")
         self.status.setText(status)
-        self.button.setText(action)
+        # No action means there is nothing this row can do here -- the Store
+        # download on macOS, where the downloader itself does not exist. Hide
+        # the button rather than leave a labelless one to be clicked.
+        self.button.setVisible(bool(action))
+        self.button.setText(action or "")
         self.button.setStyleSheet(
             f"background:{danger}; color:white;" if danger else "")
 
@@ -985,6 +991,10 @@ class LaunchWorker(QThread):
     # it is reported apart from failed() rather than being recovered by
     # matching on the message text.
     needs_store_signin = Signal(str)
+    # The download was refused because the account already holds its ten
+    # Microsoft Store devices. Also not a launch failure to sit and read:
+    # the remedy is a web page, and this is what lets the window open it.
+    store_device_limit = Signal(str)
     # qint64: this is the signal that carries the Minecraft download, and that
     # package is well past the 2 GiB a Qt `int` holds (#216).
     progress = Signal("qint64", "qint64")
@@ -1016,9 +1026,11 @@ class LaunchWorker(QThread):
         except Exception as exc:
             self.come_back.emit()
             message = str(exc) or type(exc).__name__
-            from .xodus import NotSignedIn
+            from .xodus import DeviceLimitReached, NotSignedIn
             if isinstance(exc, NotSignedIn):
                 self.needs_store_signin.emit(message)
+            elif isinstance(exc, DeviceLimitReached):
+                self.store_device_limit.emit(message)
             else:
                 self.failed.emit(message)
 
@@ -1218,8 +1230,7 @@ class MainWindow(QMainWindow):
         return row
 
     def _open_github(self):
-        subprocess.Popen(["xdg-open", "https://github.com/Wyze3306/BedrockOnLinux"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        open_path("https://github.com/Wyze3306/BedrockOnLinux")
 
     # ------------------------------------------------------------ hero
     def _build_hero(self) -> QWidget:
@@ -1715,6 +1726,11 @@ class MainWindow(QMainWindow):
 
     def _store_state(self):
         """The same, for the download account."""
+        if IS_MAC:
+            # There is no downloader to sign in to on a Mac: xodus-cli is a
+            # Linux binary. Say that in the row instead of offering a button
+            # whose only possible outcome is an error.
+            return (self.theme.sub, "Not available on macOS", None, None)
         if self.ui_state.get("store_login_active"):
             # A sign-in window that stops making progress is the whole of
             # issue #214, and a row that can only say "Signing in…" leaves
@@ -1876,6 +1892,10 @@ class MainWindow(QMainWindow):
         which resumes on its own once it is there instead of making the player
         press it again.
         """
+        from . import xodus
+        if IS_MAC:
+            self.set_status(xodus.MAC_UNSUPPORTED)
+            return
         if self.ui_state.get("store_login_active"):
             # Returning quietly here is how a sign-in that never finished
             # turned every later attempt into a button that does nothing
@@ -1883,7 +1903,6 @@ class MainWindow(QMainWindow):
             # the only thing that leads anywhere.
             self._store_login_already_open()
             return
-        from . import xodus
         self.ui_state["store_login_active"] = True
         self._refresh_store_row()
         self.set_status("Finish the Microsoft sign-in in the window that opens…")
@@ -2180,8 +2199,7 @@ class MainWindow(QMainWindow):
         step1.setStyleSheet("font-weight:700;")
         cv.addWidget(step1)
         cv.addWidget(btn("Open Microsoft sign-in \u2197",
-                        lambda: subprocess.Popen(["xdg-open", full_url],
-                                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                        lambda: open_path(full_url),
                         kind="primary", h=42))
 
         step2 = QLabel("2. Enter this code")
@@ -2248,6 +2266,7 @@ class MainWindow(QMainWindow):
         w.done.connect(self._play_finished)
         w.failed.connect(self._play_failed)
         w.needs_store_signin.connect(self._store_signin_needed)
+        w.store_device_limit.connect(self._store_device_limit)
         w.close_window.connect(self._close_for_game)
         w.step_aside.connect(self._step_aside_for_game)
         w.come_back.connect(self._come_back_from_game)
@@ -2284,6 +2303,7 @@ class MainWindow(QMainWindow):
     def _play_finished(self, _result):
         self.ui_state["launch_active"] = False
         self.ui_state.pop("store_signin_offered", None)
+        self.ui_state.pop("device_page_offered", None)
         if self.ui_state.get("window_gone"):
             QApplication.instance().quit()
             return
@@ -2294,6 +2314,7 @@ class MainWindow(QMainWindow):
     def _play_failed(self, message):
         self.ui_state["launch_active"] = False
         self.ui_state.pop("store_signin_offered", None)
+        self.ui_state.pop("device_page_offered", None)
         log._LOG_SINK(f"xx {message}")
         if self.ui_state.get("window_gone"):
             desktop_notify(message[:400], "Minecraft could not start")
@@ -2339,6 +2360,64 @@ class MainWindow(QMainWindow):
         if self._offer_store_account_link(message):
             self.ui_state["store_signin_offered"] = True
             self._link_store_account(then=self.do_play)
+
+    def _store_device_limit(self, message):
+        """The download was refused because the account is out of devices.
+
+        Microsoft licenses Store content to a device and lets an account hold
+        ten of them; the eleventh download is refused until one is given back,
+        which happens on a Microsoft web page and nowhere else. So the whole
+        remedy for this failure sits outside the launcher, and reporting it as
+        an error box left the player to notice a URL in a paragraph, copy it
+        out by hand, and know to come back and press PLAY again.
+
+        Open the page instead, and offer the download again the moment they
+        are back: nothing about it changed while they were away -- it was the
+        account that was full, and it is a different account state now.
+        """
+        self.ui_state["launch_active"] = False
+        log._LOG_SINK(f"xx {message}")
+        if self.ui_state.get("window_gone"):
+            desktop_notify(message[:400], "Minecraft could not be downloaded")
+            QApplication.instance().quit()
+            return
+        self.end_progress()
+        self._set_busy(False)
+        self.set_status("This account is out of Microsoft Store devices.",
+                        self.theme.gold)
+        if self.ui_state.pop("device_page_offered", False):
+            # The page was opened once for this launch already and the answer
+            # has not changed. Offering it again in a loop would be its own
+            # bug; say it plainly and stop.
+            self.error_box("Minecraft could not be downloaded", message[:2000])
+            return
+        if not self._offer_device_page(message):
+            return
+        from .xodus import DEVICE_PAGE
+        self.ui_state["device_page_offered"] = True
+        open_path(DEVICE_PAGE)
+        if self.question_box(
+                "Try the download again?",
+                "Your Microsoft devices are open in your browser. Remove the "
+                "ones you no longer use — removing a device does not remove "
+                "anything you own — then come back here.\n\n"
+                "Start the download again now?"):
+            self.do_play()
+
+    def _offer_device_page(self, message):
+        """Offer the Microsoft page a Store device is given back on.
+
+        Same shape as _offer_store_account_link, and for the same reason: the
+        choice is an action, and it reads as one under its own name rather
+        than under "Yes". Returns True only when they asked to open it.
+        """
+        box = self._box(QMessageBox.Warning,
+                        "Minecraft could not be downloaded", message[:2000])
+        later = box.addButton("Not now", QMessageBox.RejectRole)
+        manage = box.addButton("Manage devices", QMessageBox.AcceptRole)
+        box.setDefaultButton(manage)
+        box.exec()
+        return box.clickedButton() is not later
 
     def _set_busy(self, on):
         self.ui_state["busy"] = on
@@ -2693,8 +2772,7 @@ class MainWindow(QMainWindow):
         return row
 
     def _open_build(self, build):
-        subprocess.Popen(["xdg-open", str(build["path"])],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        open_path(build["path"])
 
     def _remove_build(self, build):
         if self.ui_state.get("launch_active") or _mc_running():
@@ -2746,23 +2824,40 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
 
         graphics = card_section(v, "Graphics")
-        rt = self._switch("Ray tracing", self.settings.get("ray_tracing", True),
-                        "Hands DXR to Minecraft for its Ray Traced mode. Needs an "
-                        "RTX-class GPU and a ray-tracing-capable world.")
-        rt.toggled.connect(lambda on: self._save_setting("ray_tracing", on))
-        graphics.addWidget(rt)
+        # Every switch in this card configures vkd3d-proton, the Linux Vulkan
+        # payload. On macOS Direct3D is translated by the Wine backend's own
+        # layer (D3DMetal), which takes none of these — so instead of showing
+        # three controls that do nothing, the card says which runtime is in
+        # use and where to change it.
+        if IS_MAC:
+            from . import winemac
 
-        fr = self._switch("Limit frame rate to the display",
-                        self.settings.get("limit_frame_rate", True),
-                        "Only applies when Minecraft has no limit of its own.")
-        fr.toggled.connect(lambda on: self._save_setting("limit_frame_rate", on))
-        graphics.addWidget(fr)
+            graphics.addWidget(QLabel(
+                "Windows runtime: " + winemac.summary()))
+            hint = QLabel(
+                "Direct3D is translated by this runtime's own layer, so the "
+                "ray-tracing, frame-limit and renderer settings do not apply "
+                "on macOS. Set BOL_WINE to use a different Wine.")
+            hint.setWordWrap(True)
+            graphics.addWidget(hint)
+        else:
+            rt = self._switch("Ray tracing", self.settings.get("ray_tracing", True),
+                            "Hands DXR to Minecraft for its Ray Traced mode. Needs an "
+                            "RTX-class GPU and a ray-tracing-capable world.")
+            rt.toggled.connect(lambda on: self._save_setting("ray_tracing", on))
+            graphics.addWidget(rt)
 
-        lr = self._switch("Legacy compatibility renderer",
-                        self.settings.get("renderer", "auto") == "opengl",
-                        "Last resort for GPUs without Vulkan 1.3 — drops DXVK/vkd3d.")
-        lr.toggled.connect(lambda on: self._save_setting("renderer", "opengl" if on else "auto"))
-        graphics.addWidget(lr)
+            fr = self._switch("Limit frame rate to the display",
+                            self.settings.get("limit_frame_rate", True),
+                            "Only applies when Minecraft has no limit of its own.")
+            fr.toggled.connect(lambda on: self._save_setting("limit_frame_rate", on))
+            graphics.addWidget(fr)
+
+            lr = self._switch("Legacy compatibility renderer",
+                            self.settings.get("renderer", "auto") == "opengl",
+                            "Last resort for GPUs without Vulkan 1.3 — drops DXVK/vkd3d.")
+            lr.toggled.connect(lambda on: self._save_setting("renderer", "opengl" if on else "auto"))
+            graphics.addWidget(lr)
 
         env = card_section(v, "Environment")
         env.addWidget(QLabel("Custom environment variables"))
@@ -2771,11 +2866,15 @@ class MainWindow(QMainWindow):
         env_entry.textChanged.connect(lambda t: self._save_setting("custom_env", t))
         env.addWidget(env_entry)
 
-        env.addWidget(QLabel("Gamescope arguments"))
-        gs_entry = QLineEdit(self.settings.get("gamescope") or "")
-        gs_entry.setPlaceholderText("1 for auto, or e.g. -w 1920 -h 1080 -f")
-        gs_entry.textChanged.connect(lambda t: self._save_setting("gamescope", t))
-        env.addWidget(gs_entry)
+        if not IS_MAC:
+            # gamescope is a Wayland micro-compositor; there is nothing for it
+            # to nest inside on macOS.
+            env.addWidget(QLabel("Gamescope arguments"))
+            gs_entry = QLineEdit(self.settings.get("gamescope") or "")
+            gs_entry.setPlaceholderText("1 for auto, or e.g. -w 1920 -h 1080 -f")
+            gs_entry.textChanged.connect(
+                lambda t: self._save_setting("gamescope", t))
+            env.addWidget(gs_entry)
 
         self._build_storage_card(v)
 
@@ -2845,8 +2944,7 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(self.loc_label.text())
 
     def _open_install_folder(self):
-        subprocess.Popen(["xdg-open", self.loc_label.text()],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        open_path(self.loc_label.text())
 
     def _relocate_blocked(self):
         if self.ui_state.get("launch_active") or _mc_running():
@@ -2981,8 +3079,7 @@ class MainWindow(QMainWindow):
                                tip="Load a client-side .dll into the running game. "
                                    "Native / AppImage only."))
         content.addWidget(tool_row("Open Minecraft folder",
-                               lambda: subprocess.Popen(["xdg-open", str(game_content_dir())],
-                                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                               lambda: open_path(game_content_dir()),
                                tip="Open the folder holding your worlds, templates "
                                    "and screenshots in your file manager."))
 
@@ -3069,8 +3166,7 @@ class MainWindow(QMainWindow):
                     "checked, so PLAY is unblocked again.")
             maintenance.addWidget(self.gpu_ack_btn)
         maintenance.addWidget(tool_row("Open logs folder",
-                                   lambda: subprocess.Popen(["xdg-open", str(LOGS)],
-                                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                                   lambda: open_path(LOGS),
                                    tip="Open the folder with launch and activity logs, "
                                        "useful for bug reports."))
         maintenance.addWidget(tool_row("Repair (reset Wine prefix)",
@@ -3311,8 +3407,7 @@ class MainWindow(QMainWindow):
                             kind="ghost-small", w=84, h=26,
                             tip="Open this profile in another window"))
             if path is not None:
-                h.addWidget(btn("Folder", lambda: subprocess.Popen(["xdg-open", str(path)],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                h.addWidget(btn("Folder", lambda: open_path(path),
                                 kind="ghost-small", w=52, h=26))
                 h.addWidget(btn("Rename", lambda: self._rename_profile_row(name, is_active),
                                 kind="ghost-small", w=58, h=26))

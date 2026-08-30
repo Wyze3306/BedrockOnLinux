@@ -11,6 +11,7 @@ from .fixups import fix_curl_ssl, hide_signin_button, install_gdk_xbox_dlls
 from .gameinput import install_gameinput
 from .games import _auto_selection, _game_root, install_game, use_game_dir
 from .log import BolError, info, ok, warn
+from .platform import IS_MAC
 from .prefix import (
     active_prefix,
     boot_prefix,
@@ -32,6 +33,19 @@ def do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
                          force, progress)
 
 
+# What setup can and cannot do on a Mac, said once. The download and the
+# per-launch decryption both live in xodus-cli, which is Linux-only (see
+# bol.xodus.MAC_UNSUPPORTED), so a Mac brings its own game folder; everything
+# after that -- the prefix, the CA bundle, GameInput, the UI patches -- is the
+# same work on either platform, because all of it operates on Windows files.
+_MAC_NO_GAME = (
+    "No Minecraft folder is set, and macOS cannot download one: the Microsoft "
+    "Store downloader is Linux-only. Open Settings and point 'Minecraft "
+    "folder' at a Minecraft for Windows installation you already have (the "
+    "folder holding Minecraft.Windows.exe), then run Install / Update again."
+)
+
+
 def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
               force=False, progress=None):
     mkdirs()
@@ -44,15 +58,29 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
         use_game_dir(game_dir)
     cur = load_settings().get("game_dir")
     if not cur or not _game_root(Path(cur)):
+        if IS_MAC:
+            # Stop here rather than in the middle of install_game(): the
+            # engine below is worth preparing only for a game that exists,
+            # and the answer a Mac needs is which folder to point at.
+            raise BolError(_MAC_NO_GAME)
         edition, version = _auto_selection(s)
         use_game_dir(install_game(edition, version, progress, force=force))
     gd = Path(load_settings()["game_dir"])
-    if load_settings().get("proton_source") == "winegdk":
-        ensure_winegdk(force, progress)
-        install_gdk_xbox_dlls(gd)
+    if IS_MAC:
+        # A native Wine (Game Porting Toolkit, CrossOver, Whisky or plain),
+        # in place of GDK-Proton inside umu. The GDK Xbox DLLs are skipped
+        # with it: they are the online stack for WineGDK's xgameruntime, and
+        # without that engine -- which has no macOS build -- they would be
+        # 20 MB downloaded to do nothing.
+        from .winemac import ensure_wine
+        ensure_wine(force)
     else:
-        ensure_proton(proton_tag, force, progress)
-    ensure_umu(force)
+        if load_settings().get("proton_source") == "winegdk":
+            ensure_winegdk(force, progress)
+            install_gdk_xbox_dlls(gd)
+        else:
+            ensure_proton(proton_tag, force, progress)
+        ensure_umu(force)
     fix_curl_ssl(gd)
     if not boot_prefix():
         raise BolError(
@@ -62,6 +90,11 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
         )
     install_gameinput(active_prefix(), gd)
     hide_signin_button(gd)
+    if IS_MAC:
+        ok("Setup complete — click PLAY. This Mac runs Minecraft offline and "
+           "on the LAN: Xbox Live sign-in needs the WineGDK engine, which is "
+           "built for Linux only.")
+        return
     # Not "sign in in-game": that button reaches a sign-in the engine does
     # not implement, and telling people to use it is how #227/#228 were
     # filed. The account is linked here, and PLAY carries it into the
@@ -116,7 +149,7 @@ _DIAG_RULES = [
     # An encrypted build is licensed to a device at every launch, so this is
     # a launch failure and not only a download one. The account is out of
     # Store devices, and where they are given back is not in the message.
-    (r"Device group is full",
+    (r"Device group is full|remove a device and try again",
      "Microsoft refused the game licence: this account has reached its limit "
      "of ten Microsoft Store download devices. Remove the ones you no longer "
      "use at https://account.microsoft.com/devices/content, then click PLAY "

@@ -83,6 +83,47 @@ on a Steam Deck.
   your own licence.
 - Enough free disk space for the game and its runtime, a few gigabytes.
 
+## macOS
+
+There is a `macos` branch of this launcher, and it is honest about what it can
+do. The launcher itself runs natively on a Mac: the same window, the same
+settings, the same `doctor`, with its data in
+`~/Library/Application Support/bedrock-on-linux`. What changes is underneath.
+
+The Windows runtime is a **native macOS Wine**, not GDK-Proton — the launcher
+finds Apple's [Game Porting Toolkit][gptk], CrossOver, Whisky or a plain Wine,
+in that order, and uses the best one you have. It installs none of them: they
+are separate products with their own licences. Point it at a specific build
+with `BOL_WINE=/path/to/wine` if you want a different one.
+
+[gptk]: https://developer.apple.com/games/game-porting-toolkit/
+
+Two things do **not** work on macOS, and neither is fixable from this
+repository alone:
+
+- **Downloading Minecraft.** The Microsoft Store download and the decryption
+  the game needs at every launch both live in `xodus-cli`, which is built for
+  Linux and links WebKitGTK. So on a Mac you bring your own **decrypted**
+  Minecraft for Windows folder and point the launcher at it in Settings.
+- **Signing in to Xbox Live.** The in-game sign-in is the WineGDK XUser fork
+  compiled into GDK-Proton, and there is no macOS build of it. The game runs
+  **offline and on the LAN**: single-player worlds and LAN play, no Realms, no
+  servers, no Marketplace, no Friends.
+
+What that leaves working is a real thing — a Mac running Bedrock's own Windows
+build, on a prefix the launcher prepares, with the GameInput controller stack,
+the CA bundle, the stack-reserve fix and the UI patches all applied exactly as
+on Linux, because every one of those operates on Windows files.
+
+Build the application bundle on a Mac with:
+
+```bash
+scripts/build-macos-app.sh
+```
+
+Run `bedrock-on-linux doctor` there first: it names the Windows runtime it
+found, and says which of the checks above simply do not apply.
+
 ## If something goes wrong
 
 Start with the built-in check, which looks at your system and tells you what is

@@ -46,13 +46,14 @@ from .perfcheck import (
     performance_problems,
     read_game_options,
 )
+from .platform import IS_MAC
 from .prefix import (
     active_prefix,
     boot_prefix,
+    engine_cmd,
     launch_lock,
     patch_options,
     prefix_processes,
-    proton_umu_cmd,
     restore_truncated_game_options,
     seed_default_servers,
     snapshot_game_options,
@@ -95,6 +96,12 @@ _SONY_STEAM_INPUT_HIDRAW_IDS = ",".join((
 
 def _prepare_graphics_engine():
     """Activate the universal DGC pair without opening Vulkan in the launcher."""
+    if IS_MAC:
+        # vkd3d-proton is a Vulkan payload built for Linux. On macOS the
+        # backend brings its own Direct3D 12 translation -- D3DMetal under
+        # Game Porting Toolkit and CrossOver -- which the launcher neither
+        # ships nor configures, so there is no graphics payload to activate.
+        return None
     if custom_proton():
         return None
     try:
@@ -513,6 +520,75 @@ def _configure_graphics_cache(env, managed_engine):
     env["DXVK_SHADER_CACHE_PATH"] = str(cache)
 
 
+def _configure_display(env, backend, wl):
+    """Point Wine at this session's display server.
+
+    Linux only, and called only from there: it chooses between winewayland and
+    X11/XWayland, carries the X authority file across, and says what to do
+    when neither is reachable. macOS Wine draws through Quartz with no
+    equivalent to configure.
+    """
+    disp = os.environ.get("DISPLAY")
+    if backend == "wayland" and wl:
+        env["PROTON_ENABLE_WAYLAND"] = "1"
+        env["WAYLAND_DISPLAY"] = wl
+        xrd = os.environ.get("XDG_RUNTIME_DIR")
+        if xrd:
+            env["XDG_RUNTIME_DIR"] = xrd
+        env.pop("DISPLAY", None)
+        mon = (os.environ.get("BOL_WAYLAND_MONITOR")
+               or os.environ.get("WAYLANDDRV_PRIMARY_MONITOR"))
+        if mon:
+            env["WAYLANDDRV_PRIMARY_MONITOR"] = mon
+        warn("BOL_INPUT=wayland → winewayland (experimental). If it can't "
+             "open a window no automatic GPU relaunch is attempted; "
+             "to help winewayland connect first try BOL_WAYLAND_MONITOR=<output> "
+             "(e.g. eDP-1).")
+        return
+    if backend == "wayland":
+        warn("BOL_INPUT=wayland but no WAYLAND_DISPLAY found — using X11.")
+    if disp:
+        env["DISPLAY"] = disp
+        for cand in (os.environ.get("XAUTHORITY"), str(HOME / ".Xauthority"),
+                     f"/run/user/{os.getuid()}/.mutter-Xwaylandauth.0"):
+            if cand and Path(cand).exists():
+                env["XAUTHORITY"] = cand
+                break
+    elif wl:
+        warn("Wayland session without X DISPLAY — install XWayland (or set "
+             "BOL_INPUT=wayland to use winewayland).")
+
+
+def _configure_mac_runtime(env, settings, diagnostics=False):
+    """The macOS half of _configure_runtime_compat.
+
+    Almost nothing carries over. Every ``PROTON_*`` variable there is read by
+    Proton's own launch script, which does not exist here; the Steam Input
+    HIDRAW filtering is Linux hidraw; ``VKD3D_DEBUG`` belongs to a payload
+    macOS does not run. What is left is Wine's own logging, the backend
+    environment bol.winemac chose, and the Metal HUD -- and that is the whole
+    of it, deliberately: the Direct3D translation here is Apple's or
+    CodeWeavers', and second-guessing it from the launcher is how a working
+    renderer gets broken.
+    """
+    for name in LAUNCHER_OWNED_ENV:
+        env.pop(name, None)
+    if diagnostics:
+        env["WINEDEBUG"] = "+xgameruntime,trace-xgameruntime,fixme-all"
+        # Wine writes to stderr, which the caller already redirects into
+        # minecraft.log; there is no separate Proton log on macOS.
+    else:
+        env["WINEDEBUG"] = "-all"
+    # Apple's frame-rate/GPU overlay, off unless Diagnostics asked for it.
+    env["MTL_HUD_ENABLED"] = "1" if diagnostics else "0"
+    renderer = str(settings.get("renderer", "auto")).strip().lower()
+    if renderer in {"opengl", "wined3d", "legacy"}:
+        warn("The Legacy compatibility renderer is a Proton setting and does "
+             "nothing on macOS: Direct3D here is translated by the Wine "
+             "backend's own layer. Leaving the renderer as it is.")
+    return env
+
+
 def _clear_previous_proton_logs():
     """Keep post-mortem diagnosis scoped to the launch about to start."""
     for path in (LOGS / "proton.log", *LOGS.glob("steam-*.log")):
@@ -550,6 +626,14 @@ def _prepare_launch_engine():
         die("The BedrockOnLinux Wine prefix is already active "
             f"({len(running)} process(es)). Close Minecraft or use the "
             "explicit 'Force stop Minecraft' action before launching again.")
+    if IS_MAC:
+        # The macOS runtime is a Wine installed system-wide, shared with
+        # every other application that uses it. Confirm it is still there and
+        # leave it exactly as it is: the combase/ntdll byte patches belong to
+        # one specific GDK-Proton build, and this is not it.
+        from .winemac import ensure_wine
+        ensure_wine()
+        return None
     managed_engine = not custom_proton()
     if managed_engine:
         ensure_winegdk()
@@ -567,12 +651,15 @@ def _launch_once(lock_fds=(), on_started=None):
         die("GDK-Proton missing — run Install / Update.")
     # Engine preparation is GPU-free and may repair state from an older build.
     _prepare_launch_engine()
-    # GPU-free advisory: an Intel dGPU on i915 cannot expose the DGC the
-    # menu needs; warn before the cryptic page fault instead of after it.
-    _warn_if_dgc_unavailable()
-    # Same idea for the synchronization fast path: name the cause of the
-    # "runs on one thread" stutter before the game starts, not after.
-    _warn_if_inproc_sync_unavailable(s)
+    if not IS_MAC:
+        # GPU-free advisory: an Intel dGPU on i915 cannot expose the DGC the
+        # menu needs; warn before the cryptic page fault instead of after it.
+        _warn_if_dgc_unavailable()
+        # Same idea for the synchronization fast path: name the cause of the
+        # "runs on one thread" stutter before the game starts, not after.
+        # Both read Linux kernel interfaces and describe Linux payloads; the
+        # macOS backend's own synchronisation is set up in bol.winemac.
+        _warn_if_inproc_sync_unavailable(s)
     # And for the causes that are not the engine at all: no memory left, no
     # disk left, windowed vsync, a render distance past the main thread.
     _warn_if_performance_degraded()
@@ -582,6 +669,18 @@ def _launch_once(lock_fds=(), on_started=None):
 
     account, account_epoch = msa_session_snapshot()
     tok = account.get("refresh_token")
+    if IS_MAC and tok:
+        # The token is carried into the prefix for WineGDK's XUser fork to
+        # pick up, and that fork is compiled into GDK-Proton -- a Linux
+        # build. A native macOS Wine stubs those calls, so writing the token
+        # and running a full Xbox Live pre-auth would spend a round of network
+        # calls to arrive at exactly the offline session below. Say so once
+        # and skip it, rather than reporting a sign-in failure for a sign-in
+        # this platform never had.
+        warn("This Mac runs a native Wine, which has no WineGDK Xbox layer, "
+             "so the linked Microsoft account cannot be handed to the game. "
+             "Minecraft starts in " + _OFFLINE_MODE_NOTICE)
+        tok = None
     fresh = None
     # A transport failure here is the offline case, not a rejected account.
     refresh_unreachable = False
@@ -640,26 +739,42 @@ def _launch_once(lock_fds=(), on_started=None):
     # there is no PE header on disk to edit and no image for Wine to open. Both
     # are handled after Xodus decrypts it into anonymous memory, below.
     encrypted_exe = xodus.exe_is_encrypted(Path(exe))
+    if encrypted_exe and IS_MAC:
+        # A Microsoft Store package is decrypted at every launch by xodus-cli,
+        # which is Linux-only. Refuse here, where the folder that has to
+        # change is still nameable, rather than handing Wine a file that is
+        # ciphertext and letting it fail on "not a valid Win32 application".
+        die("This Minecraft build is an encrypted Microsoft Store package, "
+            "and decrypting it needs xodus-cli, which has no macOS build. "
+            + xodus.MAC_UNSUPPORTED)
     if not encrypted_exe:
         bump_stack_reserve(Path(exe))
-    cmd, env = proton_umu_cmd(exe)
-    # Required by the menu's indirect root-CBV updates (#27/#29/#30).
-    _require_vkd3d_config(env, "force_raw_va_cbv")
-    _configure_ray_tracing(env, s)
-    # The Advanced custom-environment field is applied at the end of this
-    # function, far too late to be read here, so overlay it explicitly: it is
-    # where BOL_FRAME_RATE is documented, and the supported way to set it.
-    _configure_frame_rate_limit(
-        env, s, active_prefix(),
-        environ={**os.environ,
-                 **custom_env_map(s.get("custom_env") or "")})
+    cmd, env = engine_cmd(exe)
+    if not IS_MAC:
+        # Required by the menu's indirect root-CBV updates (#27/#29/#30).
+        _require_vkd3d_config(env, "force_raw_va_cbv")
+        _configure_ray_tracing(env, s)
+        # The Advanced custom-environment field is applied at the end of this
+        # function, far too late to be read here, so overlay it explicitly: it
+        # is where BOL_FRAME_RATE is documented, and the supported way to set
+        # it. All three drive vkd3d-proton, which macOS does not run.
+        _configure_frame_rate_limit(
+            env, s, active_prefix(),
+            environ={**os.environ,
+                     **custom_env_map(s.get("custom_env") or "")})
     diag = (s.get("diagnostics", False) or os.environ.get("BOL_DIAG") == "1")
     xlog = os.environ.get("BOL_XCURL_LOG")
     if xlog == "1" or (xlog is None and diag):
         env["XCURL_LOG"] = "1"
     # Disable incompatible VR/AGS paths; retain native cryptbase with fallback.
-    overrides = ["cryptbase=n,b", "vrclient=", "vrclient_x64=", "openvr_api=",
+    # The cryptbase entry is GDK-Proton's: its advapi32 forwards
+    # SystemFunction036 to a DLL the prefix has to provide (#144). A native
+    # macOS Wine implements RtlGenRandom itself, so asking for a native
+    # cryptbase there would only point it at a file nobody installed.
+    overrides = ["vrclient=", "vrclient_x64=", "openvr_api=",
                  "wineopenxr=", "amd_ags_x64="]
+    if not IS_MAC:
+        overrides.insert(0, "cryptbase=n,b")
     cur = os.environ.get("WINEDLLOVERRIDES", "")
     if cur:
         overrides.append(cur)
@@ -686,13 +801,15 @@ def _launch_once(lock_fds=(), on_started=None):
     # 66/66 succeed.
     env.pop("GNUTLS_SYSTEM_PRIORITY_FILE", None)
     env.pop("GNUTLS_SYSTEM_PRIORITY_FAIL_ON_INVALID", None)
-    preauth = DATA / "winegdk-preauth" / "device.json"
+    # Everything from here to the account re-check is read by WineGDK's
+    # xgameruntime, which exists only in the Linux engine.
+    preauth = None if IS_MAC else DATA / "winegdk-preauth" / "device.json"
     # Only a payload pre-auth just vouched for is handed to the engine: an
     # expired or account-mismatched one would send it chasing a sign-in that
     # cannot complete instead of settling into offline mode.
-    if online and preauth.exists():
+    if online and preauth is not None and preauth.exists():
         env["WINEGDK_PREAUTH_DEVICE"] = "Z:" + str(preauth).replace("/", "\\")
-    rp = s.get("xsts_rp")
+    rp = None if IS_MAC else s.get("xsts_rp")
     if rp:
         host = s.get("xsts_rp_host") or "b980a380.minecraft.playfabapi.com"
         san = "".join(c.upper() if c.isalnum() else "_" for c in host)
@@ -701,53 +818,37 @@ def _launch_once(lock_fds=(), on_started=None):
     if not account_epoch_is_current(account_epoch):
         die("The Microsoft account changed during launch. Minecraft was not "
             "started; click PLAY again with the current account.")
-    wl = os.environ.get("WAYLAND_DISPLAY")
-    backend = (os.environ.get("BOL_INPUT")
-               or s.get("input_backend") or "auto").lower()
-    if backend == "auto":
-        backend = "x11"
-    gs_opt = s.get("gamescope") or os.environ.get("BOL_GAMESCOPE")
-    want_gamescope = bool(gs_opt) and \
-        gs_opt.lower() not in ("0", "no", "off", "false")
-    use_gamescope = want_gamescope and bool(shutil.which("gamescope"))
-    if use_gamescope:
-        backend = "x11"
-    elif want_gamescope and not shutil.which("gamescope"):
-        warn("BOL_GAMESCOPE is set but gamescope isn't installed — ignored.")
-    backend = _resolve_input_backend(backend, bool(wl), proton_path())
-    _configure_runtime_compat(
-        env, s, backend, bool(wl), diagnostics=diag,
-    )
-    _configure_graphics_cache(env, managed_engine=not custom_proton())
-    disp = os.environ.get("DISPLAY")
-    if backend == "wayland" and wl:
-        env["PROTON_ENABLE_WAYLAND"] = "1"
-        env["WAYLAND_DISPLAY"] = wl
-        xrd = os.environ.get("XDG_RUNTIME_DIR")
-        if xrd:
-            env["XDG_RUNTIME_DIR"] = xrd
-        env.pop("DISPLAY", None)
-        mon = (os.environ.get("BOL_WAYLAND_MONITOR")
-               or os.environ.get("WAYLANDDRV_PRIMARY_MONITOR"))
-        if mon:
-            env["WAYLANDDRV_PRIMARY_MONITOR"] = mon
-        warn("BOL_INPUT=wayland → winewayland (experimental). If it can't "
-             "open a window no automatic GPU relaunch is attempted; "
-             "to help winewayland connect first try BOL_WAYLAND_MONITOR=<output> "
-             "(e.g. eDP-1).")
+    # Where the two platforms stop having anything in common. Everything in
+    # the else-branch below is about which Linux display server Wine talks to
+    # and what wraps its window: X11 or winewayland, Proton's compatibility
+    # defaults, gamescope. macOS Wine talks to Quartz, always -- there is
+    # nothing to choose between and no nested compositor to wrap the game in.
+    wl = None
+    gs_opt = None
+    use_gamescope = False
+    if IS_MAC:
+        _configure_mac_runtime(env, s, diagnostics=diag)
     else:
-        if backend == "wayland":
-            warn("BOL_INPUT=wayland but no WAYLAND_DISPLAY found — using X11.")
-        if disp:
-            env["DISPLAY"] = disp
-            for cand in (os.environ.get("XAUTHORITY"), str(HOME / ".Xauthority"),
-                         f"/run/user/{os.getuid()}/.mutter-Xwaylandauth.0"):
-                if cand and Path(cand).exists():
-                    env["XAUTHORITY"] = cand
-                    break
-        elif wl:
-            warn("Wayland session without X DISPLAY — install XWayland (or set "
-                 "BOL_INPUT=wayland to use winewayland).")
+        wl = os.environ.get("WAYLAND_DISPLAY")
+        backend = (os.environ.get("BOL_INPUT")
+                   or s.get("input_backend") or "auto").lower()
+        if backend == "auto":
+            backend = "x11"
+        gs_opt = s.get("gamescope") or os.environ.get("BOL_GAMESCOPE")
+        want_gamescope = bool(gs_opt) and \
+            gs_opt.lower() not in ("0", "no", "off", "false")
+        use_gamescope = want_gamescope and bool(shutil.which("gamescope"))
+        if use_gamescope:
+            backend = "x11"
+        elif want_gamescope and not shutil.which("gamescope"):
+            warn("BOL_GAMESCOPE is set but gamescope isn't installed — "
+                 "ignored.")
+        backend = _resolve_input_backend(backend, bool(wl), proton_path())
+        _configure_runtime_compat(
+            env, s, backend, bool(wl), diagnostics=diag,
+        )
+        _configure_graphics_cache(env, managed_engine=not custom_proton())
+        _configure_display(env, backend, wl)
     if encrypted_exe:
         # Must wrap before gamescope: gamescope has to stay outermost so it
         # owns the compositor the game renders into.
@@ -829,7 +930,10 @@ def _launch_once(lock_fds=(), on_started=None):
         # it: a direct-launch shortcut and Game Mode both come through
         # `bol play`, which has no GUI worker to hang the watcher off.
         try:
-            start_auto_inject(s)
+            # The watcher finds the game by reading /proc, which macOS does
+            # not have; nothing on a Mac can be injected into by this path.
+            if not IS_MAC:
+                start_auto_inject(s)
         except Exception as inject_error:
             warn("Automatic DLL injection could not be started (%s)."
                  % type(inject_error).__name__)
@@ -849,7 +953,8 @@ def _launch_once(lock_fds=(), on_started=None):
         # There is no window yet to give Steam's identity to, so this watches
         # for one on the same tick that waits on the game process rather than
         # adding a thread of its own.
-        tag_game_window = None if use_gamescope else \
+        # X11 property writing, so Steam recognises the game's own window.
+        tag_game_window = None if (use_gamescope or IS_MAC) else \
             _steam_game_window_tagger(env, exe)
         while True:
             try:
