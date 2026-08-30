@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import presence
+from .platform import IS_MAC
 
 
 NETWORK_ENDPOINTS = (
@@ -310,10 +311,13 @@ def _route_check(host_ip, runner, timeout):
             "Route target must be a literal IPv4 or IPv6 address.",
         )
 
+    # iproute2 on Linux, BSD route(8) on macOS. Same question -- which
+    # interface reaches this LAN host -- asked of two different tools, which
+    # is why the parsing below is per-tool rather than shared.
+    argv = (["/sbin/route", "-n", "get", address] if IS_MAC
+            else ["ip", "route", "get", address])
     try:
-        result = _run_read_only(
-            runner, ["ip", "route", "get", address], timeout,
-        )
+        result = _run_read_only(runner, argv, timeout)
     except (subprocess.TimeoutExpired, OSError) as exc:
         return NetworkCheck(
             "route", address, False,
@@ -321,26 +325,35 @@ def _route_check(host_ip, runner, timeout):
         )
     if result.returncode:
         detail = (result.stderr or "").strip() or \
-            f"ip route get exited with status {result.returncode}"
+            f"{argv[0]} exited with status {result.returncode}"
         return NetworkCheck("route", address, False, detail)
 
+    output = result.stdout or ""
     first_line = next(
-        (line.strip() for line in (result.stdout or "").splitlines()
-         if line.strip()),
+        (line.strip() for line in output.splitlines() if line.strip()),
         "",
     )
     if not first_line:
         return NetworkCheck("route", address, False,
                             "Route lookup returned no route.")
-    interface = re.search(r"(?:^|\s)dev\s+(\S+)", first_line)
-    source = re.search(r"(?:^|\s)src\s+(\S+)", first_line)
+    if IS_MAC:
+        # route(8) prints one "key: value" pair per line rather than a single
+        # route line, so read the whole output instead of only the first one.
+        interface = re.search(r"^\s*interface:\s*(\S+)", output, re.MULTILINE)
+        source = re.search(r"^\s*gateway:\s*(\S+)", output, re.MULTILINE)
+        summary_line = (interface.group(0).strip() if interface
+                        else first_line)
+    else:
+        interface = re.search(r"(?:^|\s)dev\s+(\S+)", first_line)
+        source = re.search(r"(?:^|\s)src\s+(\S+)", first_line)
+        summary_line = first_line
     facts = []
     if interface:
         facts.append("interface=" + interface.group(1))
     if source:
-        facts.append("source=" + source.group(1))
+        facts.append(("gateway=" if IS_MAC else "source=") + source.group(1))
     if not facts:
-        facts.append(first_line[:300])
+        facts.append(summary_line[:300])
     return NetworkCheck(
         "route", address, True,
         "Kernel route: " + "; ".join(facts)

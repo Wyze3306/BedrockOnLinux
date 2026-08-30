@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 from .log import info, ok, warn
+from .platform import IS_MAC
 
 # Non-stdlib modules the native Microsoft login needs. `cryptography` signs the
 # Xbox Live device/request tokens (ES256); without it xbl_preauth bails and the
@@ -131,6 +132,12 @@ GUI_DEPS = {
     "PySide6": "PySide6-Essentials==6.9.3",
     "Xlib": "python-xlib==0.33",
 }
+if IS_MAC:
+    # python-xlib talks to an X server, which macOS does not have and never
+    # starts one for. It installs there perfectly well and then does nothing,
+    # so leaving it in would make a first GUI launch download a package whose
+    # only purpose on this platform is to fail an import test.
+    GUI_DEPS.pop("Xlib")
 GUI_INSTALL_REQUIREMENTS = tuple(GUI_DEPS.values())
 
 
