@@ -94,14 +94,20 @@
   named by the pin, so this cannot happen again quietly.
 
 - **The launcher no longer forgets which build you play, and downloads
-  another one** ([#214](https://github.com/Wyze3306/BedrockOnLinux/issues/214)).
+  another one**
+  ([#214](https://github.com/Wyze3306/BedrockOnLinux/issues/214),
+  [#220](https://github.com/Wyze3306/BedrockOnLinux/issues/220),
+  [#247](https://github.com/Wyze3306/BedrockOnLinux/issues/247),
+  [#248](https://github.com/Wyze3306/BedrockOnLinux/issues/248)).
   The version picker shows a shortened label — `26.44` for build 1.26.44.3 —
   and that label was what got saved as the selection. Nothing could read it
   back: it names no build the installer can find, so setup reported the choice
-  as no longer listed and installed the newest build instead. Playing an older
-  version, closing the launcher and opening it again therefore landed on the
-  newest one with nothing having said so, and the next PLAY downloaded 2.5 GB
-  of a game that was never asked for. The selection is now the build itself,
+  as no longer listed and installed the newest build instead. Picking 26.45
+  and landing in 26.44 is the same fault seen from the front, and so is a
+  launcher that starts every session by downloading something. Playing an
+  older version, closing the launcher and opening it again therefore landed
+  on the newest one with nothing having said so, and the next PLAY downloaded
+  2.5 GB of a game that was never asked for. The selection is now the build itself,
   labels written by earlier releases are still understood, and the picker
   comes back to what you last played.
 
