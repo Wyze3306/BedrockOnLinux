@@ -15,11 +15,13 @@ touch window widgets directly, only emit.
 
 import ast
 import inspect
+import threading
 import unittest
 from pathlib import Path
 
 from bol import gui
 from bol.gui import window_action_for_launch
+from tests.guiharness import headless_window, qt_app
 
 
 class WindowActionTests(unittest.TestCase):
@@ -167,6 +169,61 @@ class ClosedWindowWiringTests(unittest.TestCase):
 
     def test_a_failure_with_no_window_left_is_still_reported(self):
         self.assertIn("desktop_notify", self._calls_in("MainWindow._play_failed"))
+
+
+class ClosingWithWorkRunningTests(unittest.TestCase):
+    """A window may not take a running thread with it.
+
+    `_workers` holds the only reference to each background job, so it dies
+    with the window -- and Qt destroys a QThread that is still running by
+    aborting the process. Closing the launcher during the Settings > Versions
+    disk scan did that, and so did the test suite, which opened a Settings tab
+    in one test and was still scanning several tests later.
+    """
+
+    def setUp(self):
+        self.app = qt_app()
+        self.addCleanup(gui._ORPHAN_WORKERS.clear)
+
+    def test_a_worker_still_running_outlives_the_window_that_closed(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+        with headless_window() as window:
+            worker = gui.Worker(lambda: release.wait(10))
+            self.assertTrue(window._start_worker("slow", worker))
+            while not worker.isRunning():  # started, not merely constructed
+                pass
+            window._force_close = True
+            window.close()
+            self.assertIn(worker, gui._ORPHAN_WORKERS)
+            self.assertTrue(worker.isRunning())
+        release.set()
+        self.assertTrue(worker.wait(10000))
+
+    def test_a_worker_that_finishes_stops_being_held(self):
+        # Parking is not a leak: the list is emptied by finished(), or the
+        # launcher would accumulate every worker it ever closed over.
+        with headless_window() as window:
+            worker = gui.Worker(lambda: None)
+            window._start_worker("quick", worker)
+            self.assertTrue(worker.wait(10000))
+            window._force_close = True
+            window.close()
+        self.app.processEvents()
+        self.assertNotIn(worker, gui._ORPHAN_WORKERS)
+
+    def test_the_settings_scan_never_reaches_the_real_games_folder(self):
+        # What made the suite abort: opening Settings > Versions walked the
+        # developer's own install tree on a thread nothing waited for. The
+        # harness has to keep that off the disk, and the tab has to be the
+        # thing that asks for it.
+        with headless_window() as window:
+            window.toggle_settings()
+            window.settings_tabs.setCurrentIndex(window._versions_tab)
+            worker = window._workers.get("builds")
+            self.assertIsNotNone(worker, "the Versions tab started no scan")
+            self.assertTrue(worker.wait(10000))
+            gui.installed_builds.assert_called()
 
 
 if __name__ == "__main__":

@@ -50,13 +50,25 @@ def headless_window(store_signed_in=False, **settings):
             mock.patch.object(gui, "save_settings", lambda _s: None), \
             mock.patch.object(gui.MainWindow, "refresh_versions", lambda _s: None), \
             mock.patch.object(gui.MainWindow, "check_for_update_async", lambda _s: None), \
+            mock.patch.object(gui, "installed_builds", return_value=[]), \
+            mock.patch.object(gui, "mc_releases", return_value=[]), \
+            mock.patch.object(gui, "gh_releases", return_value=[]), \
             mock.patch.object(xodus, "signed_in", return_value=store_signed_in):
         window = gui.MainWindow()
         try:
             yield window
         finally:
+            # Everything this window started has to be finished before it is
+            # dropped: a QThread still running when its last reference goes
+            # away aborts the process, and the whole suite went down that way
+            # -- a Settings tab opened in one test left its build scan running
+            # into the next ones. closeEvent parks them, so they are still
+            # valid objects to wait on here.
+            workers = [w for w in window._workers.values() if w is not None]
             window._force_close = True
             window.close()
+            for worker in workers:
+                worker.wait(5000)
             window.deleteLater()
             # Flush the deferred-delete queue instead of leaving it to an
             # event loop no test runs. Without this every window built by the

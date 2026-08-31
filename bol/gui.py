@@ -484,6 +484,36 @@ class Theme:
 # Background workers
 # ======================================================================
 
+#: Workers whose window went away before they had finished. A QThread whose
+#: last reference is dropped while it is still running is destroyed by the
+#: C++ side mid-run, and Qt aborts the process on that -- so closing the
+#: launcher during the Settings > Versions disk scan, a changelog fetch or
+#: the update check took the exit down with it. The reference moves here
+#: instead of dying with the window. Waiting would be the other answer and
+#: is the wrong one: two of those three are network reads, and the close
+#: would freeze on them.
+_ORPHAN_WORKERS: list = []
+
+
+def _park_worker(worker) -> None:
+    """Keep `worker` alive past the window that started it."""
+    if worker in _ORPHAN_WORKERS:
+        return
+    _ORPHAN_WORKERS.append(worker)
+    worker.finished.connect(lambda: _release_worker(worker))
+    # finished() may already have fired between the caller's isRunning()
+    # check and this connect, in which case nothing would drop it again.
+    if not worker.isRunning():
+        _release_worker(worker)
+
+
+def _release_worker(worker) -> None:
+    try:
+        _ORPHAN_WORKERS.remove(worker)
+    except ValueError:
+        pass
+
+
 class Worker(QThread):
     """Run an arbitrary callable off the UI thread."""
     done = Signal(object)
@@ -1138,6 +1168,23 @@ class MainWindow(QMainWindow):
         self._workers[slot] = worker
         worker.start()
         return True
+
+    def _release_workers(self) -> None:
+        """Let the window go without taking a running thread with it.
+
+        `_workers` holds the only reference to each background job, so it
+        dies with the window -- and a QThread destroyed while it is still
+        running aborts the process. The close path cannot wait for them
+        either: the changelog fetch and the update check are network reads.
+        Still-running workers are parked instead and drop themselves when
+        they are genuinely done. The launch worker included: closing the
+        window when Minecraft starts is a feature, and it is what supervises
+        the session afterwards.
+        """
+        for worker in self._workers.values():
+            if worker is not None and worker.isRunning():
+                _park_worker(worker)
+        self._workers.clear()
 
     # ------------------------------------------------------------ icon
     def _load_icon(self):
@@ -3693,6 +3740,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if self._force_close:
             self._stop_controller_nav()
+            self._release_workers()
             event.accept()
             return
         if self.ui_state.get("launch_active"):
@@ -3709,6 +3757,7 @@ class MainWindow(QMainWindow):
             return
         self.na.stop()
         self._stop_controller_nav()
+        self._release_workers()
         event.accept()
         # The app runs with setQuitOnLastWindowClosed(False) so that
         # "close the launcher when Minecraft starts" can drop the window while
