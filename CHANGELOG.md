@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.2.5 — 2026-08-31
 
 ### Added
 
@@ -116,8 +116,17 @@
   PLAY still ran the whole setup, got as far as the download, found no account
   and stopped — three times over in the report — and every later *Sign in* was
   a button that did nothing at all, because the flag saying a sign-in was in
-  flight had no way left to be cleared. The sign-in is now something the
-  launcher holds rather than waits on. Its window can be closed from the
+  flight had no way left to be cleared. The page is not stuck by accident. A
+  token exchange that faults hands back a second address to open, and the
+  downloader opened it with no headers at all — none of the nine telling
+  `login.live.com` it is talking to Windows' own token broker rather than to
+  a browser. Without them Microsoft serves the ordinary consumer interrupt,
+  which is the "Please wait" and the greyed *OK*: a page that never reaches
+  the one address the sign-in is waiting to see, so it waits for ever. The
+  second leg of the sign-in is opened like the first now
+  (`third_party/xodus/patches/`, on its way upstream), and the launcher ships
+  the downloader built with it. The rest of this stands whatever the page
+  does: the sign-in is something the launcher holds rather than waits on. Its window can be closed from the
   account menu or from Settings, which signals the whole webview process
   group; PLAY says the window is open instead of starting a download that
   cannot work; a sign-in that has been up a long time says so; and a second
@@ -129,6 +138,34 @@
   abandoned half-way is not resumed into by the next one, and nothing of it
   lands in `~/.local/share` again. Closing the window is reported as the
   ordinary change of mind it is, rather than as a failure of the launcher.
+
+- **A download that fails now leaves something to read**
+  ([#242](https://github.com/Wyze3306/BedrockOnLinux/issues/242)). The same
+  install was reported three times over and every line anyone had was the
+  launcher's own: *the Minecraft download installed no game and printed no
+  reason for it*. Nothing was ever written down — the launcher kept the last
+  forty lines the downloader printed for the error message and dropped the
+  rest — and what it kept was mostly not output at all. The downloader draws
+  its progress bars by redrawing one line, padded to the width the terminal
+  reports, which for the launcher's terminal was none: a single redraw of
+  three bars arrived here as 16 MiB of padding around 438 characters of bar.
+  The sentence saying what actually went wrong could arrive in the middle of
+  one of those frames, written from another thread. Every attempt now goes to
+  `logs/store-download.log` the way a sign-in already goes to
+  `store-login.log`, the frames are recognised and taken out so what is left
+  is the message, and a downloader that has already exited is read to the end
+  — a panic is written exactly there.
+
+- **Closing the launcher while it was busy in the background could end the
+  process on a crash instead of an exit.** Settings ▸ Versions adds up what
+  each installed build weighs, and both changelogs are fetched over the
+  network; all three run on threads that belong to the window. Closing it
+  while one was still going destroyed that thread mid-run, which Qt answers
+  by aborting the process — no data lost, the launcher was on its way out,
+  but it left a crash where a clean exit belonged. The work is now let go of
+  rather than killed or waited for: the window closes at once, and the thread
+  finishes on its own. Waiting would have been the other answer and the wrong
+  one, since two of the three are network reads.
 
 - **The Microsoft sign-in window no longer dies where the desktop has
   accessibility running**

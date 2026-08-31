@@ -70,6 +70,30 @@
   </content_rating>
 
   <releases>
+    <release version="2.2.5" date="2026-08-31">
+      <description>
+        <p>Your Xbox friends can see you again while you play, the Microsoft
+           sign-in no longer hangs on "Please wait" or dies part-way through,
+           and the launcher stops downloading a version you never asked
+           for.</p>
+        <ul>
+          <li>publishes the play session on Xbox Live, so the social tab stops
+              saying you are offline and friends can invite you</li>
+          <li>keeps the sign-in window alive where the desktop runs
+              accessibility, and opens the second leg of the sign-in the way
+              Windows does, instead of on a page that never finishes</li>
+          <li>remembers which build you play, rather than reinstalling the
+              newest one behind your back</li>
+          <li>lists every Minecraft build you have downloaded, what it weighs
+              and removes the ones you are done with, in Settings ▸
+              Versions</li>
+          <li>fixes a download that failed on the downloader's own package
+              cache, and leaves a log behind when one does fail</li>
+          <li>warns at PLAY when nothing is signed in for online play, instead
+              of leaving Realms and servers quietly missing</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.4" date="2026-08-25">
       <description>
         <p>Fixes the Play screen telling you to sign in to an account that is
