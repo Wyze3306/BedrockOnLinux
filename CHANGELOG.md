@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **PLAY no longer redoes an Xbox Live sign-in it already just finished.**
+  Every launch minted a fresh device, user, XBL, XSTS and SISU token chain —
+  eight sequential requests to Microsoft/Xbox — even when the previous launch
+  had done exactly that a minute earlier and the tokens were still good for
+  hours. The background warm-up that runs while you're still looking at the
+  account row (`_warm_xbox_preauth`) already does this work; PLAY was simply
+  throwing it away and starting over, worth roughly ten seconds of the wait
+  before Minecraft's window appears. PLAY now reuses a cached token chain
+  when it still has a comfortable margin left, and only re-runs the chain
+  when that margin has run out or the tokens are missing outright.
+
 ## 2.2.5 — 2026-08-31
 
 ### Added

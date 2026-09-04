@@ -420,6 +420,13 @@ _ONLINE_PREAUTH_REQUIREMENTS = {
 }
 
 
+# How much validity a cached online payload has to have left before a launch
+# reuses it instead of re-running the whole device/user/XSTS/SISU chain. Wide
+# enough to cover a play session so PLAY doesn't sign off mid-game; far
+# short of the hours-long lifetime Xbox actually issues these tokens with.
+_PREAUTH_REUSE_MARGIN = 1800
+
+
 _WINEGDK_EXPIRY_EPOCH_FIELDS = {
     "user_token_expiry": "user_token_expiry_epoch",
     "xbl_token_expiry": "xbl_token_expiry_epoch",
@@ -843,8 +850,37 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
              "pre-auth started; refusing stale credentials.")
         return False
     cached = _load_online_preauth(out_path)
+    # A comfortable margin, not just the floor that keeps a cache usable at
+    # all: a launch that reuses it should not sign off mid-session.
     cached_ready = (_cached_account_matches(cached, account_epoch)
-                    and not _online_preauth_problems(cached))
+                    and not _online_preauth_problems(
+                        cached, min_ttl=_PREAUTH_REUSE_MARGIN))
+
+    def _keep_cache(log=info):
+        """Store WineGDK's epoch fields onto ``cached`` if missing, then use it."""
+        upgraded = _with_winegdk_expiry_epochs(cached)
+        if upgraded != cached:
+            if not _store_online_preauth(
+                    out_path, upgraded, expected_epoch=account_epoch):
+                warn("Xbox Live pre-auth: account changed while upgrading "
+                     "the cached WineGDK credentials; refusing the old "
+                     "online payload.")
+                return False
+            cached.clear()
+            cached.update(upgraded)
+            info("Xbox Live pre-auth: upgraded cached token expirations "
+                 "for WineGDK.")
+        log("Xbox Live pre-auth: keeping the complete unexpired cached "
+            "online tokens.")
+        _clear_xbl_preauth_diagnostic()
+        return True
+
+    # A fresh cache is worth more than a fresh network round trip: the GUI
+    # already warms this chain in the background while the player is still
+    # looking at the account row (see _warm_xbox_preauth), so PLAY redoing
+    # eight sequential HTTP calls it just finished is pure latency.
+    if cached_ready and _keep_cache(log=ok):
+        return True
 
     def _fallback(message, stage=None, category=None, response=None):
         if response is not None:
@@ -862,22 +898,7 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
             and not _online_preauth_problems(cached)
         )
         if current_ready:
-            upgraded = _with_winegdk_expiry_epochs(cached)
-            if upgraded != cached:
-                if not _store_online_preauth(
-                        out_path, upgraded, expected_epoch=account_epoch):
-                    warn("Xbox Live pre-auth: account changed while upgrading "
-                         "the cached WineGDK credentials; refusing the old "
-                         "online payload.")
-                    return False
-                cached.clear()
-                cached.update(upgraded)
-                info("Xbox Live pre-auth: upgraded cached token expirations "
-                     "for WineGDK.")
-            info("Xbox Live pre-auth: keeping the complete unexpired cached "
-                 "online tokens.")
-            _clear_xbl_preauth_diagnostic()
-            return True
+            return _keep_cache()
         if cached_ready and current_epoch == account_epoch:
             warn("Xbox Live pre-auth: cached online tokens expired while the "
                  "refresh was in progress; refusing stale credentials.")
