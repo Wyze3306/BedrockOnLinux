@@ -2160,9 +2160,10 @@ class MainWindow(QMainWindow):
     def _warm_xbox_preauth(self):
         """Mint the Xbox token chain now rather than at PLAY.
 
-        launch.py runs xbl_preauth again on its own, so nothing breaks
-        without this -- it just moves the whole SISU/XSTS round trip off the
-        first launch and into the moment the player is already waiting on a
+        launch.py calls xbl_preauth again on its own, so nothing breaks
+        without this -- but a still-fresh cache from here is what lets that
+        call skip its network round trip, moving the whole SISU/XSTS chain
+        off PLAY and into the moment the player is already waiting on a
         sign-in. It also settles the account row: the row goes green on the
         MSA token alone, and only this says whether Xbox agreed.
         """

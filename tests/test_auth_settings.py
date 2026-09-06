@@ -4,6 +4,7 @@
 import json
 import stat
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -583,6 +584,62 @@ class OnlinePreauthPayloadTests(unittest.TestCase):
                     mock.patch.object(auth, "warn"), \
                     mock.patch.object(auth, "info"):
                 self.assertFalse(auth.xbl_preauth("fresh-access-token"))
+
+    def test_fresh_cache_skips_the_network_chain(self):
+        """PLAY should not redo what _warm_xbox_preauth just finished."""
+        epoch = "b" * 32
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cache = root / "winegdk-preauth"
+            cache.mkdir()
+            (cache / ".account-epoch").write_text(epoch + "\n")
+            payload = self.payload()
+            payload["_account_epoch"] = epoch
+            auth._store_online_preauth(cache / "device.json", payload,
+                                       expected_epoch=epoch)
+
+            with mock.patch.object(auth, "DATA", root), \
+                    mock.patch("urllib.request.urlopen") as urlopen, \
+                    mock.patch.object(auth, "warn"), \
+                    mock.patch.object(auth, "info"), \
+                    mock.patch.object(auth, "ok"):
+                self.assertTrue(
+                    auth.xbl_preauth("fresh-access-token", epoch))
+
+            urlopen.assert_not_called()
+
+    def test_cache_inside_reuse_margin_still_refreshes(self):
+        """A cache that clears the 60s floor but not the reuse margin still
+        drives a real refresh, so a session doesn't sign off mid-play."""
+        from datetime import datetime, timezone
+
+        epoch = "c" * 32
+        soon = datetime.fromtimestamp(
+            time.time() + auth._PREAUTH_REUSE_MARGIN / 2, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cache = root / "winegdk-preauth"
+            cache.mkdir()
+            (cache / ".account-epoch").write_text(epoch + "\n")
+            payload = self.payload(soon)
+            payload["_account_epoch"] = epoch
+            auth._store_online_preauth(cache / "device.json", payload,
+                                       expected_epoch=epoch)
+
+            with mock.patch.object(auth, "DATA", root), \
+                    mock.patch("urllib.request.urlopen",
+                               side_effect=OSError("simulated timeout")) \
+                    as urlopen, \
+                    mock.patch.object(auth, "warn"), \
+                    mock.patch.object(auth, "info"):
+                # The network attempt is made (not skipped) even though it
+                # then fails; the still-valid cache is what recovers True
+                # here, via the offline-resilience fallback, not the reuse
+                # fast path this test is guarding.
+                auth.xbl_preauth("fresh-access-token", epoch)
+
+            urlopen.assert_called()
 
     def test_achievements_use_user_only_xsts_and_services_keep_sisu(self):
         expiry = "2999-01-01T00:00:00.1234567Z"
