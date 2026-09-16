@@ -72,6 +72,16 @@
   looking for 1.26.50.4 on the day it came out ran into (#266).
   Contributed by [@Queuereel](https://github.com/Queuereel).
 
+- **Updating the game engine no longer needs room for every engine you ever
+  had.** Each engine revision is an ~860 MB download the launcher keeps in its
+  cache, and nothing ever removed one once a newer revision was pinned — a
+  machine that followed every update carried gigabytes of archives no launcher
+  would open again. An update has to fit the new archive and its 2.5 GB
+  unpacked engine before the old one goes, so on a nearly full disk those
+  leftovers turned this release's engine update into a launcher refusing its
+  own engine. The archives of other engine revisions are now removed before
+  the new one is downloaded; the archive of the engine in use stays.
+
 - **PLAY no longer redoes an Xbox Live sign-in it already just finished.**
   Every launch minted a fresh device, user, XBL, XSTS and SISU token chain —
   eight sequential requests to Microsoft/Xbox — even when the previous launch

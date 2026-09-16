@@ -240,6 +240,70 @@ class WineGDKInstallTests(unittest.TestCase):
         self.assertEqual((self.engine / "proton").read_text(), "fresh")
         self.assertTrue(stale_metadata.is_file())
 
+    def test_download_prunes_the_archives_of_other_engine_revisions(self):
+        """An update must not need room for every engine it ever installed."""
+        fresh = self._archive(name="fresh.tar.gz", marker="fresh")
+        asset = f"GDK-Proton-xuser-{self.REV}.tar.gz"
+        self.cache.mkdir(parents=True)
+        stale = [
+            self.cache / "GDK-Proton-xuser-wow64-archs-native13.tar.gz",
+            self.cache / "GDK-Proton-xuser-wow64-archs-native17.tar.gz",
+            self.cache / "GDK-Proton-xuser-wow64-archs-native17.tar.gz.part",
+        ]
+        kept = [
+            self.cache / "umu-launcher-1.2.9-zipapp.tar",
+            self.cache / "gdk-links.json",
+            self.cache / "GDK-Proton-xuser-notes.txt",
+        ]
+        for path in stale + kept:
+            path.write_bytes(b"cached")
+
+        def download_fresh(_url, dest, _label, _progress):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(fresh, dest)
+
+        with mock.patch.object(winegdk, "download",
+                               side_effect=download_fresh), \
+                mock.patch.object(winegdk, "info") as said:
+            installed = winegdk._install_prebuilt_winegdk()
+
+        self.assertTrue(installed)
+        for path in stale:
+            self.assertFalse(path.exists(), path.name)
+        for path in kept:
+            self.assertTrue(path.exists(), path.name)
+        self.assertTrue((self.cache / asset).is_file())
+        self.assertTrue(any("older game engines" in call.args[0]
+                            for call in said.call_args_list))
+
+    def test_download_keeps_the_pinned_archive_it_can_reuse(self):
+        archive = self._archive(name="cached.tar.gz", marker="cached")
+        asset = f"GDK-Proton-xuser-{self.REV}.tar.gz"
+        self.cache.mkdir(parents=True)
+        shutil.copyfile(archive, self.cache / asset)
+        old = self.cache / "GDK-Proton-xuser-wow64-archs-native16.tar.gz"
+        old.write_bytes(b"old")
+
+        with mock.patch.object(winegdk, "download") as download:
+            installed = winegdk._install_prebuilt_winegdk()
+
+        self.assertTrue(installed)
+        download.assert_not_called()
+        self.assertTrue((self.cache / asset).is_file())
+        self.assertFalse(old.exists())
+
+    def test_a_local_archive_leaves_the_cache_alone(self):
+        archive = self._archive(marker="local")
+        self.cache.mkdir(parents=True)
+        old = self.cache / "GDK-Proton-xuser-wow64-archs-native16.tar.gz"
+        old.write_bytes(b"old")
+
+        with mock.patch.dict(os.environ, {"BOL_ENGINE_ARCHIVE": str(archive)}):
+            installed = winegdk._install_prebuilt_winegdk()
+
+        self.assertTrue(installed)
+        self.assertTrue(old.exists())
+
     def test_force_deletes_cached_archive_and_downloads_again(self):
         self._write_engine(self.engine, "old")
         fresh = self._archive(name="fresh.tar.gz", marker="fresh")

@@ -229,6 +229,38 @@ def _activate_engine_locked(candidate: Path):
                 warn("Could not remove old game-engine rollback: %s" % exc)
 
 
+def _prune_stale_engine_archives(keep):
+    """Drop the cached archives of every engine revision but ``keep``.
+
+    Each revision is an ~860 MB download kept in the cache, and nothing ever
+    removed one once the launcher pinned the next: a machine that followed
+    native13 through native17 carried 3.4 GiB of archives no launcher would
+    open again. An update needs room for the new archive *and* its 2.5 GiB
+    unpacked tree before the old tree is let go, so on a nearly full disk
+    those leftovers were the difference between updating and a launcher that
+    refuses its own engine. Only engine archives named for another revision
+    go, partial downloads included.
+    """
+    removed = freed = 0
+    for stale in CACHE.glob("GDK-Proton-xuser-*.tar.gz*"):
+        if stale.name in (keep, keep + ".part"):
+            continue
+        if not stale.name.endswith((".tar.gz", ".tar.gz.part")):
+            continue
+        try:
+            size = stale.stat().st_size
+            remove_path(stale)
+        except OSError as exc:
+            warn(f"Could not remove the cached archive of an older game "
+                 f"engine ({stale.name}): {exc}")
+            continue
+        removed += 1
+        freed += size
+    if removed:
+        info(f"Removed {removed} cached archive(s) of older game engines "
+             f"({freed / 1024 ** 3:.1f} GiB).")
+
+
 def _install_prebuilt_winegdk(progress=None, force=False):
     """Install while holding the stable engine lock for the whole transaction.
 
@@ -289,6 +321,7 @@ def _install_prebuilt_winegdk_locked(progress=None, force=False):
             # --force must not silently reinstall the stale cached bytes.
             remove_path(archive)
             remove_path(archive.with_suffix(archive.suffix + ".part"))
+        _prune_stale_engine_archives(asset)
         if not archive.exists():
             info("Downloading the game engine (prebuilt, one-time) …")
             try:
