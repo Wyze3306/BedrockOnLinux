@@ -112,7 +112,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native18"
 # ships the Xbox Live services thunks built against a newer GDK, which asks
 # XSystem for an interface ID the engine refused, and friends and Realms never
 # came up for a signed-in player (#266).
-WINEGDK_ARCHIVE_SHA256 = "12fa379f012410832eab54c719efaa4e0e327a3b6839b0859f851d1b952abed2"
+WINEGDK_ARCHIVE_SHA256 = "e0ead91c3003ff6d4e01995dc8590d21603251d2e71a51c594eab0c3271eabff"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "5e790543d13a42b594df03dc9adfad16980cfd471ed8f1cfcbc55718e1791e25"
 
