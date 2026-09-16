@@ -223,5 +223,5 @@ modules:
       #   git rev-parse vX.Y.Z^{commit}
       - type: git
         url: https://github.com/Wyze3306/BedrockOnLinux.git
-        tag: v2.2.5
-        commit: e926c72790fd347fee415fdf2d6d3322da846d88
+        tag: v2.2.6
+        commit: 664410605dd329115cba96a33970744b8157c2b8
