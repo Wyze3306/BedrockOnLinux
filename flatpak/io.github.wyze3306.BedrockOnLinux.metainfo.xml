@@ -70,6 +70,28 @@
   </content_rating>
 
   <releases>
+    <release version="2.2.6" date="2026-09-16">
+      <description>
+        <p>Minecraft 1.26.50 and newer start again, and come up online: your
+           friends, Realms and featured servers are back.</p>
+        <ul>
+          <li>stops Minecraft 1.26.50 and newer crashing at 78–82 % on the
+              loading screen, and repairs an install an earlier version of the
+              launcher already broke</li>
+          <li>brings friends, Realms invitations and featured servers back on
+              1.26.50 and newer, with a new game engine the launcher downloads
+              on its own</li>
+          <li>keeps the in-game mouse working on machines with an AIO cooler, a
+              fan or RGB controller or a similar USB device</li>
+          <li>adds a refresh button to the version picker, to see a build
+              Mojang just released without waiting for the list to expire</li>
+          <li>reuses an Xbox Live sign-in that is still valid when you press
+              PLAY, instead of redoing it every time</li>
+          <li>clears out the downloads of older game engines, which could take
+              gigabytes and leave no room for the engine update</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.5" date="2026-08-31">
       <description>
         <p>Your Xbox friends can see you again while you play, the Microsoft
