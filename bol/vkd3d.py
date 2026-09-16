@@ -45,11 +45,12 @@ REQUIRED_COMPONENTS = {
 # so pin the known DLL bytes as an independent trust anchor. Future engine
 # revisions must update the revision pin deliberately.
 # native15 and native16 differ from native14 only in Wine's ntdll (the
-# mapped-fd main-image loader, then path support for it), and native17 differs
-# from native16 only in Wine's Wayland driver, so the vkd3d payload — and
+# mapped-fd main-image loader, then path support for it), native17 differs
+# from native16 only in Wine's Wayland driver, and native18 from native17 only
+# in xgameruntime's XSystem interface revisions, so the vkd3d payload — and
 # therefore every variant hash below — is unchanged; only the revision this
 # launcher accepts moves.
-REQUIRED_VARIANT_HASHES_BUILD_REV = "wow64-archs-native17"
+REQUIRED_VARIANT_HASHES_BUILD_REV = "wow64-archs-native18"
 REQUIRED_ENGINE_GLIBC_MAX = "2.31"
 REQUIRED_VKD3D_BASE_COMMIT = "3b10bd7a7ec6a7347e616cf8bea59333afec2255"
 REQUIRED_VKD3D_REVERT = "76c11d2e2b90b0a46dc894508e67e2aaacc2c04d"

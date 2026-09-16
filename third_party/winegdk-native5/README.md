@@ -98,7 +98,28 @@ process, exactly as an anonymous mapping would be. The launcher stages it on
 entries are unchanged, and a map with no matching entry still falls through to
 the ordinary on-disk path.
 
+The `0009` patch lets `XSystem` answer every interface revision the GDK
+libraries Minecraft ships ask it for. The GDK serves one XSystem object behind
+several interface IDs, and each library queries the one its headers were built
+with: `libHttpClient.GDK.dll` asks for `1861cf2e-e18b-4834-a9f5-b4a4e6efb4cf`,
+`PlayFabMultiplayerGDK.dll` for `6fd71f09-7513-49f0-89bc-bfaf5df6f852`, and
+`Microsoft.Xbox.Services.GDK.C.Thunks.dll`, new with Minecraft 1.26.50, for
+`67ce4bfc-b1d1-4ac7-bc3a-cb9219a97a85`. `QueryInterface` accepted only the
+`dadc2895-34b0-4ef5-a83e-45114d629b80` revision `provider.idl` declares, so all
+three were refused with `E_NOINTERFACE`. The first two carry on without it; the
+Xbox Live services thunks do not, and on 1.26.50 a signed-in player got a game
+that was half offline (issue #266). Measured on 1.26.51.1: Social showed no
+friends, the Realms tab spun forever with its buttons disabled, and featured
+servers kept a disabled Play button; with this patch Social counts the friends
+online, Realms offers its invitations and featured servers can be joined. Each of
+the three libraries calls one method through the interface it obtains, vtable
+slot 4 — `XSystemGetXboxLiveSandboxId` with the size, buffer and used-size
+arguments the flattened vtable already implements — so the one vtable answers
+them all. The patch also makes `XSystemHandleTrack`, which registers a
+handle-lifetime debugging callback, report success instead of `E_NOTIMPL`; no
+callback is ever delivered.
+
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
 native5 delta and its follow-ups. The Bullseye builder applies the reviewed r12
 and native patches when the target commit is unavailable, always applies `0002`
-through `0008`, then verifies the complete resulting source tree.
+through `0009`, then verifies the complete resulting source tree.

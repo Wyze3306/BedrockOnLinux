@@ -39,6 +39,8 @@ readonly VENDORED_MAPPED_FD_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/000
 readonly VENDORED_MAPPED_FD_PATCH_SHA256="0ebb25f67183b0bb052b9cbb76f6a0aca02be89fc7be448ff94702b178e9ffc6"
 readonly VENDORED_PATH_MAP_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0008-ntdll-accept-a-path-in-the-image-map.patch"
 readonly VENDORED_PATH_MAP_PATCH_SHA256="7510e707abf9869d40b855754d58c025e1bd98cec455bef3dbec79e9d14461a3"
+readonly VENDORED_XSYSTEM_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0009-xgameruntime-support-IXSystemImpl2-5-and-stub-XSystemHandleTrack.patch"
+readonly VENDORED_XSYSTEM_PATCH_SHA256="c0a8e35717368fdc31f5ba6374ecb64aacb84cbd1dc22958077cff9ab5e2c301"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
@@ -172,6 +174,16 @@ echo "== Applying the ntdll image-map path support"
 git -C "$SRC" apply --check "$VENDORED_PATH_MAP_PATCH" \
   || { echo "!! ntdll image-map path patch does not apply" >&2; exit 1; }
 git -C "$SRC" apply "$VENDORED_PATH_MAP_PATCH"
+
+echo "== Applying the XSystem interface revisions"
+[ -f "$VENDORED_XSYSTEM_PATCH" ] \
+  || { echo "!! missing XSystem interface patch" >&2; exit 1; }
+[ "$(sha256sum "$VENDORED_XSYSTEM_PATCH" | cut -d' ' -f1)" = \
+  "$VENDORED_XSYSTEM_PATCH_SHA256" ] \
+  || { echo "!! XSystem interface patch hash mismatch" >&2; exit 1; }
+git -C "$SRC" apply --check "$VENDORED_XSYSTEM_PATCH" \
+  || { echo "!! XSystem interface patch does not apply" >&2; exit 1; }
+git -C "$SRC" apply "$VENDORED_XSYSTEM_PATCH"
 
 echo "== Verifying reviewed source hashes"
 [ -f "$SOURCE_SHA256SUMS" ] || { echo "!! missing SOURCE-SHA256SUMS" >&2; exit 1; }

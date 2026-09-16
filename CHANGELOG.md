@@ -24,6 +24,22 @@
   up to 1.26.45 keep the old behaviour. Contributed by
   [@jtdubs](https://github.com/jtdubs).
 
+- **Friends, Realms and featured servers work again on Minecraft 1.26.50 and
+  newer** ([#266](https://github.com/Wyze3306/BedrockOnLinux/issues/266),
+  [#269](https://github.com/Wyze3306/BedrockOnLinux/pull/269)). With the crash
+  out of the way, 1.26.50 still came up half offline for a signed-in player:
+  Social showed no friends, the Realms tab spun forever with its buttons
+  disabled, and featured servers kept a greyed-out Play button. 1.26.50 moves
+  the game's Xbox Live services into a new library built against a newer
+  Microsoft GDK, and that library asks the Xbox runtime for its system
+  interface under an ID the engine did not recognise — refused, the services
+  never started. The engine now answers every revision of that interface the
+  game's libraries ask for; all of them only use the sandbox query it already
+  implemented. Checked on 1.26.51.1: Social counts the friends online, Realms
+  offers its invitations, and featured servers can be joined. This needs the
+  new engine, `wow64-archs-native18`, which the launcher downloads on its own.
+  Contributed by [@jtdubs](https://github.com/jtdubs).
+
 - **The in-game mouse no longer goes dead on machines with an AIO cooler, a
   fan or RGB controller, or a similar USB gadget**
   ([#262](https://github.com/Wyze3306/BedrockOnLinux/pull/262)). The cursor

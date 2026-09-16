@@ -91,9 +91,9 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 # match the reviewed pins below.
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
 # The commit alone does not identify vendored follow-up patches.
-WINEGDK_SOURCE_MANIFEST_SHA256 = "0feb01ca058086eccf4f4a0e6895f541547ae89aa0d2ab86f08291224de5ed46"
-WINEGDK_BUILD_REV = "wow64-archs-native17"
-# native17 carries the ntdll loader patches the Microsoft Store packages need:
+WINEGDK_SOURCE_MANIFEST_SHA256 = "027969bfa0e28aa7bec32a4a85ee2afe64ff274062479aeaf9e46a527a67979b"
+WINEGDK_BUILD_REV = "wow64-archs-native18"
+# native18 carries the ntdll loader patches the Microsoft Store packages need:
 # 0007 maps the main image from a descriptor, 0008 from a path so it survives
 # the Steam Linux Runtime container. Their game executable stays encrypted on
 # disk, so an engine without them cannot start the game -- which is why an
@@ -107,6 +107,11 @@ WINEGDK_BUILD_REV = "wow64-archs-native17"
 # pinned against and left every fresh install of it rejecting the engine. A
 # revision is a name for one set of bytes -- rebuild under a new one rather
 # than overwrite a published archive.
+#
+# native18 adds the XSystem interface revisions of 0009: Minecraft 1.26.50
+# ships the Xbox Live services thunks built against a newer GDK, which asks
+# XSystem for an interface ID the engine refused, and friends and Realms never
+# came up for a signed-in player (#266).
 WINEGDK_ARCHIVE_SHA256 = "12fa379f012410832eab54c719efaa4e0e327a3b6839b0859f851d1b952abed2"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "bfbb08107e7aa16842cf12814013a1cb94acd5a1c2fe8eaec24a401c4b57fc09"

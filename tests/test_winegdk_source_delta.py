@@ -44,6 +44,10 @@ MAPPED_FD_PATCH = (
 PATH_MAP_PATCH = (
     DELTA / "0008-ntdll-accept-a-path-in-the-image-map.patch"
 )
+XSYSTEM_PATCH = (
+    DELTA / "0009-xgameruntime-support-IXSystemImpl2-5-and-stub-"
+            "XSystemHandleTrack.patch"
+)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -141,6 +145,10 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
             self._constant("VENDORED_PATH_MAP_PATCH_SHA256"),
         )
         self.assertEqual(
+            hashlib.sha256(XSYSTEM_PATCH.read_bytes()).hexdigest(),
+            self._constant("VENDORED_XSYSTEM_PATCH_SHA256"),
+        )
+        self.assertEqual(
             hashlib.sha256(SOURCE_SUMS.read_bytes()).hexdigest(),
             self._constant("SOURCE_SHA256SUMS_SHA256"),
         )
@@ -160,7 +168,8 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         achievements = ACHIEVEMENTS_PATCH.read_text()
         context_callback = CONTEXT_CALLBACK_PATCH.read_text()
         xstore = XSTORE_PATCH.read_text()
-        mapped_fd = MAPPED_FD_PATCH.read_text() + PATH_MAP_PATCH.read_text()
+        mapped_fd = (MAPPED_FD_PATCH.read_text() + PATH_MAP_PATCH.read_text()
+                     + XSYSTEM_PATCH.read_text())
         self.assertTrue(text.startswith(f"From {WINEGDK_SOURCE_COMMIT} "))
         changed = {
             left for left, right in re.findall(
@@ -599,6 +608,7 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
             XSTORE_PATCH,
             MAPPED_FD_PATCH,
             PATH_MAP_PATCH,
+            XSYSTEM_PATCH,
         ):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             with self.subTest(patch=path.name):
@@ -684,6 +694,7 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
             XSTORE_PATCH,
             MAPPED_FD_PATCH,
             PATH_MAP_PATCH,
+            XSYSTEM_PATCH,
         ):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             self.assertIn(digest, text, path.name)
@@ -737,6 +748,53 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         )
         self.assertLess(arch_loop, xstore_marker)
         self.assertLess(xstore_marker, loop_end)
+
+
+    def test_xsystem_answers_every_interface_revision_the_game_asks_for(self):
+        """Each GDK library in 1.26.50 asks XSystem for its own interface ID.
+
+        libHttpClient.GDK.dll, PlayFabMultiplayerGDK.dll and the Xbox Live
+        services thunks new in 1.26.50 each query CLSID_XSystemImpl for a
+        different revision and call only vtable slot 4 on what they get. The
+        thunks do not survive E_NOINTERFACE: friends and Realms never came up
+        for a signed-in player (#266).
+        """
+        additions = "\n".join(
+            line[1:] for line in XSYSTEM_PATCH.read_text().splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        for data1 in ("0x1861cf2e", "0x6fd71f09", "0x67ce4bfc"):
+            self.assertIn(data1, additions)
+        for iid in ("IID_IXSystemImpl2", "IID_IXSystemImpl3",
+                    "IID_IXSystemImpl5"):
+            self.assertIn(f"IsEqualGUID( iid, &{iid} )", additions)
+        self.assertIn("return S_OK;", additions)
+        # The flattened vtable itself is untouched: slot 4 stays the sandbox
+        # query every one of those callers makes.
+        self.assertNotIn("x_system_vtbl", XSYSTEM_PATCH.read_text())
+
+    def test_every_vendored_patch_is_applied_and_attested(self):
+        """A patch in third_party ships only if the builders apply it.
+
+        0009 was merged into third_party/winegdk-native5 with nothing applying
+        it, so it would have sat there while every engine was built without
+        it. Every patch file must be pinned and applied by both builders and
+        listed in the packager's provenance.
+        """
+        bullseye = SCRIPT.read_text()
+        container = CONTAINER_SCRIPT.read_text()
+        packager = PACKAGER.read_text()
+        for path in sorted(DELTA.glob("*.patch")):
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            with self.subTest(patch=path.name):
+                self.assertIn(path.name, bullseye)
+                self.assertIn(digest, bullseye)
+                self.assertIn(f"native5/{path.name}", packager)
+                self.assertIn(digest, packager)
+                # The container exports a commit that already contains 0001.
+                if not path.name.startswith("0001-"):
+                    self.assertIn(path.name, container)
+                    self.assertIn(digest, container)
 
 
 if __name__ == "__main__":
