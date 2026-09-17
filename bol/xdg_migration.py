@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from .config import APP, DATA, HOME, LEGACY_DATA, UMU_DIR
+from .config import APP, DATA, DEFAULT_DATA, HOME, LEGACY_DATA, UMU_DIR
 from .log import info, warn
 
 
@@ -154,6 +154,14 @@ def migrate_legacy_flatpak_data(
     """
     source_env = os.environ if environ is None else environ
     if str(source_env.get("BOL_HOME", "")).strip():
+        return False
+    if new_data is None and DATA != DEFAULT_DATA:
+        # A location chosen in Settings is not an XDG data root. Relocation
+        # moved the user's data there and left the rest of the old root (the
+        # engine, caches, logs) behind, so that is no legacy tree waiting to
+        # be copied -- and the migration lock would have gone beside the
+        # chosen folder, in a directory the user need not be able to write
+        # to, refusing every start (#255).
         return False
     flatpak = is_flatpak(source_env, info_path)
 

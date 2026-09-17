@@ -431,6 +431,50 @@ def test_same_directory_through_symlink_is_a_migration_noop(tmp_path):
     assert (actual / "world.dat").read_text(encoding="utf-8") == "kept"
 
 
+def test_relocated_install_location_is_not_migrated_into(tmp_path):
+    # Relocation moves the user's data and leaves the engine, caches and logs
+    # in the old root. Reading that as legacy data put the migration lock
+    # beside the chosen folder, whose parent the user could not write to, and
+    # the launcher refused every start (#255).
+    home = tmp_path / "home"
+    leftovers = home / ".local" / "share" / "bedrock-on-linux" / "cache"
+    leftovers.mkdir(parents=True)
+    (leftovers / "engine.tar.gz").write_bytes(b"left behind")
+    mount = tmp_path / "media" / "player"
+    chosen = mount / "bedrock-on-linux"
+    chosen.mkdir(parents=True)
+    (chosen / "settings.json").write_text("{}", encoding="utf-8")
+    pointer = tmp_path / "xdg-config" / "bedrock-on-linux" / "install_location"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text(str(chosen), encoding="utf-8")
+    env = dict(os.environ)
+    env.update({
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(tmp_path / "xdg-config"),
+        "PYTHONPATH": str(ROOT),
+    })
+    for name in ("BOL_HOME", "XDG_DATA_HOME", "FLATPAK_ID"):
+        env.pop(name, None)
+
+    mount.chmod(0o555)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "from bol.util import _ensure_xdg_storage; "
+             "_ensure_xdg_storage(); print('ready')"],
+            cwd=ROOT, env=env, text=True, capture_output=True,
+        )
+    finally:
+        mount.chmod(0o755)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ready" in result.stdout
+    assert "legacy" not in result.stdout.lower()
+    assert not (mount / ".bedrock-on-linux-xdg-migration.lock").exists()
+    assert sorted(path.name for path in chosen.iterdir()) == ["settings.json"]
+    assert (leftovers / "engine.tar.gz").read_bytes() == b"left behind"
+
+
 def test_cli_migrates_before_first_flatpak_profile_command(tmp_path):
     home = tmp_path / "home"
     old_data = home / ".local" / "share" / "bedrock-on-linux"

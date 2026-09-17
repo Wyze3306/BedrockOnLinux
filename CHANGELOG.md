@@ -17,6 +17,19 @@
   behind. A folder with anything in it is never touched, and an installed
   Steam is used exactly as before.
 
+- **The launcher opens again after its files were moved to another drive**
+  ([#255](https://github.com/Wyze3306/BedrockOnLinux/issues/255)). Moving the
+  data folder in Settings takes the worlds, settings and sign-in along and
+  leaves the engine, caches and logs in the old folder. At the next start the
+  launcher took those leftovers for data from before its switch to the
+  standard XDG folders and set out to migrate them into the new location —
+  creating a lock file next to the chosen folder first. For a drive mounted
+  under `/media/<user>/`, that is a folder only the system can write to, so
+  every start ended in *Could not migrate the legacy data safely … Permission
+  denied*, with the AppImage and the .deb alike; elsewhere it only printed a
+  misleading warning about two data folders. A location chosen in Settings is
+  no longer treated as a migration target.
+
 ## 2.2.6 — 2026-09-16
 
 ### Fixed
