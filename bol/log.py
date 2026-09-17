@@ -1,6 +1,8 @@
 """bol.log — console logging, the BolError exception and die()."""
 # SPDX-License-Identifier: MIT
 
+import os
+import select
 import shutil
 import subprocess
 import sys
@@ -18,6 +20,61 @@ _LEVELS = {
 _ANSI_RESET = "\033[0m"
 
 
+def _reader_gone(fd):
+    """Whether nothing reads ``fd`` any more.
+
+    A pipe whose reader exited reports POLLERR, a terminal that hung up
+    POLLHUP; a file, /dev/null or a live pipe reports neither.
+    """
+    try:
+        poller = select.poll()
+        poller.register(fd, select.POLLOUT)
+        ready = poller.poll(0)
+    except (OSError, ValueError):
+        return False
+    dead = select.POLLERR | select.POLLHUP | select.POLLNVAL
+    return any(mask & dead for _fd, mask in ready)
+
+
+def _detach_dead_console():
+    """Point standard streams nobody reads any more at /dev/null.
+
+    Later lines, the flush at interpreter exit and every child process that
+    inherits the descriptors then write somewhere that accepts them, instead
+    of failing on -- or, for a child, being killed by SIGPIPE from -- a pipe
+    with no reader.
+    """
+    try:
+        null = os.open(os.devnull, os.O_WRONLY)
+    except OSError:
+        return
+    try:
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                fd = stream.fileno()
+            except (AttributeError, OSError, ValueError):
+                continue
+            if _reader_gone(fd):
+                os.dup2(null, fd)
+    finally:
+        os.close(null)
+
+
+def _print(line):
+    """Write one console line, surviving a console that has gone away.
+
+    A desktop entry can start the launcher with its output on a pipe whose
+    reader exits right after the launch -- gtk-launch does -- so this print
+    raised BrokenPipeError and the PLAY worker that logged the line died with
+    it, never reaching the sign-in dialog (#261). The GUI has already shown
+    the line through its sink by then.
+    """
+    try:
+        print(line, flush=True)
+    except OSError:
+        _detach_dead_console()
+
+
 def _emit(tag, m):
     if _LOG_SINK:
         try:
@@ -26,14 +83,14 @@ def _emit(tag, m):
             pass
     lvl = _LEVELS.get(tag)
     if not lvl:
-        print(f"{tag} {m}", flush=True)
+        _print(f"{tag} {m}")
         return
     label, alab, amsg, _, _ = lvl
     if IS_TTY:
         tail = f"{amsg}{m}{_ANSI_RESET}" if amsg else m
-        print(f"{alab}{label}{_ANSI_RESET}  {tail}", flush=True)
+        _print(f"{alab}{label}{_ANSI_RESET}  {tail}")
     else:
-        print(f"{label}  {m}", flush=True)
+        _print(f"{label}  {m}")
 
 
 def info(m): _emit("::", m)

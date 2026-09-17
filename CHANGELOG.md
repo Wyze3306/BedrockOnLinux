@@ -30,6 +30,19 @@
   misleading warning about two data folders. A location chosen in Settings is
   no longer treated as a migration target.
 
+- **PLAY works when the launcher was opened from the application menu on
+  Cinnamon** ([#261](https://github.com/Wyze3306/BedrockOnLinux/issues/261)).
+  Started through `gtk-launch`, as Cinnamon's menu does, the launcher's
+  console output goes to a pipe that nothing reads any more once `gtk-launch`
+  has exited. Every log line is also written to that console, so the first
+  one after that failed with *Broken pipe* and stopped PLAY before it reached
+  the Microsoft sign-in. A console that has gone away is now let go of: its
+  output goes to `/dev/null`, the lines still appear in the launcher's
+  activity log, and the programs the launcher starts no longer inherit the
+  dead pipe either — writing to it would have killed them. Started from a
+  terminal, nothing changes. Diagnosed by
+  [@DevTheFool](https://github.com/DevTheFool).
+
 ## 2.2.6 — 2026-09-16
 
 ### Fixed
