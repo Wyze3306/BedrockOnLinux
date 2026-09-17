@@ -892,18 +892,121 @@ def kill_wine():
         info("No BedrockOnLinux Wine process is running.")
 
 
+# What Minecraft keeps inside the prefix for the player: every world, pack,
+# skin and screenshot, and the game's own settings, one folder per edition.
+# Wine rebuilds everything else around them.
+_GAME_DATA_GLOB = "drive_c/users/*/AppData/Roaming/Minecraft Bedrock*"
+# Beside COMPAT, so that setting the old tree aside is a rename.
+_REPAIR_LEFTOVER = ".compatdata-repair-"
+
+
+def _game_data_folders(prefix):
+    """Minecraft's folders inside ``prefix``, as paths relative to it.
+
+    Only a path with no symlink anywhere in it counts. Proton links
+    drive_c/users/<login> to steamuser, and the same folder reached through
+    that link is not a second one to move; a folder a link leads out of the
+    prefix is not at risk either, since rmtree never follows a link.
+    """
+    prefix = Path(prefix)
+    if prefix.is_symlink() or not prefix.is_dir():
+        return []
+    root = prefix.resolve(strict=True)
+    found = []
+    for folder in sorted(prefix.glob(_GAME_DATA_GLOB)):
+        relative = folder.relative_to(prefix)
+        if folder.is_symlink() or not folder.is_dir() \
+                or folder.resolve(strict=True) != root / relative:
+            continue
+        found.append(relative)
+    return found
+
+
+def _discard_repair_leftovers():
+    """Delete what an interrupted repair left beside COMPAT.
+
+    A leftover still holding Minecraft's folders was interrupted before they
+    moved, so it is named instead of deleted.
+    """
+    for leftover in COMPAT.parent.glob(_REPAIR_LEFTOVER + "*"):
+        try:
+            if leftover.is_symlink() or not leftover.is_dir():
+                continue
+            if _game_data_folders(leftover / PFX.relative_to(COMPAT)):
+                warn("An interrupted repair left Minecraft worlds and "
+                     f"settings in {leftover}; it was not deleted.")
+                continue
+        except (OSError, RuntimeError):
+            continue
+        shutil.rmtree(leftover, ignore_errors=True)
+
+
+def _reset_compat_keeping_game_data():
+    """Delete the compatibility tree except Minecraft's own folders.
+
+    Returns the folders kept. The worlds, packs and settings live inside the
+    prefix, and Repair is for Wine's part of it: deleting them along with it
+    cost players their worlds, while the button promised to keep them
+    (#253). Everything that decides whether a world survives is a rename
+    done before any delete: the old tree moves aside, Minecraft's folders
+    move into an otherwise empty new prefix, which Wine completes around them
+    on the next launch, and only then is the rest deleted. The GUI repairs on
+    a daemon thread, so closing the launcher during that long delete must
+    cost no world either.
+    """
+    _discard_repair_leftovers()
+    try:
+        keep = _game_data_folders(PFX)
+        old = Path(tempfile.mkdtemp(prefix=_REPAIR_LEFTOVER,
+                                    dir=COMPAT.parent))
+    except (OSError, RuntimeError) as exc:
+        die("Repair stopped before deleting anything: the Wine prefix "
+            f"could not be read ({exc}).")
+    try:
+        os.rename(COMPAT, old)
+    except OSError as exc:
+        old.rmdir()
+        die("Repair stopped before deleting anything: the Wine prefix "
+            f"could not be set aside ({exc}).")
+    old_pfx = old / PFX.relative_to(COMPAT)
+    moved = []
+    try:
+        for relative in keep:
+            (PFX / relative).parent.mkdir(parents=True, exist_ok=True)
+            os.rename(old_pfx / relative, PFX / relative)
+            moved.append(relative)
+    except OSError as exc:
+        try:
+            for relative in reversed(moved):
+                os.rename(PFX / relative, old_pfx / relative)
+            # Only the empty folders made for them are left in the new tree.
+            for path, _dirs, _files in os.walk(COMPAT, topdown=False):
+                os.rmdir(path)
+            os.rename(old, COMPAT)
+        except OSError:
+            die(f"Repair stopped half-way ({exc}). Nothing was deleted: the "
+                f"old Wine prefix is in {old}, and the Minecraft folders "
+                f"already moved out of it are in {PFX}.")
+        die("Repair stopped before deleting anything: Minecraft's worlds "
+            f"and settings could not be moved into the new prefix ({exc}).")
+    shutil.rmtree(old)
+    return keep
+
+
 def reset_prefix():
     # Repair must never delete an explicit third-party prefix.
     with prefix_operation_lock("repair the Wine prefix"):
         stop_prefix_procs(PFX)
         require_prefix_idle(PFX, "repair the Wine prefix")
+        kept = []
         if COMPAT.is_symlink() or (
                 COMPAT.exists() and not COMPAT.is_dir()):
             # Never follow a damaged or dangling compatibility-tree link.
             COMPAT.unlink()
         elif COMPAT.exists():
-            shutil.rmtree(COMPAT)
-        ok("Wine prefix reset — rebuilt on next launch.")
+            kept = _reset_compat_keeping_game_data()
+        ok("Wine prefix reset — rebuilt on next launch."
+           + (" Minecraft worlds and settings were kept." if kept else ""))
 
 
 OPTIONS_REL = ("drive_c/users/steamuser/AppData/Roaming/Minecraft Bedrock/"

@@ -1293,6 +1293,112 @@ class PrefixOperationLockTests(unittest.TestCase):
 
             repaired.assert_not_called()
 
+    @contextmanager
+    def _repairing(self, root, compat):
+        with mock.patch.object(prefix, "DATA", root / "data"), \
+                mock.patch.object(prefix, "COMPAT", compat), \
+                mock.patch.object(prefix, "PFX", compat / "pfx"), \
+                mock.patch.object(
+                    prefix, "stop_prefix_procs", return_value=(0, 0)), \
+                mock.patch.object(prefix, "require_prefix_idle"), \
+                mock.patch.object(prefix, "warn"), \
+                mock.patch.object(prefix, "ok") as repaired:
+            yield repaired
+
+    @staticmethod
+    def _played_prefix(compat):
+        """A prefix that has run the game: Wine state plus the player's."""
+        pfx = compat / "pfx"
+        (pfx / "drive_c/windows/system32").mkdir(parents=True)
+        (pfx / "drive_c/windows/system32/user32.dll").write_bytes(b"stale")
+        (pfx / "system.reg").write_text("WINE REGISTRY Version 2\n")
+        roaming = pfx / "drive_c/users/steamuser/AppData/Roaming"
+        roaming.mkdir(parents=True)
+        # Proton links the Unix login name to steamuser in every prefix, so
+        # each folder below is also reachable a second time through it.
+        (pfx / "drive_c/users/player").symlink_to("steamuser")
+        world = (roaming / "Minecraft Bedrock/Users/1557/games/com.mojang/"
+                 "minecraftWorlds/abc=/level.dat")
+        world.parent.mkdir(parents=True)
+        world.write_bytes(b"my world")
+        options = (roaming / "Minecraft Bedrock Preview/Users/Shared/games/"
+                   "com.mojang/minecraftpe/options.txt")
+        options.parent.mkdir(parents=True)
+        options.write_text("gfx_viewdistance:320\n")
+        (roaming / "Microsoft/Crypto").mkdir(parents=True)
+        return pfx, world.relative_to(pfx), options.relative_to(pfx)
+
+    def test_repair_keeps_minecraft_worlds_and_settings(self):
+        # Repair deleted the whole compatibility tree, and the worlds with it,
+        # while its button promised they would be kept (#253).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            compat = root / "compat"
+            pfx, world, options = self._played_prefix(compat)
+
+            with self._repairing(root, compat) as repaired:
+                prefix.reset_prefix()
+
+            self.assertEqual((pfx / world).read_bytes(), b"my world")
+            self.assertEqual((pfx / options).read_text(),
+                             "gfx_viewdistance:320\n")
+            self.assertFalse((pfx / "system.reg").exists())
+            self.assertFalse((pfx / "drive_c/windows").exists())
+            self.assertFalse(
+                (pfx / "drive_c/users/steamuser/AppData/Roaming/Microsoft")
+                .exists())
+            self.assertFalse(prefix.prefix_ready(pfx))
+            self.assertEqual(
+                sorted(path.name for path in root.iterdir()),
+                ["compat", "data"])
+            self.assertIn("worlds and settings were kept",
+                          repaired.call_args.args[0])
+
+    def test_a_folder_that_cannot_move_leaves_the_prefix_intact(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            compat = root / "compat"
+            pfx, world, options = self._played_prefix(compat)
+            rename = os.rename
+            calls = []
+
+            def fail_on_the_second_folder(source, target):
+                calls.append(source)
+                if len(calls) == 3:
+                    raise PermissionError("read-only world folder")
+                return rename(source, target)
+
+            with self._repairing(root, compat) as repaired, \
+                    mock.patch.object(prefix.os, "rename",
+                                      side_effect=fail_on_the_second_folder), \
+                    self.assertRaisesRegex(
+                        BolError, "before deleting anything"):
+                prefix.reset_prefix()
+
+            repaired.assert_not_called()
+            self.assertEqual((pfx / world).read_bytes(), b"my world")
+            self.assertTrue((pfx / options).is_file())
+            self.assertTrue((pfx / "system.reg").is_file())
+            self.assertEqual(
+                sorted(path.name for path in root.iterdir()),
+                ["compat", "data"])
+
+    def test_interrupted_repair_leftovers_are_cleared_but_worlds_are_not(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            compat = root / "compat"
+            compat.mkdir()
+            garbage = root / ".compatdata-repair-deleting"
+            (garbage / "pfx/drive_c/windows").mkdir(parents=True)
+            stranded = root / ".compatdata-repair-moving"
+            self._played_prefix(stranded)
+
+            with self._repairing(root, compat):
+                prefix.reset_prefix()
+
+            self.assertFalse(garbage.exists())
+            self.assertTrue(stranded.is_dir())
+
     def test_repair_unlinks_dangling_compat_symlink_without_following_it(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

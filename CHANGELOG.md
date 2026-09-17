@@ -58,6 +58,21 @@
   other failure of the bundled copy now quotes what the loader said.
   Diagnosed by [@duzos](https://github.com/duzos).
 
+- **Repair no longer deletes your worlds**
+  ([#253](https://github.com/Wyze3306/BedrockOnLinux/issues/253)).
+  *Settings › Tools › Repair (reset Wine prefix)* promised that worlds and
+  settings are kept, then deleted the whole Wine prefix — and Minecraft keeps
+  every world, pack, skin, screenshot and its own settings inside it, under
+  `AppData/Roaming/Minecraft Bedrock`. Players who repaired lost their worlds
+  with no warning. Repair now keeps that folder, and the Preview's, and resets
+  only what Wine rebuilds on the next launch. Everything that decides whether
+  a world survives is a rename done before anything is deleted: the old prefix
+  is set aside, Minecraft's folders move into the new one, and only then is
+  the rest removed — so closing the launcher in the middle of a repair costs
+  no world either, and if a folder cannot be moved, the repair stops with the
+  prefix exactly as it was. Checked end to end on a real prefix: repaired,
+  rebuilt by Wine around the kept folder, world intact.
+
 ## 2.2.6 — 2026-09-16
 
 ### Fixed
