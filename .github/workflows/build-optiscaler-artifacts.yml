@@ -1,3 +1,4 @@
+# trigger: permissions fixed for reusable packaging workflow
 name: Build OptiScaler integration artifacts
 
 on:
