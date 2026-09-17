@@ -38,6 +38,7 @@ import ctypes.util
 import hashlib
 import mmap
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -76,6 +77,13 @@ _VARS = ("LD_LIBRARY_PATH", "WEBKIT_INJECTED_BUNDLE_PATH", "GIO_EXTRA_MODULES",
 
 _PACKAGES = (("apt-get", "libwebkit2gtk-4.1-0"), ("dnf", "webkit2gtk4.1"),
              ("pacman", "webkit2gtk-4.1"), ("zypper", "libwebkit2gtk-4_1-0"))
+
+# ld.so, when the C library is older than a binary was linked against:
+# "…/libc.so.6: version `GLIBC_2.39' not found (required by …/xodus-cli)".
+# xodus-cli is built on the same Debian snapshot as the bundled runtime, so no
+# WebKitGTK -- the host's or the bundle's -- can get it past that (#264).
+_GLIBC_TOO_OLD = re.compile(
+    r"(?<!weak )version [`']GLIBC_(\d+(?:\.\d+)+)' not found")
 
 # WebKitGTK composites into a DMABUF buffer and hands that to the display
 # server. Where the handoff is refused the connection is torn down instead of
@@ -141,28 +149,67 @@ def host_has_webkitgtk():
         return False
 
 
-def binary_loads(binary, env=None):
-    """Whether the dynamic loader can start ``binary`` with this environment.
+def load_failure(binary, env=None):
+    """Why the dynamic loader cannot start ``binary``, or None when it can.
 
     `--version` is answered by the argument parser before Xodus touches the
     network, the keyring or a device identity, so this costs a few
     milliseconds and reports exactly what the loader thinks, rather than
-    guessing from one library's presence.
+    guessing from one library's presence. What it printed is the answer: a
+    missing library and a C library that is too old are different problems.
     """
     try:
         proc = subprocess.run([str(binary), "--version"], env=env,
                               stdout=subprocess.DEVNULL,
-                              stderr=subprocess.PIPE, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
+                              stderr=subprocess.PIPE, text=True,
+                              errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return str(exc) or type(exc).__name__
+    if proc.returncode == 0:
+        return None
+    return (proc.stderr or "").strip() or f"exit status {proc.returncode}"
 
 
-def _host_can_run(binary):
+def binary_loads(binary, env=None):
+    """Whether the dynamic loader can start ``binary`` with this environment."""
+    return load_failure(binary, env) is None
+
+
+def _host_failure(binary):
     key = str(binary)
     if key not in _HOST_PROBE:
-        _HOST_PROBE[key] = binary_loads(binary)
+        _HOST_PROBE[key] = load_failure(binary)
     return _HOST_PROBE[key]
+
+
+def _host_glibc():
+    """The C library version this system runs, e.g. "2.35", or None."""
+    try:
+        name, _, version = os.confstr("CS_GNU_LIBC_VERSION").partition(" ")
+    except (AttributeError, OSError, ValueError):
+        return None
+    return version.strip() if name == "glibc" and version.strip() else None
+
+
+def glibc_too_old_message(text):
+    """What to tell a system whose glibc is older than xodus-cli needs.
+
+    None unless the loader said so. The newest version it asked for is the
+    floor; installing WebKitGTK, or the bundled runtime, cannot lower it.
+    """
+    wanted = _GLIBC_TOO_OLD.findall(text or "")
+    if not wanted:
+        return None
+    floor = max(wanted, key=lambda version: tuple(
+        int(part) for part in version.split(".")))
+    host = _host_glibc()
+    return (
+        "Minecraft is downloaded and started through xodus-cli, which needs "
+        f"glibc {floor} or newer"
+        + (f", and this system has glibc {host}" if host else "")
+        + ". Installing WebKitGTK does not change that. Use the Flatpak "
+        "build, which carries its own runtime, or a distribution release "
+        f"that ships glibc {floor} or newer.")
 
 
 # ---------------------------------------------------------------- install
@@ -486,8 +533,15 @@ def apply(binary, env, force=False):
     """
     previous = portable_renderer(env)
     previous.update(quiet_accessibility(env))
-    if not force and _host_can_run(binary):
-        return previous
+    if not force:
+        failure = _host_failure(binary)
+        if failure is None:
+            return previous
+        too_old = glibc_too_old_message(failure)
+        if too_old:
+            # The bundle is ~80 MB built against the same glibc floor.
+            restore_env(env, previous)
+            raise BolError(too_old)
     try:
         root = prepare()
     except BolError as exc:
@@ -495,10 +549,12 @@ def apply(binary, env, force=False):
         raise BolError(missing_message(str(exc))) from exc
     _, replaced = runtime_env(env, root)
     previous.update(replaced)
-    if not binary_loads(binary, env):
+    failure = load_failure(binary, env)
+    if failure is not None:
         restore_env(env, previous)
-        raise BolError(missing_message(
-            "The bundled WebKitGTK runtime did not load on this system."))
+        raise BolError(glibc_too_old_message(failure) or missing_message(
+            "The bundled WebKitGTK runtime did not load on this system: "
+            + failure.splitlines()[0]))
     return previous
 
 

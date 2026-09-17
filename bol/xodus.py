@@ -657,8 +657,12 @@ def _loader_failure(text):
     _env() installs the bundled WebKitGTK before that can happen, so reaching
     here means the library it found was unusable -- report the missing library
     rather than "No such file or directory", which is what the loader says and
-    what issue #184 is about.
+    what issue #184 is about. A C library older than the binary is not a
+    missing library, and no WebKitGTK package fixes it (#264).
     """
+    too_old = webview.glibc_too_old_message(text)
+    if too_old:
+        return too_old
     match = _LOADER_ERROR.search(text or "")
     if not match:
         return None

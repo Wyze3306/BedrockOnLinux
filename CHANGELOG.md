@@ -43,6 +43,21 @@
   terminal, nothing changes. Diagnosed by
   [@DevTheFool](https://github.com/DevTheFool).
 
+- **A system whose glibc is too old is told so, instead of being sent to
+  install WebKitGTK it already has**
+  ([#264](https://github.com/Wyze3306/BedrockOnLinux/issues/264)). The
+  Minecraft downloader, `xodus-cli`, needs glibc 2.39 or newer, which Ubuntu
+  22.04 and the distributions built on it — Pop!_OS, Zorin OS 17, Linux Mint
+  21 — do not have. The launcher only checked whether the program started,
+  and reported every failure as a missing WebKitGTK: players installed
+  `libwebkit2gtk-4.1-0`, sat through an 80 MB download of the bundled copy,
+  and got the same message again. The loader's own words now decide: an old
+  glibc is named with the version needed and the version installed, the
+  bundled copy — built against the same glibc — is no longer downloaded for
+  nothing, and the Flatpak, which brings its own runtime, is pointed to. Any
+  other failure of the bundled copy now quotes what the loader said.
+  Diagnosed by [@duzos](https://github.com/duzos).
+
 ## 2.2.6 — 2026-09-16
 
 ### Fixed

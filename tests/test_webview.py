@@ -421,6 +421,82 @@ class EnvironmentTests(unittest.TestCase):
             self.assertIn("Flatpak", message)
             self.assertEqual(env, {"PATH": "/usr/bin"})
 
+    def test_a_bundle_that_does_not_load_says_what_the_loader_said(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            binary = base / "xodus-cli"
+            binary.write_text(
+                "#!/bin/sh\necho 'xodus-cli: error while loading shared "
+                "libraries: libicuuc.so.76: cannot open shared object file' "
+                ">&2\nexit 127\n")
+            binary.chmod(0o755)
+            env = {"PATH": "/usr/bin"}
+
+            with mock.patch.object(webview, "prepare",
+                                   return_value=base / "bundle"), \
+                    self.assertRaises(webview.BolError) as raised:
+                webview.apply(binary, env)
+
+            self.assertIn("libicuuc.so.76", str(raised.exception))
+            self.assertEqual(env, {"PATH": "/usr/bin"})
+
+
+# What xodus-cli printed on Ubuntu 22.04 (glibc 2.35), as issue #264 quotes it.
+_OLD_GLIBC = (
+    "xodus-cli: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not "
+    "found (required by /home/u/.local/share/bedrock-on-linux/xodus/"
+    "xodus-cli)\n"
+    "xodus-cli: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not "
+    "found (required by /home/u/.local/share/bedrock-on-linux/xodus/"
+    "xodus-cli)\n")
+
+
+class OldGlibcTests(unittest.TestCase):
+    """A C library older than xodus-cli is not a missing WebKitGTK (#264)."""
+
+    def test_the_newest_version_asked_for_is_named(self):
+        with mock.patch.object(webview, "_host_glibc", return_value="2.35"):
+            message = webview.glibc_too_old_message(_OLD_GLIBC)
+        self.assertIn("glibc 2.39 or newer", message)
+        self.assertIn("this system has glibc 2.35", message)
+        self.assertIn("Flatpak", message)
+        self.assertNotIn(webview.host_package_name(), message)
+
+    def test_versions_compare_as_numbers(self):
+        message = webview.glibc_too_old_message(
+            "version `GLIBC_2.9' not found\nversion `GLIBC_2.10' not found")
+        self.assertIn("glibc 2.10 or newer", message)
+
+    def test_other_loader_failures_are_not_about_glibc(self):
+        self.assertIsNone(webview.glibc_too_old_message(
+            "xodus-cli: error while loading shared libraries: "
+            "libwebkit2gtk-4.1.so.0: cannot open shared object file"))
+        self.assertIsNone(webview.glibc_too_old_message(""))
+        self.assertIsNone(webview.glibc_too_old_message(None))
+
+    def test_the_bundle_is_not_downloaded_for_an_old_glibc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "xodus-cli"
+            binary.write_text(
+                "#!/bin/sh\ncat >&2 <<'EOF'\n" + _OLD_GLIBC + "EOF\nexit 1\n")
+            binary.chmod(0o755)
+            env = {"PATH": "/usr/bin"}
+
+            with mock.patch.object(
+                    webview, "prepare",
+                    side_effect=AssertionError(
+                        "the bundle is built against the same glibc")), \
+                    self.assertRaises(webview.BolError) as raised:
+                webview.apply(binary, env)
+
+            self.assertIn("glibc 2.39 or newer", str(raised.exception))
+            self.assertEqual(env, {"PATH": "/usr/bin"})
+
+    def test_a_failed_xodus_command_reports_the_glibc_floor(self):
+        message = xodus._loader_failure(_OLD_GLIBC)
+        self.assertIn("glibc 2.39 or newer", message)
+        self.assertNotIn(webview.host_package_name(), message)
+
 
 class DoctorStatusTests(unittest.TestCase):
     def test_the_host_library_needs_no_package(self):
