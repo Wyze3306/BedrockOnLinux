@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Installing Steam after BedrockOnLinux works again**
+  ([#265](https://github.com/Wyze3306/BedrockOnLinux/issues/265)). On a
+  computer without Steam, the launcher created `~/.steam/steam` as an ordinary
+  folder, just to have somewhere to point Proton. Steam's installer needs that
+  exact path to be a link to its own data folder and cannot replace a folder,
+  so every Steam installed afterwards stopped at *Couldn't set up Steam data -
+  please contact technical support*, with nothing to say what was in the way.
+  Proton only reads the Steam client from that folder, so the launcher now
+  keeps its own in its data folder whenever no real Steam installation is
+  there, and removes the empty `~/.steam/steam` an earlier version left
+  behind. A folder with anything in it is never touched, and an installed
+  Steam is used exactly as before.
+
 ## 2.2.6 — 2026-09-16
 
 ### Fixed

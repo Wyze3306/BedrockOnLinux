@@ -533,6 +533,79 @@ class PrefixEnvironmentTests(unittest.TestCase):
             self.assertEqual(selected, root / "data/steamcompat")
             self.assertTrue(selected.is_dir())
 
+    @contextmanager
+    def _host(self, root):
+        """A non-Flatpak host whose home and data live under ``root``."""
+        exists = Path.exists
+
+        def not_sandboxed(path, *args, **kwargs):
+            if str(path) == "/.flatpak-info":
+                return False
+            return exists(path, *args, **kwargs)
+
+        with mock.patch.dict(prefix.os.environ, {}, clear=True), \
+                mock.patch.object(prefix, "HOME", root / "home"), \
+                mock.patch.object(prefix, "DATA", root / "data"), \
+                mock.patch.object(prefix.Path, "exists", autospec=True,
+                                  side_effect=not_sandboxed):
+            yield
+
+    def test_host_without_steam_never_creates_steam_directory(self):
+        # A real ~/.steam/steam directory is where Steam's bootstrapper has to
+        # put a symlink; making one broke every later Steam install (#265).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "home").mkdir()
+            with self._host(root):
+                selected = prefix.steam_compat_dir()
+
+            self.assertEqual(selected, root / "data/steamcompat")
+            self.assertTrue(selected.is_dir())
+            self.assertFalse((root / "home/.steam").exists())
+
+    def test_empty_steam_directory_left_by_earlier_launchers_is_removed(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "home/.steam/steam").mkdir(parents=True)
+            with self._host(root):
+                selected = prefix.steam_compat_dir()
+
+            self.assertEqual(selected, root / "data/steamcompat")
+            self.assertFalse((root / "home/.steam").exists())
+
+    def test_real_steam_installations_are_used_and_left_alone(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            data = root / "home/.local/share/Steam"
+            data.mkdir(parents=True)
+            (data / "steam.sh").write_text("#!/bin/sh\n")
+            linked = root / "home/.steam/steam"
+            linked.parent.mkdir(parents=True)
+            linked.symlink_to(data)
+            with self._host(root):
+                self.assertEqual(prefix.steam_compat_dir(), linked)
+            self.assertTrue(linked.is_symlink())
+
+            linked.unlink()
+            linked.mkdir()
+            (linked / "steam.sh").write_text("#!/bin/sh\n")
+            with self._host(root):
+                self.assertEqual(prefix.steam_compat_dir(), linked)
+            self.assertTrue((linked / "steam.sh").is_file())
+            self.assertFalse((root / "data/steamcompat").exists())
+
+    def test_uninstalled_steam_link_falls_back_without_touching_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            linked = root / "home/.steam/steam"
+            linked.parent.mkdir(parents=True)
+            linked.symlink_to(root / "home/.local/share/Steam")
+            with self._host(root):
+                selected = prefix.steam_compat_dir()
+
+            self.assertEqual(selected, root / "data/steamcompat")
+            self.assertTrue(linked.is_symlink())
+
     def test_headless_setup_forces_builtin_cryptbase(self):
         env = {
             "DISPLAY": ":0",

@@ -175,26 +175,42 @@ def launch_lock():
         yield shared_fd, prefix_fd
 
 
+def _remove_empty_steam_dir(steam):
+    """Take back the empty ~/.steam/steam that earlier launchers created.
+
+    Steam's bootstrapper needs that path to be a symlink to its data
+    directory. With a real directory in the way, every Steam installed
+    afterwards fails with "Couldn't set up Steam data" (#265). Proton only
+    ever read from the one the launcher made, so it is still empty, and that
+    is what keeps this safe: rmdir refuses a directory holding any entry, so
+    a real Steam installation is never touched.
+    """
+    if steam.is_symlink():
+        return
+    for path in (steam, steam.parent):
+        try:
+            path.rmdir()
+        except OSError:
+            return
+
+
 def steam_compat_dir():
     """Return a writable Steam compatibility directory for UMU/Proton.
 
-    Flatpak cannot follow Steam Deck's host symlink, so sandboxed and unusable
-    host paths fall back to app-owned storage.
+    Proton only reads the Steam client from it, so a Steam installation that
+    is really there is handed over as it is. Everything else gets app-owned
+    storage: Flatpak cannot follow Steam Deck's host symlink, and a
+    ~/.steam/steam created on a host without Steam breaks the Steam installed
+    after it (#265).
     """
-    if "FLATPAK_ID" in os.environ or Path("/.flatpak-info").exists():
-        fallback = DATA / "steamcompat"
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
-    steam = HOME / ".steam/steam"
-    if steam.is_dir():                     # real Steam, or one we made earlier
-        return steam
-    try:
-        steam.mkdir(parents=True, exist_ok=True)
-        return steam
-    except OSError:
-        fallback = DATA / "steamcompat"
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
+    if "FLATPAK_ID" not in os.environ and not Path("/.flatpak-info").exists():
+        steam = HOME / ".steam/steam"
+        _remove_empty_steam_dir(steam)
+        if steam.is_dir():
+            return steam
+    fallback = DATA / "steamcompat"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
 
 
 def _prepare_managed_prefix_layout(prefix):
