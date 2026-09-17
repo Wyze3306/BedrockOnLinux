@@ -60,14 +60,21 @@
   <screenshots>
     <screenshot type="default">
       <caption>The launcher: pick a version, sign in, play</caption>
-      <image>https://raw.githubusercontent.com/Wyze3306/BedrockOnLinux/v1.0.9/screenshot.png</image>
+      <image>https://raw.githubusercontent.com/Wyze3306/BedrockOnLinux/v2.2.6/screenshot.png</image>
     </screenshot>
   </screenshots>
 
   <content_rating type="oars-1.1">
+    <content_attribute id="violence-fantasy">mild</content_attribute>
     <content_attribute id="social-chat">moderate</content_attribute>
     <content_attribute id="money-purchasing">mild</content_attribute>
   </content_rating>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>gamepad</control>
+  </supports>
 
   <releases>
     <release version="2.2.6" date="2026-09-16">
