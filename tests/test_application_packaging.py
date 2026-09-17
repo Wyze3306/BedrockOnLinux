@@ -233,6 +233,17 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
                           if arg.startswith("--talk-name=org.freedesktop.Flatpak")])
         self.assertIn("runtime-version: '51'", manifest)
 
+    def test_release_flatpak_build_can_strip_like_flathub(self):
+        manifest = (
+            ROOT / "flatpak/io.github.wyze3306.BedrockOnLinux.yml"
+        ).read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/build-app.yml").read_text(
+            encoding="utf-8")
+        # The published manifest strips and splits debug info as Flathub
+        # does; the host flatpak-builder runs eu-strip and debugedit for that.
+        self.assertNotIn("strip: false", manifest)
+        self.assertIn(" flatpak flatpak-builder elfutils debugedit\n", workflow)
+
     def test_flatpak_keeps_game_controller_device_access(self):
         manifest = (
             ROOT / "flatpak/io.github.wyze3306.BedrockOnLinux.yml"

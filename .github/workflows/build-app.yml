@@ -65,7 +65,7 @@ jobs:
             dpkg-dev rpm patchelf squashfs-tools zsync desktop-file-utils file \
             python3 python3-pip python3-venv python3-tk \
             build-essential ca-certificates curl xz-utils \
-            flatpak flatpak-builder
+            flatpak flatpak-builder elfutils debugedit
 
       - name: Enable unprivileged user namespaces (flatpak-builder / appimage)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
