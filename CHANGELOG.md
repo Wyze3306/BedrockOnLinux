@@ -73,6 +73,21 @@
   prefix exactly as it was. Checked end to end on a real prefix: repaired,
   rebuilt by Wine around the kept folder, world intact.
 
+- **The Flatpak starts Minecraft on X11 sessions again, Steam Deck Game Mode
+  included** ([#259](https://github.com/Wyze3306/BedrockOnLinux/issues/259)).
+  Before starting the game, the launcher asks the X server whether a real GPU
+  drives the display, and it asked through the `xrandr` program — which the
+  Flatpak's runtime does not include. Unable to ask, it refused PLAY with
+  *Unsafe graphics session: the launcher could not verify any X11 hardware
+  provider* on every X11 session: a healthy desktop (#245) as much as Game
+  Mode, where the allowance made for Gamescope was never reached because it
+  only applies once the providers have been counted. That is also why
+  launching with `DESKTOP_SESSION=gamescope` did not help. The launcher now
+  asks the X server directly through its RandR library when the program is
+  missing — the same question, still without opening the GPU. Checked in the
+  Flatpak runtime on an X11 desktop: refused before, one provider found and
+  PLAY allowed after.
+
 ## 2.2.6 — 2026-09-16
 
 ### Fixed

@@ -28,6 +28,10 @@ class GraphicsSafetyTests(unittest.TestCase):
             mock.patch.object(gpu_safety, "GPU_LAUNCH_MARKER", self.marker),
             mock.patch.object(gpu_safety, "GPU_SAFETY_ACK", self.ack),
             mock.patch.object(gpu_safety, "_boot_id", return_value="boot-now"),
+            # The library fallback would otherwise ask the test host's own X
+            # server; tests that need it pass provider_probe.
+            mock.patch.object(gpu_safety, "_randr_provider_count",
+                              return_value=None),
         ]
         for patcher in self.patchers:
             patcher.start()
@@ -107,6 +111,55 @@ class GraphicsSafetyTests(unittest.TestCase):
             problem = gpu_safety.graphics_safety_problem(
                 {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"})
         self.assertIn("could not verify any X11 hardware provider", problem)
+
+    def test_missing_xrandr_counts_providers_through_libxrandr(self):
+        # The Flatpak's GNOME runtime ships no xrandr, so every X11 session
+        # was refused before the library was asked (#259).
+        with mock.patch.object(gpu_safety.shutil, "which", return_value=None), \
+                mock.patch.object(
+                    gpu_safety, "_nvidia_device_with_mesa_glx",
+                    side_effect=AssertionError(
+                        "a healthy provider must not inspect PRIME state")):
+            self.assertIsNone(gpu_safety.graphics_safety_problem(
+                {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"},
+                journal_runner=self.clean_journal,
+                provider_probe=lambda _env: 1,
+            ))
+
+    def test_sandboxed_game_mode_without_xrandr_is_allowed(self):
+        with mock.patch.object(gpu_safety.shutil, "which", return_value=None):
+            self.assertIsNone(gpu_safety.graphics_safety_problem(
+                {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"},
+                journal_runner=self.clean_journal,
+                atom_probe=lambda _env: True,
+                provider_probe=lambda _env: 0,
+            ))
+
+    def test_library_zero_provider_count_is_still_blocked(self):
+        with mock.patch.object(gpu_safety.shutil, "which", return_value=None), \
+                mock.patch.object(gpu_safety, "_nvidia_device_with_mesa_glx",
+                                  return_value=False):
+            problem = gpu_safety.graphics_safety_problem(
+                {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"},
+                journal_runner=self.clean_journal,
+                atom_probe=lambda _env: False,
+                provider_probe=lambda _env: 0,
+            )
+        self.assertIn("zero RandR GPU providers", problem)
+
+    def test_a_parsed_xrandr_answer_is_not_asked_again(self):
+        def xrandr(*_args, **_kwargs):
+            return result("Providers: number : 1\n")
+
+        def must_not_run(_env):
+            raise AssertionError("xrandr already counted the providers")
+
+        self.assertIsNone(gpu_safety.graphics_safety_problem(
+            {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"},
+            xrandr_runner=xrandr,
+            journal_runner=self.clean_journal,
+            provider_probe=must_not_run,
+        ))
 
     def test_x11_xrandr_timeout_is_unknown_and_blocked(self):
         def timeout(*_args, **_kwargs):
@@ -712,6 +765,21 @@ class GraphicsSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(gpu_safety.BolError,
                                         "did not start Wine"):
                 gpu_safety.require_safe_graphics_session({})
+
+
+class RandrLibraryProbeTests(unittest.TestCase):
+    def test_the_library_probe_needs_a_display(self):
+        self.assertIsNone(gpu_safety._randr_provider_count({}))
+        self.assertIsNone(gpu_safety._randr_provider_count({"DISPLAY": " "}))
+
+    @unittest.skipUnless(
+        os.environ.get("DISPLAY") and gpu_safety.shutil.which("xrandr"),
+        "needs an X server and the xrandr program")
+    def test_the_library_counts_what_xrandr_counts(self):
+        cli = gpu_safety._xrandr_provider_count(os.environ)
+        if cli is None:
+            self.skipTest("xrandr could not list this server's providers")
+        self.assertEqual(gpu_safety._randr_provider_count(os.environ), cli)
 
 
 class AcknowledgementGuidanceTests(unittest.TestCase):

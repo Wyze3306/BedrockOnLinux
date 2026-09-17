@@ -194,6 +194,78 @@ def _xrandr_provider_count(env: Mapping[str, str], runner=None) -> Optional[int]
     return int(match.group(1)) if match else None
 
 
+def _randr_provider_count(env: Mapping[str, str]) -> Optional[int]:
+    """The X server's RandR provider count, asked through libXrandr.
+
+    It is the request ``xrandr --listproviders`` makes, for systems that have
+    the library but not that program. The Flatpak's GNOME runtime is one:
+    without this, the packaged launcher could verify a provider on no X11
+    session at all, so a healthy desktop was refused, and Steam Deck Game Mode
+    never reached the Gamescope exemption, which only a counted zero gets
+    (#259). Protocol only, like the root-window probe: it opens no GPU.
+    """
+
+    display_name = (env.get("DISPLAY") or "").strip()
+    if not display_name:
+        return None
+    try:
+        import ctypes
+
+        class ProviderResources(ctypes.Structure):
+            _fields_ = [("timestamp", ctypes.c_ulong),
+                        ("nproviders", ctypes.c_int),
+                        ("providers", ctypes.POINTER(ctypes.c_ulong))]
+
+        xlib = ctypes.cdll.LoadLibrary("libX11.so.6")
+        xrandr = ctypes.cdll.LoadLibrary("libXrandr.so.2")
+        xlib.XOpenDisplay.restype = ctypes.c_void_p
+        xlib.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        xlib.XDefaultRootWindow.restype = ctypes.c_ulong
+        xlib.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        xlib.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        two_ints = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int),
+                    ctypes.POINTER(ctypes.c_int)]
+        xrandr.XRRQueryExtension.argtypes = two_ints
+        xrandr.XRRQueryVersion.argtypes = two_ints
+        xrandr.XRRGetProviderResources.restype = ctypes.POINTER(
+            ProviderResources)
+        xrandr.XRRGetProviderResources.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong]
+        xrandr.XRRFreeProviderResources.argtypes = [
+            ctypes.POINTER(ProviderResources)]
+    except (OSError, AttributeError):
+        return None
+
+    display = xlib.XOpenDisplay(display_name.encode())
+    if not display:
+        return None
+    display = ctypes.c_void_p(display)
+    try:
+        major, minor = ctypes.c_int(0), ctypes.c_int(0)
+        if not xrandr.XRRQueryExtension(
+                display, ctypes.byref(major), ctypes.byref(minor)):
+            return None
+        if not xrandr.XRRQueryVersion(
+                display, ctypes.byref(major), ctypes.byref(minor)):
+            return None
+        # Providers arrived in RandR 1.4. An older server answers the request
+        # with an X error, and Xlib's default handler exits the process.
+        if (major.value, minor.value) < (1, 4):
+            return None
+        resources = xrandr.XRRGetProviderResources(
+            display, xlib.XDefaultRootWindow(display))
+        if not resources:
+            return None
+        try:
+            return max(0, int(resources.contents.nproviders))
+        finally:
+            xrandr.XRRFreeProviderResources(resources)
+    except Exception:
+        return None
+    finally:
+        xlib.XCloseDisplay(display)
+
+
 def _boot_id() -> str:
     try:
         return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
@@ -723,7 +795,8 @@ def graphics_safety_problem(
         environ: Optional[Mapping[str, str]] = None,
         xrandr_runner=None,
         journal_runner=None,
-        atom_probe=None) -> Optional[str]:
+        atom_probe=None,
+        provider_probe=None) -> Optional[str]:
     """Return an actionable reason to refuse launch, or ``None``.
 
     No Vulkan, OpenGL, ``nvidia-smi`` or DRM ioctl is performed here.
@@ -747,6 +820,10 @@ def graphics_safety_problem(
         )
     if _x11_session(env):
         providers = _xrandr_provider_count(env, xrandr_runner)
+        if providers is None:
+            probe = (_randr_provider_count if provider_probe is None
+                     else provider_probe)
+            providers = probe(env)
         if providers == 0:
             if _nested_gamescope_session(env, atom_probe):
                 return None
