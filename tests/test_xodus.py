@@ -606,6 +606,52 @@ class InstallCacheTests(unittest.TestCase):
         self.assertIn("licence", str(exc))
         self.assertEqual(calls, mirrors[:1])
 
+    def test_a_server_name_that_does_not_resolve_is_explained(self):
+        # What a DNS filter blocking xboxlive.com looks like from here: the
+        # raw reqwest error was all the player was shown (#252).
+        mirrors = ["http://assets1.xboxlive.com/Z/a.msixvc",
+                   "http://assets2.xboxlive.com/Z/a.msixvc"]
+
+        def unresolved(host):
+            return lambda d: (101, [
+                "thread 'main' panicked at crates/msixvc/src/lib.rs:1:2:",
+                "ok: Custom { kind: Other, error: reqwest::Error { kind: "
+                f'Request, url: "http://{host}/Z/a.msixvc", source: '
+                "hyper_util::client::legacy::Error(Connect, ConnectError("
+                '"dns error", Custom { kind: Uncategorized, error: "failed '
+                'to lookup address information: Name or service not known" '
+                "})) } }",
+                "note: run with `RUST_BACKTRACE=1` environment variable to "
+                "display a backtrace"])
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(xodus, "warn") as warned:
+            dest = Path(tmp) / "1.26.45.1"
+            calls, exc = self._install(
+                dest, [unresolved("assets1.xboxlive.com"),
+                       unresolved("assets2.xboxlive.com")], mirrors)
+
+        # Different names, so the second mirror is still worth asking.
+        self.assertEqual(calls, mirrors)
+        message = str(exc)
+        self.assertIn(
+            "could not look up assets1.xboxlive.com or assets2.xboxlive.com "
+            "(Name or service not known)", message)
+        self.assertIn("*.xboxlive.com", message)
+        self.assertNotIn("reqwest", message)
+        self.assertIn("could not look up assets1.xboxlive.com",
+                      warned.call_args.args[0])
+
+    def test_an_unresolved_name_without_a_url_still_reads(self):
+        text = ("failed to lookup address information: Temporary failure in "
+                "name resolution")
+        self.assertEqual(
+            xodus._unresolved_clause(text, []),
+            "this computer could not look up Microsoft's download server "
+            "(Temporary failure in name resolution)")
+        self.assertTrue(xodus._unresolved_advice([]).startswith(
+            "The lookup failed in this computer's DNS"))
+
     def test_an_ownership_failure_does_not_try_the_next_mirror(self):
         mirrors = ["http://assets1.xboxlive.com/a.msixvc",
                    "http://assets2.xboxlive.com/a.msixvc"]

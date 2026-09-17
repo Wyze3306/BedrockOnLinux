@@ -138,6 +138,18 @@ _DEVICE_LIMIT = re.compile(r"device group is full", re.I)
 _LICENSE_UNREADABLE = re.compile(
     r"unknown variant `[^`]*`, expected one of[^\n]*`(KeyHolder|Offline)`|"
     r"the license could not be read", re.I)
+# The download server's name not resolving, as reqwest reports it:
+#   url: "http://assets1.xboxlive.com/Z/…", source: hyper_util::client::legacy::
+#   Error(Connect, ConnectError("dns error", Custom { kind: Uncategorized,
+#   error: "failed to lookup address information: Name or service not known" }))
+# By then the account has signed in through other Microsoft servers, so what
+# fails is this one name -- a DNS filter blocking xboxlive.com, typically --
+# and the raw error was all players got to go on (#252). Every mirror is
+# still tried: they are different names.
+_DNS_FAILURE = re.compile(
+    r'ConnectError\("dns error"|failed to lookup address information', re.I)
+_DNS_HOST = re.compile(r'(?:url: "https?://|Domain\(")([^/":)\s]+)')
+_DNS_REASON = re.compile(r'failed to lookup address information: ([^"}]+)')
 
 # indicatif renders "  12.34 MiB/ 862.00 MiB"; the total bar is the one whose
 # message is the launcher-visible stage rather than a file name.
@@ -1005,6 +1017,32 @@ def _cache_short_clause(dest, needed, free):
     return f"{short}, which is what a disk with no room left does ({room})"
 
 
+def _unresolved_clause(text, hosts):
+    """The download server names that did not resolve, and why, briefly."""
+    reason = _DNS_REASON.search(text)
+    if len(hosts) > 1:
+        names = ", ".join(hosts[:-1]) + " or " + hosts[-1]
+    else:
+        names = "".join(hosts) or "Microsoft's download server"
+    return (f"this computer could not look up {names}"
+            + (f" ({reason.group(1).strip()})" if reason else ""))
+
+
+def _unresolved_advice(hosts):
+    """Where to look once the download server's name did not resolve."""
+    lead = ""
+    if hosts:
+        lead = ("Those are the Microsoft servers" if len(hosts) > 1
+                else "That is the Microsoft server")
+        lead += " Minecraft is downloaded from. "
+    return (lead + "The lookup failed in this computer's DNS, not in the "
+            "account or the game: check that the internet connection works, "
+            "then look for something filtering xboxlive.com — a DNS ad "
+            "blocker (Pi-hole, AdGuard Home, NextDNS), the router's parental "
+            "controls or a VPN. Allowing *.xboxlive.com there, or using "
+            "another DNS server, lets the download through.")
+
+
 def _raise_unretryable(text, dest=None, needed=0):
     """Raise for the download failures another mirror cannot fix."""
     if _DEVICE_LIMIT.search(text):
@@ -1120,6 +1158,8 @@ def _stream_until_installed(binary, dest, plan, races_left, needed, progress,
     failure = ""
     attempt = 0
     record = _record_to(log)
+    unresolved = []
+    dns_failed = False
     while plan:
         source = plan.pop(0)
         attempt += 1
@@ -1139,6 +1179,14 @@ def _stream_until_installed(binary, dest, plan, races_left, needed, progress,
         # then exit 0 anyway, so classifying only the non-zero exits reported
         # an account that does not own Minecraft as "installed no game".
         _raise_unretryable(text, dest, needed)
+        dns_failed = bool(_DNS_FAILURE.search(text))
+        if dns_failed:
+            host = _DNS_HOST.search(text)
+            name = (host.group(1) if host
+                    else urllib.parse.urlsplit(source).hostname)
+            if name and name not in unresolved:
+                unresolved.append(name)
+            line = _unresolved_clause(text, unresolved)
         raced = False
         if _CACHE_SHORT.search(text):
             free = _free_space(dest)
@@ -1171,6 +1219,8 @@ def _stream_until_installed(binary, dest, plan, races_left, needed, progress,
             warn(f"{failure} Starting it again …")
         elif plan:
             warn(f"{failure} Retrying from another Microsoft mirror …")
+    if dns_failed:
+        failure += ". " + _unresolved_advice(unresolved)
     raise XodusError(failure)
 
 

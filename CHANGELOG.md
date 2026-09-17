@@ -97,6 +97,18 @@
   `XDG_DATA_DIRS`, as the workaround
   [@tuxmanxd](https://github.com/tuxmanxd) found did by hand.
 
+- **A download blocked at the DNS level says so**
+  ([#252](https://github.com/Wyze3306/BedrockOnLinux/issues/252)). When this
+  computer cannot look up the Microsoft server the game comes from —
+  `assets1.xboxlive.com`, `assets2.xboxlive.com` — the download used to end on
+  the downloader's raw error, `ok: Custom { kind: Other, error: reqwest::Error
+  { … ConnectError("dns error" … } }`, with nothing to say that the sign-in
+  was fine and only that name failed. It now names the servers that could not
+  be looked up and why, and where to look: the connection itself, then
+  whatever filters `xboxlive.com` — a DNS ad blocker such as Pi-hole, AdGuard
+  Home or NextDNS, a router's parental controls, or a VPN. Every mirror is
+  still tried first, since each one is a different name.
+
 ## 2.2.6 — 2026-09-16
 
 ### Fixed
