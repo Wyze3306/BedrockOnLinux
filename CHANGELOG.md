@@ -88,6 +88,15 @@
   Flatpak runtime on an X11 desktop: refused before, one provider found and
   PLAY allowed after.
 
+- **NixOS: importing content no longer crashes the launcher**
+  ([#263](https://github.com/Wyze3306/BedrockOnLinux/issues/263)). On GTK
+  desktops the file picker is GTK's own, and GTK aborts the whole program when
+  its file-chooser settings schema cannot be found — which, run from the
+  flake, it never could: *Settings schema 'org.gtk.Settings.FileChooser' is
+  not installed*. The flake's wrapper now adds GTK's schemas to
+  `XDG_DATA_DIRS`, as the workaround
+  [@tuxmanxd](https://github.com/tuxmanxd) found did by hand.
+
 ## 2.2.6 — 2026-09-16
 
 ### Fixed

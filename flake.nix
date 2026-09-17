@@ -40,10 +40,14 @@
           cp data/bedrock-on-linux.desktop $out/share/applications/
           cp data/icon.png $out/share/icons/hicolor/256x256/apps/bedrock-on-linux.png
 
+          # Qt shows GTK's file chooser on GTK desktops, and GTK aborts when
+          # its org.gtk.Settings.FileChooser schema is nowhere on
+          # XDG_DATA_DIRS -- which NixOS does not put there for us (#263).
           makeWrapper ${steam-run}/bin/steam-run $out/bin/bedrock-on-linux \
             --add-flags "${bolPython}/bin/python3" \
             --add-flags "$out/lib/bedrock-on-linux/bedrock-on-linux" \
-            --prefix PYTHONPATH : "$out/lib/bedrock-on-linux"
+            --prefix PYTHONPATH : "$out/lib/bedrock-on-linux" \
+            --suffix XDG_DATA_DIRS : "${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}"
         '';
 
         meta = {
