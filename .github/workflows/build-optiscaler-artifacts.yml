@@ -12,6 +12,7 @@ on:
       - "docs/OPTISCALER.md"
       - "tests/test_optiscaler.py"
       - ".github/workflows/build-optiscaler-artifacts.yml"
+      - ".github/workflows/build-app.yml"
 
 permissions:
   contents: write
