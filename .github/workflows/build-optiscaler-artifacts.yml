@@ -24,3 +24,4 @@ jobs:
     with:
       publish: false
       channel: nightly
+      dependency_repo: Wyze3306/BedrockOnLinux
