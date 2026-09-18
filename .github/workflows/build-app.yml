@@ -24,6 +24,14 @@ on:
         description: "release (versioned) or nightly (rolling prerelease)"
         type: string
         default: release
+      dependency_repo:
+        description: "Repository that publishes the pinned engine/xcurl dependency releases"
+        type: string
+        default: ""
+      dependency_repo:
+        description: "Repository that publishes the pinned engine/xcurl dependency releases"
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       publish:
@@ -53,6 +61,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       APPIMAGE_EXTRACT_AND_RUN: "1"
       BOL_ALLOW_PARTIAL_ARTIFACTS: ${{ vars.BOL_ALLOW_PARTIAL_ARTIFACTS }}
+      DEPENDENCY_REPO: ${{ inputs.dependency_repo || github.repository }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -82,17 +91,17 @@ jobs:
           engine_pin="$(grep -m1 '^WINEGDK_ARCHIVE_SHA256 = ' bol/config.py | cut -d'"' -f2)"
           xcurl_pin="$(grep -m1 '^OPENSSL_XCURL_ARCHIVE_SHA256 = ' bol/config.py | cut -d'"' -f2)"
           mkdir -p dist
-          gh release download "engine-${rev}" -R "${{ github.repository }}" \
+          gh release download "engine-${rev}" -R "${DEPENDENCY_REPO}" \
             -p "GDK-Proton-xuser-${rev}.tar.gz*" -D dist
           gh attestation verify "dist/GDK-Proton-xuser-${rev}.tar.gz" \
-            -R "${{ github.repository }}"
+            -R "${DEPENDENCY_REPO}"
           # Attestation proves provenance; also fail closed unless the bytes equal
           # the committed pin (not the downloaded .sha256 sidecar).
           echo "${engine_pin}  dist/GDK-Proton-xuser-${rev}.tar.gz" | sha256sum -c -
-          gh release download "xcurl-${xrev}" -R "${{ github.repository }}" \
+          gh release download "xcurl-${xrev}" -R "${DEPENDENCY_REPO}" \
             -p "openssl-xcurl-set-${xrev}.tar.gz*" -D dist
           gh attestation verify "dist/openssl-xcurl-set-${xrev}.tar.gz" \
-            -R "${{ github.repository }}"
+            -R "${DEPENDENCY_REPO}"
           echo "${xcurl_pin}  dist/openssl-xcurl-set-${xrev}.tar.gz" | sha256sum -c -
 
       - name: Build the glibc-2.31 Tcl/Tk cache in a Debian 11 (Bullseye) container
@@ -290,8 +299,8 @@ jobs:
           # (keeping its "Source code" snapshot and ref in sync with the build).
           # Only tolerate "not present" (first run) — a real delete failure must
           # surface, otherwise the tag would silently regress to stale.
-          if gh release view nightly -R "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release delete nightly -R "${{ github.repository }}" --cleanup-tag --yes
+          if gh release view nightly -R "${DEPENDENCY_REPO}" >/dev/null 2>&1; then
+            gh release delete nightly -R "${DEPENDENCY_REPO}" --cleanup-tag --yes
           fi
 
       - name: Publish the application release
