@@ -60,16 +60,45 @@
   <screenshots>
     <screenshot type="default">
       <caption>The launcher: pick a version, sign in, play</caption>
-      <image>https://raw.githubusercontent.com/Wyze3306/BedrockOnLinux/v1.0.9/screenshot.png</image>
+      <image>https://raw.githubusercontent.com/Wyze3306/BedrockOnLinux/v2.2.6/screenshot.png</image>
     </screenshot>
   </screenshots>
 
   <content_rating type="oars-1.1">
+    <content_attribute id="violence-fantasy">mild</content_attribute>
     <content_attribute id="social-chat">moderate</content_attribute>
     <content_attribute id="money-purchasing">mild</content_attribute>
   </content_rating>
 
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>gamepad</control>
+  </supports>
+
   <releases>
+    <release version="2.2.7" date="2026-09-17">
+      <description>
+        <p>Repair keeps your worlds, the Flatpak starts Minecraft on X11 desktops
+           and in Steam Deck Game Mode again, and several setups that stopped
+           the launcher or PLAY work again.</p>
+        <ul>
+          <li>keeps worlds and settings when the Wine prefix is repaired, as the
+              button always promised</li>
+          <li>lets the Flatpak start Minecraft on X11 sessions, Steam Deck Game
+              Mode included, instead of refusing PLAY as an unsafe graphics
+              session</li>
+          <li>stops breaking a Steam installed after BedrockOnLinux</li>
+          <li>opens again after its files were moved to another drive</li>
+          <li>starts the game when the launcher was opened from the Cinnamon
+              application menu</li>
+          <li>says when glibc is too old for the Minecraft downloader, and when
+              a DNS filter blocks the download servers</li>
+          <li>moves the Flatpak to the GNOME 51 runtime, with a narrower
+              sandbox</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.6" date="2026-09-16">
       <description>
         <p>Minecraft 1.26.50 and newer start again, and come up online: your

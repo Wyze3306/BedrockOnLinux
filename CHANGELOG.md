@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.2.7 — 2026-09-17
 
 ### Fixed
 
@@ -108,6 +108,28 @@
   whatever filters `xboxlive.com` — a DNS ad blocker such as Pi-hole, AdGuard
   Home or NextDNS, a router's parental controls, or a VPN. Every mirror is
   still tried first, since each one is a different name.
+
+### Packaging
+
+- **The Flatpak moves to the GNOME 51 runtime and gives up its access to the
+  Flatpak service.** GNOME 49 is at the end of its life now that GNOME 51 is
+  out. The manifest granted `--talk-name=org.freedesktop.Flatpak`, on the
+  belief that pressure-vessel needs it to start the game's container
+  ([#157](https://github.com/Wyze3306/BedrockOnLinux/issues/157)). It does
+  not: inside Flatpak, pressure-vessel asks the
+  `org.freedesktop.portal.Flatpak` portal for a sub-sandbox, which every app
+  may do. That name was a way out of the sandbox that nothing used, and it is
+  gone; `--allow=per-app-dev-shm` takes its place, so the container shares
+  `/dev/shm` with the launcher, as it does in Heroic and Bottles. Checked in
+  the GNOME 51 build without the permission: the Steam Runtime container
+  starts through the portal, GDK-Proton runs a command in a fresh prefix,
+  Vulkan sees the NVIDIA GPU, and `xodus-cli` loads the runtime's WebKitGTK.
+  The bundled Python moves to 3.12.14 — the runtime's own is 3.14, which
+  PySide6 6.9 does not support — and its packages are now installed by pip
+  from the same pinned files, with cffi built from source. The `zstd` module
+  is dropped, since the runtime ships `zstd` and `unzstd`, and the store
+  listing gets the current screenshot and declares keyboard, mouse and
+  controller support.
 
 ## 2.2.6 — 2026-09-16
 

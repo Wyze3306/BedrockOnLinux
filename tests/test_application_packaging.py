@@ -192,27 +192,57 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
     def test_flatpak_installs_project_license(self):
         manifest = (ROOT / "flatpak/io.github.wyze3306.BedrockOnLinux.yml").read_text(
             encoding="utf-8")
+        # Flathub wants every module's licence under share/licenses/$FLATPAK_ID.
         self.assertIn(
-            "install -Dm644 LICENSE /app/share/licenses/bedrock-on-linux/LICENSE",
+            "install -Dm644 LICENSE /app/share/licenses/"
+            "io.github.wyze3306.BedrockOnLinux/bedrock-on-linux/LICENSE",
             manifest,
         )
 
-    def test_flatpak_vendors_pyside6_not_tcl_tk(self):
+    def test_flatpak_installs_pyside6_with_its_own_python(self):
         manifest = (
             ROOT / "flatpak/io.github.wyze3306.BedrockOnLinux.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("name: python3-pyside6", manifest)
-        self.assertIn("name: python3-packaging", manifest)
-        self.assertIn("name: python3-xlib", manifest)
-        self.assertIn(
-            "shiboken6-6.9.3-cp39-abi3-manylinux_2_28_x86_64.whl", manifest)
-        self.assertIn(
-            "pyside6_essentials-6.9.3-cp39-abi3-manylinux_2_28_x86_64.whl",
-            manifest)
+        self.assertIn("name: python3-dependencies", manifest)
+        self.assertIn("--no-index --find-links=", manifest)
+        for wheel in (
+                "shiboken6-6.9.3-cp39-abi3-manylinux_2_28_x86_64.whl",
+                "pyside6_essentials-6.9.3-cp39-abi3-manylinux_2_28_x86_64.whl",
+                "packaging-26.2-py3-none-any.whl",
+                "python_xlib-0.33-py2.py3-none-any.whl",
+                "six-1.17.0-py2.py3-none-any.whl"):
+            self.assertIn(wheel, manifest)
+        # PySide6 6.9 refuses the runtime's Python 3.14, so the app keeps its
+        # own 3.12 and installs the wheels with that interpreter's pip.
+        self.assertIn("/Python-3.12.", manifest)
+        self.assertIn("/app/bin/python3 -m pip install", manifest)
+        self.assertIn("/lib/python3.12/tkinter", manifest)  # still cleaned up
         self.assertNotIn("name: tcl", manifest)
         self.assertNotIn("name: tk", manifest)
         self.assertNotIn("customtkinter", manifest)
-        self.assertIn("/lib/python3.12/tkinter", manifest)  # still cleaned up
+
+    def test_flatpak_game_container_uses_the_portal_not_the_flatpak_service(self):
+        manifest = (
+            ROOT / "flatpak/io.github.wyze3306.BedrockOnLinux.yml"
+        ).read_text(encoding="utf-8")
+        # pressure-vessel asks org.freedesktop.portal.Flatpak for its
+        # sub-sandbox; the Flatpak service itself is a sandbox escape (#157).
+        finish_args = re.findall(r"^  - (--\S+)$", manifest, re.MULTILINE)
+        self.assertIn("--allow=per-app-dev-shm", finish_args)
+        self.assertFalse([arg for arg in finish_args
+                          if arg.startswith("--talk-name=org.freedesktop.Flatpak")])
+        self.assertIn("runtime-version: '51'", manifest)
+
+    def test_release_flatpak_build_can_strip_like_flathub(self):
+        manifest = (
+            ROOT / "flatpak/io.github.wyze3306.BedrockOnLinux.yml"
+        ).read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/build-app.yml").read_text(
+            encoding="utf-8")
+        # The published manifest strips and splits debug info as Flathub
+        # does; the host flatpak-builder runs eu-strip and debugedit for that.
+        self.assertNotIn("strip: false", manifest)
+        self.assertIn(" flatpak flatpak-builder elfutils debugedit\n", workflow)
 
     def test_flatpak_keeps_game_controller_device_access(self):
         manifest = (
