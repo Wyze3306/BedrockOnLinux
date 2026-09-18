@@ -28,10 +28,6 @@ on:
         description: "Repository that publishes the pinned engine/xcurl dependency releases"
         type: string
         default: ""
-      dependency_repo:
-        description: "Repository that publishes the pinned engine/xcurl dependency releases"
-        type: string
-        default: ""
   workflow_dispatch:
     inputs:
       publish:
