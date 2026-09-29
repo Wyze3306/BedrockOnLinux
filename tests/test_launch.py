@@ -19,7 +19,8 @@ class ReadyLaunchHarness:
                                prefix_idle=True, mark=None, preauth=True,
                                lock_fds=(), managed_engine=True,
                                umu_env=None, account=None, on_started=None,
-                               extra_settings=None, environ=None):
+                               extra_settings=None, environ=None,
+                               diagnosis=()):
         content = root / "content"
         logs = root / "logs"
         data = root / "data"
@@ -73,7 +74,8 @@ class ReadyLaunchHarness:
             mock.patch.object(launch, "snapshot_game_options"),
             mock.patch.object(launch, "restore_truncated_game_options"),
             mock.patch.object(launch, "seed_default_servers"),
-            mock.patch.object(launch, "diagnose", return_value=[]),
+            mock.patch.object(launch, "diagnose",
+                              return_value=list(diagnosis)),
             mock.patch.object(launch, "_prefix_stably_idle_after_wrapper",
                               return_value=prefix_idle),
             mock.patch.object(launch, "arm_gpu_launch", side_effect=arm),
@@ -1156,6 +1158,37 @@ class SteamWindowTaggingDuringLaunchTests(ReadyLaunchHarness,
                              gamescope_installed=True)
         factory.assert_not_called()
         self.assertEqual(self.tagger_calls, [])
+
+
+class RefusedLicenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
+    """#280: a launch Microsoft refused a licence for is a failed launch."""
+
+    def _play(self, diagnosis):
+        def popen(*_a, **_kw):
+            proc = mock.Mock()
+            proc.wait.return_value = 0
+            return proc
+
+        with tempfile.TemporaryDirectory() as td:
+            return self._exercise_ready_launch(
+                Path(td), popen,
+                arm=lambda: "owned-token",
+                disarm=lambda _token: True,
+                diagnosis=diagnosis,
+            )
+
+    def test_the_refusal_ends_the_launch_with_its_explanation(self):
+        from bol.gamesetup import LICENCE_REFUSED
+        with self.assertRaises(launch.BolError) as raised:
+            self._play([LICENCE_REFUSED,
+                        "No Microsoft account linked — offline mode."])
+        self.assertEqual(str(raised.exception), LICENCE_REFUSED)
+        self.assertIn("account.microsoft.com/devices/content",
+                      str(raised.exception))
+
+    def test_any_other_diagnosis_leaves_the_launch_to_return(self):
+        self.assertEqual(self._play(["Out of memory (RAM/VRAM)."]), 0)
+        self.assertEqual(self._play([]), 0)
 
 
 class LaunchStartedHookTests(ReadyLaunchHarness, unittest.TestCase):

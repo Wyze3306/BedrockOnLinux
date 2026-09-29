@@ -71,6 +71,14 @@ class GameCrashDiagnosisTests(unittest.TestCase):
         self.assertFalse(
             any("memory access violation" in hit for hit in hits), hits)
 
+    def test_a_refused_licence_is_the_exact_cause_the_launch_reports(self):
+        # launch._launch_once raises on this very string (#280), so the rule
+        # has to hand it back unchanged.
+        hits = self._diagnose(
+            "not entitled to this content: Device group is full, please "
+            "remove a device and try again\n")
+        self.assertIn(gamesetup.LICENCE_REFUSED, hits)
+
 
 class OnlineDiagnosisTests(unittest.TestCase):
     def _diagnose(self, log, settings):

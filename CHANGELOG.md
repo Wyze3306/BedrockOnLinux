@@ -16,6 +16,15 @@
   alone; the launcher now reads that list the way SDL does. Started outside
   Steam, nothing changes.
 
+- **A licence Microsoft refuses at PLAY is shown in a dialog**
+  ([#280](https://github.com/Wyze3306/BedrockOnLinux/issues/280)). When the
+  account had reached its limit of ten Microsoft Store devices, the game did
+  not start and the launcher said why only in its activity log, so PLAY
+  looked as if it had done nothing. The launch now ends as *Minecraft could
+  not start*, with the reason and the page where devices are removed,
+  https://account.microsoft.com/devices/content; a shortcut that starts the
+  game without the window shows it as a desktop notification.
+
 ## 2.2.7 — 2026-09-17
 
 ### Fixed

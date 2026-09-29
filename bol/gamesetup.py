@@ -69,6 +69,15 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
     ok("Setup complete — sign in from the launcher, then click PLAY.")
 
 
+# Unlike every other cause below, this one means the game never started, so
+# the launch reports it as its failure rather than only listing it (#280).
+LICENCE_REFUSED = (
+    "Microsoft refused the game licence: this account has reached its limit "
+    "of ten Microsoft Store download devices. Remove the ones you no longer "
+    "use at https://account.microsoft.com/devices/content, then click PLAY "
+    "again.")
+
+
 _DIAG_RULES = [
     (r"d3d12_command_signature_init_state_template_dgc_(?:ext|nv):.*"
      r"Cannot implement command signature|"
@@ -116,11 +125,7 @@ _DIAG_RULES = [
     # An encrypted build is licensed to a device at every launch, so this is
     # a launch failure and not only a download one. The account is out of
     # Store devices, and where they are given back is not in the message.
-    (r"Device group is full",
-     "Microsoft refused the game licence: this account has reached its limit "
-     "of ten Microsoft Store download devices. Remove the ones you no longer "
-     "use at https://account.microsoft.com/devices/content, then click PLAY "
-     "again."),
+    (r"Device group is full", LICENCE_REFUSED),
     (r"\bInitialConnection[-_: ]*13(?!\d)",
      "LAN InitialConnection-13 — check that the host firewall allows "
      "Minecraft's inbound RakNet UDP 19132 and, on Windows, that the host "

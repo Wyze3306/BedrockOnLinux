@@ -31,7 +31,7 @@ from .fixups import (
     hide_signin_button,
 )
 from .gameinput import install_gameinput
-from .gamesetup import diagnose
+from .gamesetup import LICENCE_REFUSED, diagnose
 from .gpu_safety import (
     acknowledge_gpu_crash_command,
     arm_gpu_launch,
@@ -940,6 +940,13 @@ def _launch_once(lock_fds=(), on_started=None):
         warn("The Wine prefix may be broken. Automatic reset/relaunch is "
              "disabled for GPU safety; use the explicit Repair action, then "
              "click PLAY once.")
+    # Microsoft refused the licence, so the game never started. As one line
+    # among the diagnosis in a log the player does not have open, that left
+    # the launcher looking as if PLAY had done nothing at all (#280): end the
+    # launch as the failure it is, which the window shows in a dialog and a
+    # launcher-free shortcut as a desktop notification.
+    if LICENCE_REFUSED in hits:
+        raise BolError(LICENCE_REFUSED)
     return rc
 
 
