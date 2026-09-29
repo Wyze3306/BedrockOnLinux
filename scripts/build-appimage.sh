@@ -510,11 +510,14 @@ download_verified \
   "appimagetool build 295"
 chmod 755 "$TOOL"
 RUNTIME="$CACHE/runtime-x86_64"
+# A dated release, not "continuous": upstream republishes that tag whenever
+# it rebuilds, which swaps the bytes behind the URL and fails the hash check
+# below -- it took the release build down on 2026-09-29.
 download_verified \
-  "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64" \
+  "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64" \
   "$RUNTIME" \
-  "1cc49bcf1e2ccd593c379adb17c9f85a36d619088296504de95b1d06215aebbf" \
-  "AppImage type-2 x86_64 runtime"
+  "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d" \
+  "AppImage type-2 x86_64 runtime 20251108"
 # readelf translates its field labels, so read the header in the C locale:
 # on a French or German build host "Class:" is "Classe:" and this check would
 # reject a perfectly good runtime.
