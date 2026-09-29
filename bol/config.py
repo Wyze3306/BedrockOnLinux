@@ -118,7 +118,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native19"
 # which no engine had, so each of them stayed on its loading screen (#167).
 WINEGDK_ARCHIVE_SHA256 = "e0ead91c3003ff6d4e01995dc8590d21603251d2e71a51c594eab0c3271eabff"
 # Build workflows verify this deterministic intermediate before reusing it.
-WINEGDK_PREFIX_SHA256 = "5e790543d13a42b594df03dc9adfad16980cfd471ed8f1cfcbc55718e1791e25"
+WINEGDK_PREFIX_SHA256 = "f0d5b219ff1c8a42c9893e7d6bc17b42e37412ebbf1d1e6ca7a4882fee36893a"
 
 SELF_REPO = WINEGDK_PREBUILT_REPO
 
