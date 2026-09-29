@@ -41,8 +41,10 @@ readonly VENDORED_PATH_MAP_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0008
 readonly VENDORED_PATH_MAP_PATCH_SHA256="7510e707abf9869d40b855754d58c025e1bd98cec455bef3dbec79e9d14461a3"
 readonly VENDORED_XSYSTEM_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0009-xgameruntime-support-IXSystemImpl2-5-and-stub-XSystemHandleTrack.patch"
 readonly VENDORED_XSYSTEM_PATCH_SHA256="c0a8e35717368fdc31f5ba6374ecb64aacb84cbd1dc22958077cff9ab5e2c301"
+readonly VENDORED_SAVE_PICKER_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0010-windows.storage-implement-the-file-save-picker.patch"
+readonly VENDORED_SAVE_PICKER_PATCH_SHA256="6ec2431cd854c2ae9f47ca6936dff19b0309c82ad3f3bc3fdcd0a9361ecd511c"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
-readonly SOURCE_SHA256SUMS_SHA256="027969bfa0e28aa7bec32a4a85ee2afe64ff274062479aeaf9e46a527a67979b"
+readonly SOURCE_SHA256SUMS_SHA256="92b278c21e3e0e344369b4bdddee720c5ad0e7c5768b70fad71c714ea22a5f02"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
 readonly GLIBC_CEILING="2.31"
@@ -558,6 +560,11 @@ fi
 [[ "$(sha256sum "$VENDORED_XSYSTEM_PATCH" | cut -d' ' -f1)" == \
     "$VENDORED_XSYSTEM_PATCH_SHA256" ]] ||
   die "vendored XSystem interface patch SHA-256 mismatch"
+[[ -f "$VENDORED_SAVE_PICKER_PATCH" ]] ||
+  die "vendored file save picker patch is missing"
+[[ "$(sha256sum "$VENDORED_SAVE_PICKER_PATCH" | cut -d' ' -f1)" == \
+    "$VENDORED_SAVE_PICKER_PATCH_SHA256" ]] ||
+  die "vendored file save picker patch SHA-256 mismatch"
 [[ "$SOURCE_DATE_EPOCH" == "$EXPECTED_SOURCE_DATE_EPOCH" ]] ||
   die "WineGDK source timestamp changed: $SOURCE_DATE_EPOCH"
 
@@ -607,6 +614,7 @@ vendored_xstore_patch_sha256=$VENDORED_XSTORE_PATCH_SHA256
 vendored_mapped_fd_patch_sha256=$VENDORED_MAPPED_FD_PATCH_SHA256
 vendored_path_map_patch_sha256=$VENDORED_PATH_MAP_PATCH_SHA256
 vendored_xsystem_patch_sha256=$VENDORED_XSYSTEM_PATCH_SHA256
+vendored_save_picker_patch_sha256=$VENDORED_SAVE_PICKER_PATCH_SHA256
 source_sha256sums_sha256=$SOURCE_SHA256SUMS_SHA256
 source_date_epoch=$SOURCE_DATE_EPOCH
 debian_suite=$DEBIAN_SUITE
@@ -679,6 +687,11 @@ git -C "$WORK_ROOT/source" apply --check "$VENDORED_XSYSTEM_PATCH" ||
   die "vendored XSystem interface patch does not apply"
 git -C "$WORK_ROOT/source" apply "$VENDORED_XSYSTEM_PATCH" ||
   die "could not apply vendored XSystem interface patch"
+printf '==> Applying the Windows.Storage file save picker\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_SAVE_PICKER_PATCH" ||
+  die "vendored file save picker patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_SAVE_PICKER_PATCH" ||
+  die "could not apply vendored file save picker patch"
 [[ -f "$SOURCE_SHA256SUMS" ]] || die "WineGDK source hash manifest is missing"
 [[ "$(sha256sum "$SOURCE_SHA256SUMS" | cut -d' ' -f1)" == \
     "$SOURCE_SHA256SUMS_SHA256" ]] ||

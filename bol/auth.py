@@ -1370,6 +1370,14 @@ def wine_apply_winegdk_prereqs():
             r"Software\Microsoft\WindowsRuntime\ActivatableClassId"
             r"\Microsoft.Windows.Storage.Pickers.FileOpenPicker",
             "DllPath", r"C:\windows\system32\windows.storage.dll"),
+        # Every export -- a structure, a world, the album -- asks for this
+        # one (#167). Wine registers a class only when its prefix is
+        # updated, and the engine's reproducible wine.inf never looks newer,
+        # so an existing prefix would not learn about it otherwise.
+        reg_sz(
+            r"Software\Microsoft\WindowsRuntime\ActivatableClassId"
+            r"\Windows.Storage.Pickers.FileSavePicker",
+            "DllPath", r"C:\windows\system32\windows.storage.dll"),
     ]
     # Azure rejects Wine GnuTLS' TLS 1.3 handshake (7-byte fatal Alert →
     # 0x80090304); forcing TLS 1.2 via DefaultSecureProtocols lets the

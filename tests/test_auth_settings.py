@@ -58,11 +58,18 @@ class WineGdkPrerequisiteTests(unittest.TestCase):
                 r"\\Microsoft.Windows.Storage.Pickers.FileOpenPicker]",
                 system,
             )
+            # The save picker every export asks for (#167) is registered the
+            # same way.
+            self.assertIn(
+                r"[Software\\Microsoft\\WindowsRuntime\\ActivatableClassId"
+                r"\\Windows.Storage.Pickers.FileSavePicker]",
+                system,
+            )
             self.assertIn(
                 r'"DllPath"="C:\\windows\\system32\\windows.storage.dll"',
                 system,
             )
-            self.assertEqual(system.count('"DllPath"='), 1)
+            self.assertEqual(system.count('"DllPath"='), 2)
             self.assertEqual((prefix / "system.reg").read_bytes(), system_once)
             self.assertEqual((prefix / "user.reg").read_bytes(), user_once)
 

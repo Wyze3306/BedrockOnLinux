@@ -119,7 +119,30 @@ them all. The patch also makes `XSystemHandleTrack`, which registers a
 handle-lifetime debugging callback, report success instead of `E_NOTIMPL`; no
 callback is ever delivered.
 
+The `0010` patch implements `Windows.Storage.Pickers.FileSavePicker`, the
+system save picker every export Minecraft offers goes through: a structure
+block's, a world's, the album's PDF and ZIP, a model's GLB. The game activates
+the class, gives it its window through `IInitializeWithWindow`, fills
+`SuggestedFileName`, `SuggestedStartLocation` and `FileTypeChoices`, and reads
+the chosen path back from the `StorageFile` `PickSaveFileAsync` completes
+with. Nothing registered or implemented the class, so activation failed with
+`REGDB_E_CLASSNOTREG` and every export stayed on its loading screen (issue
+#167). The picker lives in `windows.storage.dll` beside the WinAppSDK open
+picker and follows the single-file open picker's shape: a modal
+`GetSaveFileNameW` owned by the caller's window, filtered by the file-type
+choices in the order they were inserted, which asks before replacing a file
+and appends the default extension to a name typed without one; an operation
+that is already complete when `PickSaveFileAsync` returns; a picked file that
+exists afterwards, empty unless it was already there, and no file for a
+dismissed dialog. The file is the `Windows.Storage.StorageFile` that
+`windows.storage.applicationdata.dll` serves. `windows.storage.pickers.idl`
+declares the `Windows.Storage.Pickers` types; its `PickerLocationId` shares its
+C enumerator names with the WinAppSDK one, so `savepicker.c` is the only file
+that includes it. Wine registers a class only when it updates a prefix, which
+the engine's reproducible `wine.inf` timestamp never triggers, so the launcher
+registers this one in the prefix before every launch.
+
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
 native5 delta and its follow-ups. The Bullseye builder applies the reviewed r12
 and native patches when the target commit is unavailable, always applies `0002`
-through `0009`, then verifies the complete resulting source tree.
+through `0010`, then verifies the complete resulting source tree.

@@ -48,6 +48,9 @@ XSYSTEM_PATCH = (
     DELTA / "0009-xgameruntime-support-IXSystemImpl2-5-and-stub-"
             "XSystemHandleTrack.patch"
 )
+SAVE_PICKER_PATCH = (
+    DELTA / "0010-windows.storage-implement-the-file-save-picker.patch"
+)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -66,6 +69,7 @@ CHANGED_FILES = {
     "dlls/windows.storage/main.c",
     "dlls/windows.storage/pickers.c",
     "dlls/windows.storage/private.h",
+    "dlls/windows.storage/savepicker.c",
     "dlls/windows.storage/tests/storage.c",
     "dlls/windows.storage/vector.c",
     "dlls/xgameruntime/GDKComponent/System/User/XUser.c",
@@ -89,6 +93,7 @@ CHANGED_FILES = {
     "include/microsoft.ui.idl",
     "include/microsoft.windows.storage.pickers.idl",
     "include/objidlbase.idl",
+    "include/windows.storage.pickers.idl",
     "include/xgame.idl",
     "include/xgameerr.h",
     "libs/uuid/uuid.c",
@@ -149,6 +154,10 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
             self._constant("VENDORED_XSYSTEM_PATCH_SHA256"),
         )
         self.assertEqual(
+            hashlib.sha256(SAVE_PICKER_PATCH.read_bytes()).hexdigest(),
+            self._constant("VENDORED_SAVE_PICKER_PATCH_SHA256"),
+        )
+        self.assertEqual(
             hashlib.sha256(SOURCE_SUMS.read_bytes()).hexdigest(),
             self._constant("SOURCE_SHA256SUMS_SHA256"),
         )
@@ -169,7 +178,8 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         context_callback = CONTEXT_CALLBACK_PATCH.read_text()
         xstore = XSTORE_PATCH.read_text()
         mapped_fd = (MAPPED_FD_PATCH.read_text() + PATH_MAP_PATCH.read_text()
-                     + XSYSTEM_PATCH.read_text())
+                     + XSYSTEM_PATCH.read_text()
+                     + SAVE_PICKER_PATCH.read_text())
         self.assertTrue(text.startswith(f"From {WINEGDK_SOURCE_COMMIT} "))
         changed = {
             left for left, right in re.findall(
@@ -772,6 +782,30 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         # The flattened vtable itself is untouched: slot 4 stays the sandbox
         # query every one of those callers makes.
         self.assertNotIn("x_system_vtbl", XSYSTEM_PATCH.read_text())
+
+    def test_the_save_picker_is_what_every_export_activates(self):
+        # #167: RoActivateInstance of this class failed with
+        # REGDB_E_CLASSNOTREG, and every export stayed on its loading screen.
+        text = SAVE_PICKER_PATCH.read_text()
+        additions = "\n".join(
+            line[1:] for line in text.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        self.assertIn("runtimeclass FileSavePicker;", additions)
+        self.assertIn("RuntimeClass_Windows_Storage_Pickers_FileSavePicker",
+                      additions)
+        # The interface ID the game's own binary carries, not a guess at it.
+        self.assertIn("uuid(3286ffcb-617f-4cc5-af6a-b3fdf29ad145)", additions)
+        self.assertIn("0x3e68d4bd, 0x7135, 0x4d10", additions)
+        self.assertIn("GetSaveFileNameW( &dialog )", additions)
+        self.assertIn("OFN_OVERWRITEPROMPT", additions)
+        self.assertIn("dialog.lpstrDefExt = extension;", additions)
+        self.assertIn("OPEN_ALWAYS", additions)
+        self.assertIn("storage_file_statics_iid", additions)
+        # Declared once more so widl can compute the map's signature.
+        self.assertIn(
+            "interface Windows.Foundation.Collections.IVector<HSTRING>;",
+            additions)
 
     def test_every_vendored_patch_is_applied_and_attested(self):
         """A patch in third_party ships only if the builders apply it.

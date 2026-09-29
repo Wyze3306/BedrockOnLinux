@@ -1,0 +1,1540 @@
+From: BedrockOnLinux contributors
+Subject: [PATCH] windows.storage: implement Windows.Storage.Pickers.FileSavePicker
+
+Every export Minecraft offers -- a structure block's, a world's, the album's
+PDF and ZIP, a model's GLB -- goes through AppPlatform_GameCorePC::pickFile,
+which activates Windows.Storage.Pickers.FileSavePicker, hands it the game
+window through IInitializeWithWindow, fills SuggestedFileName,
+SuggestedStartLocation and FileTypeChoices, calls PickSaveFileAsync and reads
+the chosen path back through IStorageItem. Nothing registered or implemented
+the class, so RoActivateInstance failed with REGDB_E_CLASSNOTREG and the
+export spun on its loading screen for ever (BedrockOnLinux issue #167).
+
+Implement it in windows.storage.dll beside the WinAppSDK open picker. The
+dialog is GetSaveFileNameW, owned by the window the caller initialized the
+picker with, filtered by the file-type choices in the order they were
+inserted, opening in the suggested location with the suggested name, and
+appending the default extension -- DefaultFileExtension, else the first
+choice's first extension -- to a name typed without one. It asks before
+replacing a file. Like the single-file open picker it is modal, so
+PickSaveFileAsync returns an operation that is already complete and a
+completion handler runs as soon as it is set. As on Windows, the picked file
+exists afterwards, empty unless it was there before, in which case it is left
+untouched for its caller to write; a dismissed dialog completes with no file.
+The file is handed over as the Windows.Storage.StorageFile that
+windows.storage.applicationdata.dll serves.
+
+FileTypeChoices is an IMap<HSTRING, IVector<HSTRING> *> of the caller's own
+vectors. windows.storage.pickers.idl declares the Windows.Storage.Pickers
+types; its PickerLocationId shares its C enumerator names with the WinAppSDK
+one, so savepicker.c is the only file that sees it.
+---
+ dlls/windows.storage/Makefile.in    |    1 +
+ dlls/windows.storage/classes.idl    |    6 +
+ dlls/windows.storage/main.c         |    2 +
+ dlls/windows.storage/private.h      |   10 +
+ dlls/windows.storage/savepicker.c   | 1313 +++++++++++++++++++++++++++++++
+ include/Makefile.in                 |    1 +
+ include/windows.storage.pickers.idl |   90 +++
+ 7 files changed, 1423 insertions(+)
+
+diff --git a/dlls/windows.storage/Makefile.in b/dlls/windows.storage/Makefile.in
+index a9a62b6..9d8a35d 100644
+--- a/dlls/windows.storage/Makefile.in
++++ b/dlls/windows.storage/Makefile.in
+@@ -5,5 +5,6 @@ SOURCES = \
+ 	classes.idl \
+ 	main.c \
+ 	pickers.c \
++	savepicker.c \
+ 	streams.c \
+ 	vector.c
+diff --git a/dlls/windows.storage/classes.idl b/dlls/windows.storage/classes.idl
+index a5196ff..b869a7c 100644
+--- a/dlls/windows.storage/classes.idl
++++ b/dlls/windows.storage/classes.idl
+@@ -29,6 +29,7 @@ import "windowscontracts.idl";
+ import "windows.system.idl";
+ import "windows.storage.idl";
+ import "microsoft.windows.storage.pickers.idl";
++import "windows.storage.pickers.idl";
+ 
+ namespace Windows.Storage.Streams {
+     runtimeclass RandomAccessStreamReference;
+@@ -38,3 +39,8 @@ namespace Microsoft.Windows.Storage.Pickers
+ {
+     runtimeclass FileOpenPicker;
+ }
++
++namespace Windows.Storage.Pickers
++{
++    runtimeclass FileSavePicker;
++}
+diff --git a/dlls/windows.storage/main.c b/dlls/windows.storage/main.c
+index a7a98f6..d047d75 100644
+--- a/dlls/windows.storage/main.c
++++ b/dlls/windows.storage/main.c
+@@ -40,6 +40,8 @@ HRESULT WINAPI DllGetActivationFactory( HSTRING classid, IActivationFactory **fa
+         IActivationFactory_QueryInterface( random_access_stream_reference_factory, &IID_IActivationFactory, (void **)factory );
+     else if (!wcscmp( buffer, RuntimeClass_Microsoft_Windows_Storage_Pickers_FileOpenPicker ))
+         IActivationFactory_QueryInterface( file_open_picker_factory, &IID_IActivationFactory, (void **)factory );
++    else if (!wcscmp( buffer, file_save_picker_class_name ))
++        IActivationFactory_QueryInterface( file_save_picker_factory, &IID_IActivationFactory, (void **)factory );
+ 
+     if (*factory) return S_OK;
+     return CLASS_E_CLASSNOTAVAILABLE;
+diff --git a/dlls/windows.storage/private.h b/dlls/windows.storage/private.h
+index e0d489a..aef3906 100644
+--- a/dlls/windows.storage/private.h
++++ b/dlls/windows.storage/private.h
+@@ -43,13 +43,23 @@
+ #include "windows.storage.h"
+ #include "windows.storage.streams.h"
+ 
++/* Windows.Storage.Pickers and Microsoft.Windows.Storage.Pickers both define a
++ * PickerLocationId, and C enumerators carry no namespace, so no file can see
++ * both: savepicker.c defines WINDOWS_STORAGE_UWP_PICKERS for the former. */
++#ifdef WINDOWS_STORAGE_UWP_PICKERS
++#define WIDL_using_Windows_Storage_Pickers
++#include "windows.storage.pickers.h"
++#else
+ #define WIDL_using_Microsoft_UI
+ #define WIDL_using_Microsoft_Windows_Storage_Pickers
+ #include "microsoft.ui.h"
+ #include "microsoft.windows.storage.pickers.h"
++#endif
+ 
+ extern IActivationFactory *random_access_stream_reference_factory;
+ extern IActivationFactory *file_open_picker_factory;
++extern IActivationFactory *file_save_picker_factory;
++extern const WCHAR *const file_save_picker_class_name;
+ 
+ HRESULT hstring_vector_create( IVector_HSTRING **out );
+ 
+diff --git a/dlls/windows.storage/savepicker.c b/dlls/windows.storage/savepicker.c
+new file mode 100644
+index 0000000..81d1ee8
+--- /dev/null
++++ b/dlls/windows.storage/savepicker.c
+@@ -0,0 +1,1313 @@
++/* WinRT Windows.Storage.Pickers.FileSavePicker implementation.
++ *
++ * Copyright 2026 BedrockOnLinux contributors
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ */
++
++#define WINDOWS_STORAGE_UWP_PICKERS
++#include "private.h"
++#include "roapi.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(storage);
++
++/* main.c instantiates the GUIDs of every header private.h pulls in, and this
++ * is the one header it cannot include (see private.h), so the two this file
++ * uses are instantiated here, with the values widl computes for them. */
++const GUID IID___x_ABI_CWindows_CStorage_CPickers_CIFileSavePicker =
++    {0x3286ffcb, 0x617f, 0x4cc5, {0xaf, 0x6a, 0xb3, 0xfd, 0xf2, 0x9a, 0xd1, 0x45}};
++const GUID IID___FIMap_2_HSTRING___FIVector_1_HSTRING =
++    {0xe475ca9d, 0x6afb, 0x5992, {0x99, 0x3e, 0x53, 0xe6, 0xef, 0x7a, 0x9e, 0xcd}};
++
++#define ASYNC_CLOSED ((AsyncStatus)4)
++
++/* A desktop COM interface rather than a WinRT one, which no header here
++ * declares: a desktop app hands the picker its owner window through it. */
++typedef struct IInitializeWithWindow IInitializeWithWindow;
++
++typedef struct IInitializeWithWindowVtbl
++{
++    HRESULT (WINAPI *QueryInterface)( IInitializeWithWindow *iface, REFIID iid, void **out );
++    ULONG (WINAPI *AddRef)( IInitializeWithWindow *iface );
++    ULONG (WINAPI *Release)( IInitializeWithWindow *iface );
++    HRESULT (WINAPI *Initialize)( IInitializeWithWindow *iface, HWND hwnd );
++} IInitializeWithWindowVtbl;
++
++struct IInitializeWithWindow
++{
++    const IInitializeWithWindowVtbl *lpVtbl;
++};
++
++static const IID IID_IInitializeWithWindow =
++    {0x3e68d4bd, 0x7135, 0x4d10, {0x80, 0x18, 0x9f, 0xb6, 0xd9, 0xf3, 0x3f, 0xa1}};
++
++/* Windows.Storage.StorageFile is served by windows.storage.applicationdata.dll,
++ * and windows.storage.idl only forward-declares its statics interface. Only
++ * the slots up to GetFileFromPathAsync are used. */
++struct storage_file_statics;
++
++struct storage_file_statics_vtbl
++{
++    HRESULT (WINAPI *QueryInterface)( struct storage_file_statics *iface, REFIID iid, void **out );
++    ULONG (WINAPI *AddRef)( struct storage_file_statics *iface );
++    ULONG (WINAPI *Release)( struct storage_file_statics *iface );
++    HRESULT (WINAPI *GetIids)( struct storage_file_statics *iface, ULONG *count, IID **iids );
++    HRESULT (WINAPI *GetRuntimeClassName)( struct storage_file_statics *iface, HSTRING *name );
++    HRESULT (WINAPI *GetTrustLevel)( struct storage_file_statics *iface, TrustLevel *level );
++    HRESULT (WINAPI *GetFileFromPathAsync)( struct storage_file_statics *iface, HSTRING path,
++                                            IAsyncOperation_StorageFile **operation );
++};
++
++struct storage_file_statics
++{
++    const struct storage_file_statics_vtbl *lpVtbl;
++};
++
++static const IID storage_file_statics_iid =
++    {0x5984c710, 0xdaf2, 0x43c8, {0x8b, 0xb4, 0xa4, 0xd3, 0xea, 0xcf, 0xd0, 0x3f}};
++
++struct type_choice
++{
++    HSTRING name;
++    IVector_HSTRING *extensions;
++};
++
++struct type_choices
++{
++    IMap_HSTRING_IVector_HSTRING IMap_HSTRING_IVector_HSTRING_iface;
++    LONG ref;
++    CRITICAL_SECTION cs;
++    struct type_choice *items;
++    UINT32 size;
++    UINT32 capacity;
++};
++
++struct file_save_picker
++{
++    IFileSavePicker IFileSavePicker_iface;
++    IInitializeWithWindow IInitializeWithWindow_iface;
++    LONG ref;
++    CRITICAL_SECTION cs;
++    HWND hwnd;
++    PickerLocationId location;
++    HSTRING settings_identifier;
++    HSTRING commit_button_text;
++    HSTRING default_extension;
++    HSTRING suggested_file_name;
++    IStorageFile *suggested_save_file;
++    struct type_choices *choices;
++};
++
++struct save_operation
++{
++    IAsyncOperation_StorageFile IAsyncOperation_StorageFile_iface;
++    IAsyncInfo IAsyncInfo_iface;
++    LONG ref;
++    CRITICAL_SECTION cs;
++    BOOL handler_set;
++    AsyncStatus status;
++    HRESULT error;
++    IAsyncOperationCompletedHandler_StorageFile *handler;
++    IStorageFile *result;
++};
++
++struct file_save_picker_factory
++{
++    IActivationFactory IActivationFactory_iface;
++    LONG ref;
++};
++
++static HRESULT copy_iids( ULONG *iid_count, IID **iids, UINT count, const IID *const *values )
++{
++    UINT i;
++
++    if (!iid_count || !iids) return E_POINTER;
++    *iid_count = 0;
++    if (!(*iids = CoTaskMemAlloc( count * sizeof(**iids) ))) return E_OUTOFMEMORY;
++    for (i = 0; i < count; ++i) (*iids)[i] = *values[i];
++    *iid_count = count;
++    return S_OK;
++}
++
++static HRESULT class_name( const WCHAR *name, HSTRING *value )
++{
++    if (!value) return E_POINTER;
++    return WindowsCreateString( name, wcslen( name ), value );
++}
++
++static HRESULT base_trust( TrustLevel *level )
++{
++    if (!level) return E_POINTER;
++    *level = BaseTrust;
++    return S_OK;
++}
++
++static BOOL same_string( HSTRING a, HSTRING b )
++{
++    INT32 order = 1;
++    return SUCCEEDED(WindowsCompareStringOrdinal( a, b, &order )) && !order;
++}
++
++/* Windows.Foundation.Collections.IMap<HSTRING, IVector<HSTRING> *>: the
++ * FileTypeChoices map. The caller fills it and the dialog reads it back, in
++ * the order the choices were inserted. */
++
++static inline struct type_choices *choices_from_iface( IMap_HSTRING_IVector_HSTRING *iface )
++{
++    return CONTAINING_RECORD( iface, struct type_choices, IMap_HSTRING_IVector_HSTRING_iface );
++}
++
++static HRESULT WINAPI choices_QueryInterface( IMap_HSTRING_IVector_HSTRING *iface, REFIID iid, void **out )
++{
++    struct type_choices *choices = choices_from_iface( iface );
++
++    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
++
++    if (!out) return E_POINTER;
++    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
++        IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IMap_HSTRING_IVector_HSTRING ))
++    {
++        IInspectable_AddRef( (IInspectable *)(*out = &choices->IMap_HSTRING_IVector_HSTRING_iface) );
++        return S_OK;
++    }
++
++    FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
++    *out = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG WINAPI choices_AddRef( IMap_HSTRING_IVector_HSTRING *iface )
++{
++    return InterlockedIncrement( &choices_from_iface( iface )->ref );
++}
++
++static void choices_clear( struct type_choices *choices )
++{
++    UINT32 i;
++
++    for (i = 0; i < choices->size; ++i)
++    {
++        WindowsDeleteString( choices->items[i].name );
++        IVector_HSTRING_Release( choices->items[i].extensions );
++    }
++    choices->size = 0;
++}
++
++static ULONG WINAPI choices_Release( IMap_HSTRING_IVector_HSTRING *iface )
++{
++    struct type_choices *choices = choices_from_iface( iface );
++    ULONG ref = InterlockedDecrement( &choices->ref );
++
++    if (!ref)
++    {
++        choices_clear( choices );
++        free( choices->items );
++        choices->cs.DebugInfo->Spare[0] = 0;
++        DeleteCriticalSection( &choices->cs );
++        free( choices );
++    }
++    return ref;
++}
++
++static HRESULT WINAPI choices_GetIids( IMap_HSTRING_IVector_HSTRING *iface, ULONG *count, IID **iids )
++{
++    static const IID *values[] = {&IID_IMap_HSTRING_IVector_HSTRING};
++    return copy_iids( count, iids, ARRAY_SIZE(values), values );
++}
++
++static HRESULT WINAPI choices_GetRuntimeClassName( IMap_HSTRING_IVector_HSTRING *iface, HSTRING *name )
++{
++    return class_name( L"Windows.Foundation.Collections.IMap`2<String, "
++                       L"Windows.Foundation.Collections.IVector`1<String>>", name );
++}
++
++static HRESULT WINAPI choices_GetTrustLevel( IMap_HSTRING_IVector_HSTRING *iface, TrustLevel *level )
++{
++    return base_trust( level );
++}
++
++static struct type_choice *choices_find( struct type_choices *choices, HSTRING key )
++{
++    UINT32 i;
++
++    for (i = 0; i < choices->size; ++i)
++        if (same_string( choices->items[i].name, key )) return &choices->items[i];
++    return NULL;
++}
++
++static HRESULT WINAPI choices_Lookup( IMap_HSTRING_IVector_HSTRING *iface, HSTRING key, IVector_HSTRING **value )
++{
++    struct type_choices *choices = choices_from_iface( iface );
++    struct type_choice *choice;
++    HRESULT hr = S_OK;
++
++    TRACE( "iface %p, key %s, value %p.\n", iface, debugstr_hstring( key ), value );
++
++    if (!value) return E_POINTER;
++    *value = NULL;
++    EnterCriticalSection( &choices->cs );
++    if ((choice = choices_find( choices, key )))
++        IVector_HSTRING_AddRef( *value = choice->extensions );
++    else
++        hr = E_BOUNDS;
++    LeaveCriticalSection( &choices->cs );
++    return hr;
++}
++
++static HRESULT WINAPI choices_get_Size( IMap_HSTRING_IVector_HSTRING *iface, UINT32 *size )
++{
++    struct type_choices *choices = choices_from_iface( iface );
++
++    if (!size) return E_POINTER;
++    EnterCriticalSection( &choices->cs );
++    *size = choices->size;
++    LeaveCriticalSection( &choices->cs );
++    return S_OK;
++}
++
++static HRESULT WINAPI choices_HasKey( IMap_HSTRING_IVector_HSTRING *iface, HSTRING key, boolean *found )
++{
++    struct type_choices *choices = choices_from_iface( iface );
++
++    if (!found) return E_POINTER;
++    EnterCriticalSection( &choices->cs );
++    *found = choices_find( choices, key ) != NULL;
++    LeaveCriticalSection( &choices->cs );
++    return S_OK;
++}
++
++static HRESULT WINAPI choices_GetView( IMap_HSTRING_IVector_HSTRING *iface, IMapView_HSTRING_IVector_HSTRING **view )
++{
++    FIXME( "iface %p, view %p stub!\n", iface, view );
++    if (view) *view = NULL;
++    return E_NOTIMPL;
++}
++
++static HRESULT WINAPI choices_Insert( IMap_HSTRING_IVector_HSTRING *iface, HSTRING key, IVector_HSTRING *value,
++                                      boolean *replaced )
++{
++    struct type_choices *choices = choices_from_iface( iface );
++    struct type_choice *choice, *items;
++    HSTRING name;
++    HRESULT hr;
++
++    TRACE( "iface %p, key %s, value %p, replaced %p.\n", iface, debugstr_hstring( key ), value, replaced );
++
++    if (!value || !replaced) return E_POINTER;
++    EnterCriticalSection( &choices->cs );
++    if ((choice = choices_find( choices, key )))
++    {
++        IVector_HSTRING_AddRef( value );
++        IVector_HSTRING_Release( choice->extensions );
++        choice->extensions = value;
++        *replaced = TRUE;
++        LeaveCriticalSection( &choices->cs );
++        return S_OK;
++    }
++    if (choices->size == choices->capacity)
++    {
++        UINT32 capacity = max( 4, choices->capacity * 2 );
++        if (!(items = realloc( choices->items, capacity * sizeof(*items) )))
++        {
++            LeaveCriticalSection( &choices->cs );
++            return E_OUTOFMEMORY;
++        }
++        choices->items = items;
++        choices->capacity = capacity;
++    }
++    if (FAILED(hr = WindowsDuplicateString( key, &name )))
++    {
++        LeaveCriticalSection( &choices->cs );
++        return hr;
++    }
++    choices->items[choices->size].name = name;
++    IVector_HSTRING_AddRef( choices->items[choices->size].extensions = value );
++    choices->size++;
++    *replaced = FALSE;
++    LeaveCriticalSection( &choices->cs );
++    return S_OK;
++}
++
++static HRESULT WINAPI choices_Remove( IMap_HSTRING_IVector_HSTRING *iface, HSTRING key )
++{
++    struct type_choices *choices = choices_from_iface( iface );
++    struct type_choice *choice;
++    HRESULT hr = S_OK;
++
++    EnterCriticalSection( &choices->cs );
++    if ((choice = choices_find( choices, key )))
++    {
++        UINT32 index = choice - choices->items;
++        WindowsDeleteString( choice->name );
++        IVector_HSTRING_Release( choice->extensions );
++        memmove( choice, choice + 1, (choices->size - index - 1) * sizeof(*choice) );
++        choices->size--;
++    }
++    else hr = E_BOUNDS;
++    LeaveCriticalSection( &choices->cs );
++    return hr;
++}
++
++static HRESULT WINAPI choices_Clear( IMap_HSTRING_IVector_HSTRING *iface )
++{
++    struct type_choices *choices = choices_from_iface( iface );
++
++    EnterCriticalSection( &choices->cs );
++    choices_clear( choices );
++    LeaveCriticalSection( &choices->cs );
++    return S_OK;
++}
++
++static const IMap_HSTRING_IVector_HSTRINGVtbl choices_vtbl =
++{
++    choices_QueryInterface,
++    choices_AddRef,
++    choices_Release,
++    choices_GetIids,
++    choices_GetRuntimeClassName,
++    choices_GetTrustLevel,
++    choices_Lookup,
++    choices_get_Size,
++    choices_HasKey,
++    choices_GetView,
++    choices_Insert,
++    choices_Remove,
++    choices_Clear,
++};
++
++static HRESULT type_choices_create( struct type_choices **out )
++{
++    struct type_choices *choices;
++
++    if (!(choices = calloc( 1, sizeof(*choices) ))) return E_OUTOFMEMORY;
++    choices->IMap_HSTRING_IVector_HSTRING_iface.lpVtbl = &choices_vtbl;
++    choices->ref = 1;
++    InitializeCriticalSectionEx( &choices->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
++    choices->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": type_choices.cs");
++    *out = choices;
++    return S_OK;
++}
++
++/* Windows.Foundation.IAsyncOperation<Windows.Storage.StorageFile *>. The
++ * dialog is modal and has been answered by the time the operation exists, so
++ * it is created complete, and a completion handler runs as soon as it is set:
++ * C++/WinRT installs one and waits on nothing else. A dismissed dialog
++ * completes with no file, as on Windows. */
++
++static inline struct save_operation *operation_from_iface( IAsyncOperation_StorageFile *iface )
++{
++    return CONTAINING_RECORD( iface, struct save_operation, IAsyncOperation_StorageFile_iface );
++}
++
++static inline struct save_operation *operation_from_info( IAsyncInfo *iface )
++{
++    return CONTAINING_RECORD( iface, struct save_operation, IAsyncInfo_iface );
++}
++
++static HRESULT operation_query_interface( struct save_operation *operation, REFIID iid, void **out )
++{
++    if (!out) return E_POINTER;
++    *out = NULL;
++    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
++        IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IAsyncOperation_StorageFile ))
++        *out = &operation->IAsyncOperation_StorageFile_iface;
++    else if (IsEqualGUID( iid, &IID_IAsyncInfo ))
++        *out = &operation->IAsyncInfo_iface;
++    else
++    {
++        FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
++        return E_NOINTERFACE;
++    }
++    InterlockedIncrement( &operation->ref );
++    return S_OK;
++}
++
++static ULONG operation_add_ref( struct save_operation *operation )
++{
++    return InterlockedIncrement( &operation->ref );
++}
++
++static ULONG operation_release( struct save_operation *operation )
++{
++    ULONG ref = InterlockedDecrement( &operation->ref );
++
++    if (!ref)
++    {
++        if (operation->handler) IAsyncOperationCompletedHandler_StorageFile_Release( operation->handler );
++        if (operation->result) IStorageFile_Release( operation->result );
++        operation->cs.DebugInfo->Spare[0] = 0;
++        DeleteCriticalSection( &operation->cs );
++        free( operation );
++    }
++    return ref;
++}
++
++static HRESULT WINAPI operation_QueryInterface( IAsyncOperation_StorageFile *iface, REFIID iid, void **out )
++{
++    return operation_query_interface( operation_from_iface( iface ), iid, out );
++}
++
++static ULONG WINAPI operation_AddRef( IAsyncOperation_StorageFile *iface )
++{
++    return operation_add_ref( operation_from_iface( iface ) );
++}
++
++static ULONG WINAPI operation_Release( IAsyncOperation_StorageFile *iface )
++{
++    return operation_release( operation_from_iface( iface ) );
++}
++
++static HRESULT WINAPI operation_GetIids( IAsyncOperation_StorageFile *iface, ULONG *count, IID **iids )
++{
++    static const IID *values[] = {&IID_IAsyncOperation_StorageFile, &IID_IAsyncInfo};
++    return copy_iids( count, iids, ARRAY_SIZE(values), values );
++}
++
++static HRESULT WINAPI operation_GetRuntimeClassName( IAsyncOperation_StorageFile *iface, HSTRING *name )
++{
++    if (!name) return E_POINTER;
++    *name = NULL;
++    return S_OK;
++}
++
++static HRESULT WINAPI operation_GetTrustLevel( IAsyncOperation_StorageFile *iface, TrustLevel *level )
++{
++    return base_trust( level );
++}
++
++static HRESULT WINAPI operation_put_Completed( IAsyncOperation_StorageFile *iface,
++                                               IAsyncOperationCompletedHandler_StorageFile *handler )
++{
++    struct save_operation *operation = operation_from_iface( iface );
++    AsyncStatus status;
++    HRESULT hr = S_OK;
++
++    TRACE( "iface %p, handler %p.\n", iface, handler );
++
++    EnterCriticalSection( &operation->cs );
++    if (operation->status == ASYNC_CLOSED)
++        hr = E_ILLEGAL_METHOD_CALL;
++    else if (operation->handler_set)
++        hr = E_ILLEGAL_DELEGATE_ASSIGNMENT;
++    else
++        operation->handler_set = TRUE;
++    status = operation->status;
++    LeaveCriticalSection( &operation->cs );
++
++    if (hr != S_OK || !handler) return hr;
++    operation_add_ref( operation );
++    IAsyncOperationCompletedHandler_StorageFile_Invoke( handler, iface, status );
++    operation_release( operation );
++    return S_OK;
++}
++
++static HRESULT WINAPI operation_get_Completed( IAsyncOperation_StorageFile *iface,
++                                               IAsyncOperationCompletedHandler_StorageFile **handler )
++{
++    struct save_operation *operation = operation_from_iface( iface );
++    HRESULT hr = S_OK;
++
++    if (!handler) return E_POINTER;
++    *handler = NULL;
++    EnterCriticalSection( &operation->cs );
++    if (operation->status == ASYNC_CLOSED) hr = E_ILLEGAL_METHOD_CALL;
++    LeaveCriticalSection( &operation->cs );
++    return hr;
++}
++
++static HRESULT WINAPI operation_GetResults( IAsyncOperation_StorageFile *iface, IStorageFile **results )
++{
++    struct save_operation *operation = operation_from_iface( iface );
++    HRESULT hr;
++
++    TRACE( "iface %p, results %p.\n", iface, results );
++
++    if (!results) return E_POINTER;
++    *results = NULL;
++    EnterCriticalSection( &operation->cs );
++    if (operation->status == Completed)
++    {
++        if (operation->result) IStorageFile_AddRef( *results = operation->result );
++        hr = S_OK;
++    }
++    else if (operation->status == Error)
++        hr = operation->error;
++    else
++        hr = E_ILLEGAL_METHOD_CALL;
++    LeaveCriticalSection( &operation->cs );
++    return hr;
++}
++
++static const IAsyncOperation_StorageFileVtbl operation_vtbl =
++{
++    operation_QueryInterface,
++    operation_AddRef,
++    operation_Release,
++    operation_GetIids,
++    operation_GetRuntimeClassName,
++    operation_GetTrustLevel,
++    operation_put_Completed,
++    operation_get_Completed,
++    operation_GetResults,
++};
++
++static HRESULT WINAPI async_info_QueryInterface( IAsyncInfo *iface, REFIID iid, void **out )
++{
++    return operation_query_interface( operation_from_info( iface ), iid, out );
++}
++
++static ULONG WINAPI async_info_AddRef( IAsyncInfo *iface )
++{
++    return operation_add_ref( operation_from_info( iface ) );
++}
++
++static ULONG WINAPI async_info_Release( IAsyncInfo *iface )
++{
++    return operation_release( operation_from_info( iface ) );
++}
++
++static HRESULT WINAPI async_info_GetIids( IAsyncInfo *iface, ULONG *count, IID **iids )
++{
++    static const IID *values[] = {&IID_IAsyncInfo, &IID_IAsyncOperation_StorageFile};
++    return copy_iids( count, iids, ARRAY_SIZE(values), values );
++}
++
++static HRESULT WINAPI async_info_GetRuntimeClassName( IAsyncInfo *iface, HSTRING *name )
++{
++    if (!name) return E_POINTER;
++    *name = NULL;
++    return S_OK;
++}
++
++static HRESULT WINAPI async_info_GetTrustLevel( IAsyncInfo *iface, TrustLevel *level )
++{
++    return base_trust( level );
++}
++
++static HRESULT WINAPI async_info_get_Id( IAsyncInfo *iface, UINT32 *id )
++{
++    struct save_operation *operation = operation_from_info( iface );
++    HRESULT hr = S_OK;
++
++    if (!id) return E_POINTER;
++    EnterCriticalSection( &operation->cs );
++    if (operation->status == ASYNC_CLOSED) hr = E_ILLEGAL_METHOD_CALL;
++    else *id = 1;
++    LeaveCriticalSection( &operation->cs );
++    return hr;
++}
++
++static HRESULT WINAPI async_info_get_Status( IAsyncInfo *iface, AsyncStatus *status )
++{
++    struct save_operation *operation = operation_from_info( iface );
++    HRESULT hr = S_OK;
++
++    if (!status) return E_POINTER;
++    EnterCriticalSection( &operation->cs );
++    if (operation->status == ASYNC_CLOSED) hr = E_ILLEGAL_METHOD_CALL;
++    else *status = operation->status;
++    LeaveCriticalSection( &operation->cs );
++    return hr;
++}
++
++static HRESULT WINAPI async_info_get_ErrorCode( IAsyncInfo *iface, HRESULT *error )
++{
++    struct save_operation *operation = operation_from_info( iface );
++    HRESULT hr = S_OK;
++
++    if (!error) return E_POINTER;
++    EnterCriticalSection( &operation->cs );
++    if (operation->status == ASYNC_CLOSED) hr = E_ILLEGAL_METHOD_CALL;
++    else *error = operation->status == Error ? operation->error : S_OK;
++    LeaveCriticalSection( &operation->cs );
++    return hr;
++}
++
++static HRESULT WINAPI async_info_Cancel( IAsyncInfo *iface )
++{
++    struct save_operation *operation = operation_from_info( iface );
++    HRESULT hr = S_OK;
++
++    EnterCriticalSection( &operation->cs );
++    if (operation->status == ASYNC_CLOSED) hr = E_ILLEGAL_METHOD_CALL;
++    LeaveCriticalSection( &operation->cs );
++    return hr;
++}
++
++static HRESULT WINAPI async_info_Close( IAsyncInfo *iface )
++{
++    struct save_operation *operation = operation_from_info( iface );
++    HRESULT hr = S_OK;
++
++    EnterCriticalSection( &operation->cs );
++    if (operation->status == ASYNC_CLOSED) hr = E_ILLEGAL_METHOD_CALL;
++    else operation->status = ASYNC_CLOSED;
++    LeaveCriticalSection( &operation->cs );
++    return hr;
++}
++
++static const IAsyncInfoVtbl async_info_vtbl =
++{
++    async_info_QueryInterface,
++    async_info_AddRef,
++    async_info_Release,
++    async_info_GetIids,
++    async_info_GetRuntimeClassName,
++    async_info_GetTrustLevel,
++    async_info_get_Id,
++    async_info_get_Status,
++    async_info_get_ErrorCode,
++    async_info_Cancel,
++    async_info_Close,
++};
++
++static HRESULT save_operation_create( HRESULT error, IStorageFile *result, IAsyncOperation_StorageFile **out )
++{
++    struct save_operation *operation;
++
++    if (!(operation = calloc( 1, sizeof(*operation) ))) return E_OUTOFMEMORY;
++    operation->IAsyncOperation_StorageFile_iface.lpVtbl = &operation_vtbl;
++    operation->IAsyncInfo_iface.lpVtbl = &async_info_vtbl;
++    operation->ref = 1;
++    operation->status = FAILED(error) ? Error : Completed;
++    operation->error = error;
++    if ((operation->result = result)) IStorageFile_AddRef( result );
++    InitializeCriticalSectionEx( &operation->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
++    operation->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": save_operation.cs");
++    *out = &operation->IAsyncOperation_StorageFile_iface;
++    return S_OK;
++}
++
++/* The dialog. */
++
++static const KNOWNFOLDERID *known_folder_from_location( PickerLocationId location )
++{
++    switch (location)
++    {
++    case PickerLocationId_DocumentsLibrary: return &FOLDERID_Documents;
++    case PickerLocationId_ComputerFolder: return &FOLDERID_ComputerFolder;
++    case PickerLocationId_Desktop: return &FOLDERID_Desktop;
++    case PickerLocationId_Downloads: return &FOLDERID_Downloads;
++    case PickerLocationId_MusicLibrary: return &FOLDERID_MusicLibrary;
++    case PickerLocationId_PicturesLibrary: return &FOLDERID_PicturesLibrary;
++    case PickerLocationId_VideosLibrary: return &FOLDERID_VideosLibrary;
++    case PickerLocationId_Objects3D: return &FOLDERID_Objects3D;
++    default: return NULL;
++    }
++}
++
++/* ".mcstructure" and "mcstructure" both become "*.mcstructure". */
++static SIZE_T append_pattern( WCHAR *buffer, HSTRING extension )
++{
++    const WCHAR *value;
++    UINT32 length;
++    SIZE_T written = 0;
++
++    value = WindowsGetStringRawBuffer( extension, &length );
++    if (length && value[0] == '*') { value++; length--; }
++    if (buffer) buffer[written] = '*';
++    written++;
++    if (!length || value[0] != '.')
++    {
++        if (buffer) buffer[written] = '.';
++        written++;
++    }
++    if (buffer) memcpy( buffer + written, value, length * sizeof(WCHAR) );
++    return written + length;
++}
++
++/* "*.a;*.b" for one choice, NUL-terminated, or NULL when it names no extension. */
++static WCHAR *choice_patterns( IVector_HSTRING *extensions )
++{
++    UINT32 count, i;
++    SIZE_T length = 1;
++    HSTRING extension;
++    WCHAR *patterns, *cursor;
++
++    if (FAILED(IVector_HSTRING_get_Size( extensions, &count )) || !count) return NULL;
++    for (i = 0; i < count; ++i)
++    {
++        if (FAILED(IVector_HSTRING_GetAt( extensions, i, &extension ))) return NULL;
++        length += append_pattern( NULL, extension ) + 1;
++        WindowsDeleteString( extension );
++    }
++    if (!(patterns = calloc( length, sizeof(WCHAR) ))) return NULL;
++    for (i = 0, cursor = patterns; i < count; ++i)
++    {
++        if (FAILED(IVector_HSTRING_GetAt( extensions, i, &extension ))) break;
++        if (cursor + append_pattern( NULL, extension ) + 1 >= patterns + length)
++        {
++            WindowsDeleteString( extension );
++            break;
++        }
++        if (i) *cursor++ = ';';
++        cursor += append_pattern( cursor, extension );
++        WindowsDeleteString( extension );
++    }
++    return patterns;
++}
++
++/* "Name\0*.a;*.b\0...\0\0", one entry per choice in insertion order, or every
++ * file when there is none. A choice without a name is shown by its patterns:
++ * an empty name would read as the end of the list. */
++static WCHAR *build_filter( struct type_choices *choices )
++{
++    static const WCHAR all_files[] = L"All Files\0*.*\0";
++    WCHAR *filter = NULL, *grown, **patterns = NULL;
++    const WCHAR *name;
++    SIZE_T length = 1, used = 0, name_length, patterns_length;
++    UINT32 i, count, length32;
++
++    EnterCriticalSection( &choices->cs );
++    count = choices->size;
++    if (count && (patterns = calloc( count, sizeof(*patterns) )))
++    {
++        for (i = 0; i < count; ++i)
++        {
++            if (!(patterns[i] = choice_patterns( choices->items[i].extensions ))) continue;
++            WindowsGetStringRawBuffer( choices->items[i].name, &length32 );
++            name_length = length32 ? length32 : wcslen( patterns[i] );
++            length += name_length + 1 + wcslen( patterns[i] ) + 1;
++        }
++        if (length > 1 && (filter = calloc( length, sizeof(WCHAR) )))
++        {
++            for (i = 0; i < count; ++i)
++            {
++                if (!patterns[i]) continue;
++                name = WindowsGetStringRawBuffer( choices->items[i].name, &length32 );
++                if (length32) name_length = length32;
++                else name_length = wcslen( name = patterns[i] );
++                patterns_length = wcslen( patterns[i] );
++                memcpy( filter + used, name, name_length * sizeof(WCHAR) );
++                used += name_length + 1;
++                memcpy( filter + used, patterns[i], patterns_length * sizeof(WCHAR) );
++                used += patterns_length + 1;
++            }
++        }
++        for (i = 0; i < count; ++i) free( patterns[i] );
++        free( patterns );
++    }
++    LeaveCriticalSection( &choices->cs );
++
++    if (filter) return filter;
++    if ((grown = malloc( sizeof(all_files) ))) memcpy( grown, all_files, sizeof(all_files) );
++    return grown;
++}
++
++/* The extension GetSaveFileNameW appends when the name typed has none:
++ * DefaultFileExtension, else the first extension of the first choice. */
++static WCHAR *default_extension( struct file_save_picker *picker )
++{
++    HSTRING extension = NULL;
++    const WCHAR *value;
++    UINT32 length, count;
++    WCHAR *copy = NULL;
++
++    if (!WindowsIsStringEmpty( picker->default_extension ))
++        WindowsDuplicateString( picker->default_extension, &extension );
++    else
++    {
++        EnterCriticalSection( &picker->choices->cs );
++        if (picker->choices->size &&
++            SUCCEEDED(IVector_HSTRING_get_Size( picker->choices->items[0].extensions, &count )) && count)
++            IVector_HSTRING_GetAt( picker->choices->items[0].extensions, 0, &extension );
++        LeaveCriticalSection( &picker->choices->cs );
++    }
++    value = WindowsGetStringRawBuffer( extension, &length );
++    while (length && (value[0] == '*' || value[0] == '.')) { value++; length--; }
++    if (length && (copy = calloc( length + 1, sizeof(WCHAR) ))) memcpy( copy, value, length * sizeof(WCHAR) );
++    WindowsDeleteString( extension );
++    return copy;
++}
++
++static void initial_file_name( struct file_save_picker *picker, WCHAR *buffer, UINT32 size )
++{
++    IStorageItem *item;
++    HSTRING path = NULL;
++    const WCHAR *value;
++    UINT32 length;
++
++    buffer[0] = 0;
++    if (picker->suggested_save_file &&
++        SUCCEEDED(IStorageFile_QueryInterface( picker->suggested_save_file, &IID_IStorageItem, (void **)&item )))
++    {
++        IStorageItem_get_Path( item, &path );
++        IStorageItem_Release( item );
++    }
++    if (WindowsIsStringEmpty( path ))
++    {
++        WindowsDeleteString( path );
++        WindowsDuplicateString( picker->suggested_file_name, &path );
++    }
++    value = WindowsGetStringRawBuffer( path, &length );
++    if (length < size)
++    {
++        memcpy( buffer, value, length * sizeof(WCHAR) );
++        buffer[length] = 0;
++    }
++    WindowsDeleteString( path );
++}
++
++/* A picked file exists on Windows, empty if it did not before; an existing
++ * one is left alone until its caller writes to it. */
++static HRESULT storage_file_for_path( const WCHAR *path, IStorageFile **file )
++{
++    struct storage_file_statics *statics = NULL;
++    IAsyncOperation_StorageFile *operation = NULL;
++    HSTRING name = NULL, value = NULL;
++    HANDLE handle;
++    HRESULT hr;
++
++    *file = NULL;
++    handle = CreateFileW( path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                          NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL );
++    if (handle == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32( GetLastError() );
++    CloseHandle( handle );
++
++    if (FAILED(hr = WindowsCreateString( RuntimeClass_Windows_Storage_StorageFile,
++                                         wcslen( RuntimeClass_Windows_Storage_StorageFile ), &name )))
++        return hr;
++    if (SUCCEEDED(hr = RoGetActivationFactory( name, &storage_file_statics_iid, (void **)&statics )) &&
++        SUCCEEDED(hr = WindowsCreateString( path, wcslen( path ), &value )) &&
++        SUCCEEDED(hr = statics->lpVtbl->GetFileFromPathAsync( statics, value, &operation )))
++        hr = IAsyncOperation_StorageFile_GetResults( operation, file );
++    if (operation) IAsyncOperation_StorageFile_Release( operation );
++    if (statics) statics->lpVtbl->Release( statics );
++    WindowsDeleteString( value );
++    WindowsDeleteString( name );
++    return hr;
++}
++
++static HRESULT show_save_dialog( struct file_save_picker *picker, IStorageFile **file )
++{
++    OPENFILENAMEW dialog = {0};
++    const KNOWNFOLDERID *folder_id;
++    WCHAR *filter, *extension, *path, *initial_dir = NULL;
++    HRESULT hr = S_OK;
++    DWORD error;
++
++    *file = NULL;
++    filter = build_filter( picker->choices );
++    extension = default_extension( picker );
++    if (!filter || !(path = calloc( 32768, sizeof(*path) )))
++    {
++        free( extension );
++        free( filter );
++        return E_OUTOFMEMORY;
++    }
++    initial_file_name( picker, path, 32768 );
++    if ((folder_id = known_folder_from_location( picker->location )))
++        SHGetKnownFolderPath( folder_id, 0, NULL, &initial_dir );
++
++    dialog.lStructSize = sizeof(dialog);
++    dialog.hwndOwner = picker->hwnd;
++    dialog.lpstrFilter = filter;
++    dialog.nFilterIndex = 1;
++    dialog.lpstrFile = path;
++    dialog.nMaxFile = 32768;
++    dialog.lpstrInitialDir = initial_dir;
++    dialog.lpstrDefExt = extension;
++    dialog.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_HIDEREADONLY;
++
++    if (GetSaveFileNameW( &dialog ))
++    {
++        TRACE( "picked %s.\n", debugstr_w( path ) );
++        hr = storage_file_for_path( path, file );
++    }
++    else if ((error = CommDlgExtendedError()))
++        hr = HRESULT_FROM_WIN32( error );
++    else
++        TRACE( "dismissed.\n" );
++
++    CoTaskMemFree( initial_dir );
++    free( path );
++    free( extension );
++    free( filter );
++    return hr;
++}
++
++/* Windows.Storage.Pickers.FileSavePicker. */
++
++static inline struct file_save_picker *picker_from_iface( IFileSavePicker *iface )
++{
++    return CONTAINING_RECORD( iface, struct file_save_picker, IFileSavePicker_iface );
++}
++
++static inline struct file_save_picker *picker_from_window( IInitializeWithWindow *iface )
++{
++    return CONTAINING_RECORD( iface, struct file_save_picker, IInitializeWithWindow_iface );
++}
++
++static HRESULT picker_query_interface( struct file_save_picker *picker, REFIID iid, void **out )
++{
++    if (!out) return E_POINTER;
++    *out = NULL;
++    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
++        IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IFileSavePicker ))
++        *out = &picker->IFileSavePicker_iface;
++    else if (IsEqualGUID( iid, &IID_IInitializeWithWindow ))
++        *out = &picker->IInitializeWithWindow_iface;
++    else
++    {
++        FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
++        return E_NOINTERFACE;
++    }
++    InterlockedIncrement( &picker->ref );
++    return S_OK;
++}
++
++static ULONG picker_release( struct file_save_picker *picker )
++{
++    ULONG ref = InterlockedDecrement( &picker->ref );
++
++    if (!ref)
++    {
++        IMap_HSTRING_IVector_HSTRING_Release( &picker->choices->IMap_HSTRING_IVector_HSTRING_iface );
++        if (picker->suggested_save_file) IStorageFile_Release( picker->suggested_save_file );
++        WindowsDeleteString( picker->suggested_file_name );
++        WindowsDeleteString( picker->default_extension );
++        WindowsDeleteString( picker->commit_button_text );
++        WindowsDeleteString( picker->settings_identifier );
++        picker->cs.DebugInfo->Spare[0] = 0;
++        DeleteCriticalSection( &picker->cs );
++        free( picker );
++    }
++    return ref;
++}
++
++static HRESULT WINAPI picker_QueryInterface( IFileSavePicker *iface, REFIID iid, void **out )
++{
++    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
++    return picker_query_interface( picker_from_iface( iface ), iid, out );
++}
++
++static ULONG WINAPI picker_AddRef( IFileSavePicker *iface )
++{
++    return InterlockedIncrement( &picker_from_iface( iface )->ref );
++}
++
++static ULONG WINAPI picker_Release( IFileSavePicker *iface )
++{
++    return picker_release( picker_from_iface( iface ) );
++}
++
++static HRESULT WINAPI picker_GetIids( IFileSavePicker *iface, ULONG *count, IID **iids )
++{
++    static const IID *values[] = {&IID_IFileSavePicker};
++    return copy_iids( count, iids, ARRAY_SIZE(values), values );
++}
++
++static HRESULT WINAPI picker_GetRuntimeClassName( IFileSavePicker *iface, HSTRING *name )
++{
++    return class_name( RuntimeClass_Windows_Storage_Pickers_FileSavePicker, name );
++}
++
++static HRESULT WINAPI picker_GetTrustLevel( IFileSavePicker *iface, TrustLevel *level )
++{
++    return base_trust( level );
++}
++
++static HRESULT get_string( struct file_save_picker *picker, HSTRING *field, HSTRING *value )
++{
++    HRESULT hr;
++
++    if (!value) return E_POINTER;
++    EnterCriticalSection( &picker->cs );
++    hr = WindowsDuplicateString( *field, value );
++    LeaveCriticalSection( &picker->cs );
++    return hr;
++}
++
++static HRESULT put_string( struct file_save_picker *picker, HSTRING *field, HSTRING value )
++{
++    HSTRING copy;
++    HRESULT hr;
++
++    if (FAILED(hr = WindowsDuplicateString( value, &copy ))) return hr;
++    EnterCriticalSection( &picker->cs );
++    WindowsDeleteString( *field );
++    *field = copy;
++    LeaveCriticalSection( &picker->cs );
++    return S_OK;
++}
++
++static HRESULT WINAPI picker_get_SettingsIdentifier( IFileSavePicker *iface, HSTRING *value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++    return get_string( picker, &picker->settings_identifier, value );
++}
++
++static HRESULT WINAPI picker_put_SettingsIdentifier( IFileSavePicker *iface, HSTRING value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++    return put_string( picker, &picker->settings_identifier, value );
++}
++
++static HRESULT WINAPI picker_get_SuggestedStartLocation( IFileSavePicker *iface, PickerLocationId *value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++
++    if (!value) return E_POINTER;
++    *value = picker->location;
++    return S_OK;
++}
++
++static HRESULT WINAPI picker_put_SuggestedStartLocation( IFileSavePicker *iface, PickerLocationId value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++
++    TRACE( "iface %p, value %d.\n", iface, value );
++
++    if (value < PickerLocationId_DocumentsLibrary || value > PickerLocationId_Unspecified) return E_INVALIDARG;
++    picker->location = value;
++    return S_OK;
++}
++
++static HRESULT WINAPI picker_get_CommitButtonText( IFileSavePicker *iface, HSTRING *value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++    return get_string( picker, &picker->commit_button_text, value );
++}
++
++static HRESULT WINAPI picker_put_CommitButtonText( IFileSavePicker *iface, HSTRING value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++    return put_string( picker, &picker->commit_button_text, value );
++}
++
++static HRESULT WINAPI picker_get_FileTypeChoices( IFileSavePicker *iface, IMap_HSTRING_IVector_HSTRING **value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++
++    if (!value) return E_POINTER;
++    IMap_HSTRING_IVector_HSTRING_AddRef( *value = &picker->choices->IMap_HSTRING_IVector_HSTRING_iface );
++    return S_OK;
++}
++
++static HRESULT WINAPI picker_get_DefaultFileExtension( IFileSavePicker *iface, HSTRING *value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++    return get_string( picker, &picker->default_extension, value );
++}
++
++static HRESULT WINAPI picker_put_DefaultFileExtension( IFileSavePicker *iface, HSTRING value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++    return put_string( picker, &picker->default_extension, value );
++}
++
++static HRESULT WINAPI picker_get_SuggestedSaveFile( IFileSavePicker *iface, IStorageFile **value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++
++    if (!value) return E_POINTER;
++    EnterCriticalSection( &picker->cs );
++    if ((*value = picker->suggested_save_file)) IStorageFile_AddRef( *value );
++    LeaveCriticalSection( &picker->cs );
++    return S_OK;
++}
++
++static HRESULT WINAPI picker_put_SuggestedSaveFile( IFileSavePicker *iface, IStorageFile *value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++    IStorageFile *previous;
++
++    if (value) IStorageFile_AddRef( value );
++    EnterCriticalSection( &picker->cs );
++    previous = picker->suggested_save_file;
++    picker->suggested_save_file = value;
++    LeaveCriticalSection( &picker->cs );
++    if (previous) IStorageFile_Release( previous );
++    return S_OK;
++}
++
++static HRESULT WINAPI picker_get_SuggestedFileName( IFileSavePicker *iface, HSTRING *value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++    return get_string( picker, &picker->suggested_file_name, value );
++}
++
++static HRESULT WINAPI picker_put_SuggestedFileName( IFileSavePicker *iface, HSTRING value )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++    return put_string( picker, &picker->suggested_file_name, value );
++}
++
++static HRESULT WINAPI picker_PickSaveFileAsync( IFileSavePicker *iface, IAsyncOperation_StorageFile **operation )
++{
++    struct file_save_picker *picker = picker_from_iface( iface );
++    IStorageFile *file = NULL;
++    HRESULT hr;
++
++    TRACE( "iface %p, operation %p.\n", iface, operation );
++
++    if (!operation) return E_POINTER;
++    *operation = NULL;
++    hr = show_save_dialog( picker, &file );
++    hr = save_operation_create( hr, file, operation );
++    if (file) IStorageFile_Release( file );
++    return hr;
++}
++
++static const IFileSavePickerVtbl picker_vtbl =
++{
++    picker_QueryInterface,
++    picker_AddRef,
++    picker_Release,
++    picker_GetIids,
++    picker_GetRuntimeClassName,
++    picker_GetTrustLevel,
++    picker_get_SettingsIdentifier,
++    picker_put_SettingsIdentifier,
++    picker_get_SuggestedStartLocation,
++    picker_put_SuggestedStartLocation,
++    picker_get_CommitButtonText,
++    picker_put_CommitButtonText,
++    picker_get_FileTypeChoices,
++    picker_get_DefaultFileExtension,
++    picker_put_DefaultFileExtension,
++    picker_get_SuggestedSaveFile,
++    picker_put_SuggestedSaveFile,
++    picker_get_SuggestedFileName,
++    picker_put_SuggestedFileName,
++    picker_PickSaveFileAsync,
++};
++
++static HRESULT WINAPI window_QueryInterface( IInitializeWithWindow *iface, REFIID iid, void **out )
++{
++    return picker_query_interface( picker_from_window( iface ), iid, out );
++}
++
++static ULONG WINAPI window_AddRef( IInitializeWithWindow *iface )
++{
++    return InterlockedIncrement( &picker_from_window( iface )->ref );
++}
++
++static ULONG WINAPI window_Release( IInitializeWithWindow *iface )
++{
++    return picker_release( picker_from_window( iface ) );
++}
++
++static HRESULT WINAPI window_Initialize( IInitializeWithWindow *iface, HWND hwnd )
++{
++    struct file_save_picker *picker = picker_from_window( iface );
++
++    TRACE( "iface %p, hwnd %p.\n", iface, hwnd );
++
++    picker->hwnd = hwnd;
++    return S_OK;
++}
++
++static const IInitializeWithWindowVtbl window_vtbl =
++{
++    window_QueryInterface,
++    window_AddRef,
++    window_Release,
++    window_Initialize,
++};
++
++static HRESULT file_save_picker_create( IInspectable **out )
++{
++    struct file_save_picker *picker;
++    HRESULT hr;
++
++    if (!(picker = calloc( 1, sizeof(*picker) ))) return E_OUTOFMEMORY;
++    if (FAILED(hr = type_choices_create( &picker->choices )))
++    {
++        free( picker );
++        return hr;
++    }
++    picker->IFileSavePicker_iface.lpVtbl = &picker_vtbl;
++    picker->IInitializeWithWindow_iface.lpVtbl = &window_vtbl;
++    picker->ref = 1;
++    picker->location = PickerLocationId_Unspecified;
++    InitializeCriticalSectionEx( &picker->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
++    picker->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": file_save_picker.cs");
++    *out = (IInspectable *)&picker->IFileSavePicker_iface;
++    return S_OK;
++}
++
++/* Activation. */
++
++static inline struct file_save_picker_factory *factory_from_iface( IActivationFactory *iface )
++{
++    return CONTAINING_RECORD( iface, struct file_save_picker_factory, IActivationFactory_iface );
++}
++
++static HRESULT WINAPI factory_QueryInterface( IActivationFactory *iface, REFIID iid, void **out )
++{
++    struct file_save_picker_factory *factory = factory_from_iface( iface );
++
++    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
++
++    if (!out) return E_POINTER;
++    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
++        IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IActivationFactory ))
++    {
++        InterlockedIncrement( &factory->ref );
++        *out = &factory->IActivationFactory_iface;
++        return S_OK;
++    }
++
++    FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
++    *out = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG WINAPI factory_AddRef( IActivationFactory *iface )
++{
++    return InterlockedIncrement( &factory_from_iface( iface )->ref );
++}
++
++static ULONG WINAPI factory_Release( IActivationFactory *iface )
++{
++    return InterlockedDecrement( &factory_from_iface( iface )->ref );
++}
++
++static HRESULT WINAPI factory_GetIids( IActivationFactory *iface, ULONG *count, IID **iids )
++{
++    static const IID *values[] = {&IID_IActivationFactory};
++    return copy_iids( count, iids, ARRAY_SIZE(values), values );
++}
++
++static HRESULT WINAPI factory_GetRuntimeClassName( IActivationFactory *iface, HSTRING *name )
++{
++    return class_name( RuntimeClass_Windows_Storage_Pickers_FileSavePicker, name );
++}
++
++static HRESULT WINAPI factory_GetTrustLevel( IActivationFactory *iface, TrustLevel *level )
++{
++    return base_trust( level );
++}
++
++static HRESULT WINAPI factory_ActivateInstance( IActivationFactory *iface, IInspectable **instance )
++{
++    TRACE( "iface %p, instance %p.\n", iface, instance );
++
++    if (!instance) return E_POINTER;
++    *instance = NULL;
++    return file_save_picker_create( instance );
++}
++
++static const IActivationFactoryVtbl factory_vtbl =
++{
++    factory_QueryInterface,
++    factory_AddRef,
++    factory_Release,
++    factory_GetIids,
++    factory_GetRuntimeClassName,
++    factory_GetTrustLevel,
++    factory_ActivateInstance,
++};
++
++static struct file_save_picker_factory factory =
++{
++    {&factory_vtbl},
++    1,
++};
++
++IActivationFactory *file_save_picker_factory = &factory.IActivationFactory_iface;
++const WCHAR *const file_save_picker_class_name = RuntimeClass_Windows_Storage_Pickers_FileSavePicker;
+diff --git a/include/Makefile.in b/include/Makefile.in
+index 051a6e3..b8a6c24 100644
+--- a/include/Makefile.in
++++ b/include/Makefile.in
+@@ -942,6 +942,7 @@ SOURCES = \
+ 	windows.security.isolation.idl \
+ 	windows.storage.fileproperties.idl \
+ 	windows.storage.idl \
++	windows.storage.pickers.idl \
+ 	windows.storage.search.idl \
+ 	windows.storage.streams.idl \
+ 	windows.system.idl \
+diff --git a/include/windows.storage.pickers.idl b/include/windows.storage.pickers.idl
+new file mode 100644
+index 0000000..0790f06
+--- /dev/null
++++ b/include/windows.storage.pickers.idl
+@@ -0,0 +1,90 @@
++/*
++ * Copyright 2026 BedrockOnLinux contributors
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ */
++
++#ifdef __WIDL__
++#pragma makedep header
++#pragma winrt ns_prefix
++#endif
++
++import "inspectable.idl";
++import "asyncinfo.idl";
++import "eventtoken.idl";
++import "windowscontracts.idl";
++import "windows.foundation.idl";
++import "windows.storage.idl";
++
++namespace Windows.Storage.Pickers
++{
++    typedef enum PickerLocationId PickerLocationId;
++
++    interface IFileSavePicker;
++
++    runtimeclass FileSavePicker;
++
++    declare
++    {
++        /* Declared here again so that widl can compute its signature for the
++         * maps below; its definition stays guarded by windows.foundation.h. */
++        interface Windows.Foundation.Collections.IVector<HSTRING>;
++        interface Windows.Foundation.Collections.IKeyValuePair<HSTRING, Windows.Foundation.Collections.IVector<HSTRING> *>;
++        interface Windows.Foundation.Collections.IIterable<Windows.Foundation.Collections.IKeyValuePair<HSTRING, Windows.Foundation.Collections.IVector<HSTRING> *> *>;
++        interface Windows.Foundation.Collections.IIterator<Windows.Foundation.Collections.IKeyValuePair<HSTRING, Windows.Foundation.Collections.IVector<HSTRING> *> *>;
++        interface Windows.Foundation.Collections.IMapView<HSTRING, Windows.Foundation.Collections.IVector<HSTRING> *>;
++        interface Windows.Foundation.Collections.IMap<HSTRING, Windows.Foundation.Collections.IVector<HSTRING> *>;
++    }
++
++    [contract(Windows.Foundation.UniversalApiContract, 1.0)]
++    enum PickerLocationId
++    {
++        DocumentsLibrary = 0,
++        ComputerFolder = 1,
++        Desktop = 2,
++        Downloads = 3,
++        HomeGroup = 4,
++        MusicLibrary = 5,
++        PicturesLibrary = 6,
++        VideosLibrary = 7,
++        Objects3D = 8,
++        Unspecified = 9,
++    };
++
++    [
++        contract(Windows.Foundation.UniversalApiContract, 1.0),
++        exclusiveto(Windows.Storage.Pickers.FileSavePicker),
++        uuid(3286ffcb-617f-4cc5-af6a-b3fdf29ad145)
++    ]
++    interface IFileSavePicker : IInspectable
++    {
++        [propget] HRESULT SettingsIdentifier([out, retval] HSTRING *value);
++        [propput] HRESULT SettingsIdentifier([in] HSTRING value);
++        [propget] HRESULT SuggestedStartLocation([out, retval] Windows.Storage.Pickers.PickerLocationId *value);
++        [propput] HRESULT SuggestedStartLocation([in] Windows.Storage.Pickers.PickerLocationId value);
++        [propget] HRESULT CommitButtonText([out, retval] HSTRING *value);
++        [propput] HRESULT CommitButtonText([in] HSTRING value);
++        [propget] HRESULT FileTypeChoices([out, retval] Windows.Foundation.Collections.IMap<HSTRING, Windows.Foundation.Collections.IVector<HSTRING> *> **value);
++        [propget] HRESULT DefaultFileExtension([out, retval] HSTRING *value);
++        [propput] HRESULT DefaultFileExtension([in] HSTRING value);
++        [propget] HRESULT SuggestedSaveFile([out, retval] Windows.Storage.StorageFile **value);
++        [propput] HRESULT SuggestedSaveFile([in] Windows.Storage.StorageFile *value);
++        [propget] HRESULT SuggestedFileName([out, retval] HSTRING *value);
++        [propput] HRESULT SuggestedFileName([in] HSTRING value);
++        HRESULT PickSaveFileAsync([out, retval] Windows.Foundation.IAsyncOperation<Windows.Storage.StorageFile *> **operation);
++    }
++
++    [
++        activatable(Windows.Foundation.UniversalApiContract, 1.0),
++        contract(Windows.Foundation.UniversalApiContract, 1.0),
++        marshaling_behavior(agile),
++        threading(both)
++    ]
++    runtimeclass FileSavePicker
++    {
++        [default] interface Windows.Storage.Pickers.IFileSavePicker;
++    }
++}

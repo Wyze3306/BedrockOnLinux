@@ -25,6 +25,21 @@
   https://account.microsoft.com/devices/content; a shortcut that starts the
   game without the window shows it as a desktop notification.
 
+- **Exporting works: structure blocks, worlds, the album**
+  ([#167](https://github.com/Wyze3306/BedrockOnLinux/issues/167)). Every
+  export Minecraft offers asks Windows for its save dialog,
+  `Windows.Storage.Pickers.FileSavePicker`, and the engine had none: the
+  request failed as a class that is not registered, and a structure block's
+  export — like *Export World* — stayed on its loading screen for ever, with
+  no file written. The engine (native19) now implements it: the dialog opens
+  where the game suggests, with the file name and the file type it asks for,
+  asks before replacing a file, and hands the chosen file back to the game.
+  The launcher registers the class in the Wine prefix before every launch,
+  since Wine would not add it to an existing one. Checked with a program that
+  asks for the dialog exactly the way Minecraft does: the file is created and
+  its path handed back, an existing file is left intact, and a dismissed
+  dialog returns nothing.
+
 - **A Microsoft Store sign-in that was only half kept is asked for again,
   instead of ending the download on `NotFound`**
   ([#260](https://github.com/Wyze3306/BedrockOnLinux/issues/260)). The

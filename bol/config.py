@@ -91,9 +91,9 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 # match the reviewed pins below.
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
 # The commit alone does not identify vendored follow-up patches.
-WINEGDK_SOURCE_MANIFEST_SHA256 = "027969bfa0e28aa7bec32a4a85ee2afe64ff274062479aeaf9e46a527a67979b"
-WINEGDK_BUILD_REV = "wow64-archs-native18"
-# native18 carries the ntdll loader patches the Microsoft Store packages need:
+WINEGDK_SOURCE_MANIFEST_SHA256 = "92b278c21e3e0e344369b4bdddee720c5ad0e7c5768b70fad71c714ea22a5f02"
+WINEGDK_BUILD_REV = "wow64-archs-native19"
+# native19 carries the ntdll loader patches the Microsoft Store packages need:
 # 0007 maps the main image from a descriptor, 0008 from a path so it survives
 # the Steam Linux Runtime container. Their game executable stays encrypted on
 # disk, so an engine without them cannot start the game -- which is why an
@@ -112,6 +112,10 @@ WINEGDK_BUILD_REV = "wow64-archs-native18"
 # ships the Xbox Live services thunks built against a newer GDK, which asks
 # XSystem for an interface ID the engine refused, and friends and Realms never
 # came up for a signed-in player (#266).
+#
+# native19 adds the Windows.Storage.Pickers.FileSavePicker of 0010, which every
+# export Minecraft offers asks for -- a structure, a world, the album -- and
+# which no engine had, so each of them stayed on its loading screen (#167).
 WINEGDK_ARCHIVE_SHA256 = "e0ead91c3003ff6d4e01995dc8590d21603251d2e71a51c594eab0c3271eabff"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "5e790543d13a42b594df03dc9adfad16980cfd471ed8f1cfcbc55718e1791e25"

@@ -323,6 +323,7 @@ WINEGDK_NATIVE_PROVENANCE_FILES=(
   0007-ntdll-load-main-image-from-a-mapped-fd.patch
   0008-ntdll-accept-a-path-in-the-image-map.patch
   0009-xgameruntime-support-IXSystemImpl2-5-and-stub-XSystemHandleTrack.patch
+  0010-windows.storage-implement-the-file-save-picker.patch
 )
 
 verify_sha256() {
@@ -372,10 +373,10 @@ verify_winegdk_source_provenance() {
     "ee0543f11737a11f5edec389967bb41482c7f5eda3807c24d171dd6bf6301274" \
     "WineGDK r12 source delta"
   verify_sha256 "$native_root/README.md" \
-    "ab92ce75b331a83affc8e2758cc2ce3106eb5e1a25f7e02111a8a91cc205dd40" \
+    "a545e1d6d4f1920ad4c82e83a4a735ef2ed476bb9b7c504833eb36d91126ba38" \
     "WineGDK native5 source-delta README"
   verify_sha256 "$native_root/SOURCE-SHA256SUMS" \
-    "027969bfa0e28aa7bec32a4a85ee2afe64ff274062479aeaf9e46a527a67979b" \
+    "92b278c21e3e0e344369b4bdddee720c5ad0e7c5768b70fad71c714ea22a5f02" \
     "WineGDK native5 source hash lock"
   verify_sha256 \
     "$native_root/0001-winegdk-native5-Xbox-and-file-picker-runtime.patch" \
@@ -413,6 +414,10 @@ verify_winegdk_source_provenance() {
     "$native_root/0009-xgameruntime-support-IXSystemImpl2-5-and-stub-XSystemHandleTrack.patch" \
     "c0a8e35717368fdc31f5ba6374ecb64aacb84cbd1dc22958077cff9ab5e2c301" \
     "WineGDK XSystem interface revisions"
+  verify_sha256 \
+    "$native_root/0010-windows.storage-implement-the-file-save-picker.patch" \
+    "6ec2431cd854c2ae9f47ca6936dff19b0309c82ad3f3bc3fdcd0a9361ecd511c" \
+    "WineGDK Windows.Storage file save picker"
 }
 
 has_marker() {
@@ -898,6 +903,7 @@ for relative_root, names in (
         "native5/0007-ntdll-load-main-image-from-a-mapped-fd.patch",
         "native5/0008-ntdll-accept-a-path-in-the-image-map.patch",
         "native5/0009-xgameruntime-support-IXSystemImpl2-5-and-stub-XSystemHandleTrack.patch",
+        "native5/0010-windows.storage-implement-the-file-save-picker.patch",
     )),
     (gdk_proton_provenance_root, ("provenance.env",)),
 ):
