@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A controller that Steam Input drives moves the launcher's highlight once
+  per press** ([#288](https://github.com/Wyze3306/BedrockOnLinux/issues/288)).
+  With Steam Input on — Game Mode on a Steam Deck, Big Picture anywhere — a
+  PlayStation controller reached the launcher twice: as itself, *Wireless
+  Controller*, and as the virtual *Microsoft X-Box 360 pad* Steam feeds on its
+  behalf. Every press counted twice, and turning Steam Input off fixed the
+  launcher only to lose the controller in the game. Steam names the
+  controllers it has taken over in the environment of everything it starts,
+  `SDL_GAMECONTROLLER_IGNORE_DEVICES`, so that programs keep its virtual pad
+  alone; the launcher now reads that list the way SDL does. Started outside
+  Steam, nothing changes.
+
 ## 2.2.7 — 2026-09-17
 
 ### Fixed

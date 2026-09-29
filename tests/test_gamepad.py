@@ -45,6 +45,7 @@ class IoctlEncodingTests(unittest.TestCase):
         self.assertEqual(gamepad._EVIOCGNAME(256), 0x81004506)
         self.assertEqual(gamepad._EVIOCGBIT(EV_KEY, 96), 0x80604521)
         self.assertEqual(gamepad._EVIOCGABS(ABS_X), 0x80184540)
+        self.assertEqual(gamepad._EVIOCGID(), 0x80084502)
 
     def test_bit_set_reads_the_capability_bitmap(self):
         bits = bitmap(BTN_SOUTH, BTN_START)
@@ -304,6 +305,113 @@ class DiscoveryTests(unittest.TestCase):
         self.assertFalse(reader.start())
         self.assertEqual(reader.device_names, ())
         self.assertFalse(gamepad.available("/nonexistent/input"))
+
+
+# What Steam puts in the environment of a shortcut it starts with Steam Input
+# on, for a DualShock 4 it has taken over.
+DS4 = (0x054C, 0x09CC)
+STEAM_VIRTUAL_PAD = (0x28DE, 0x11FF)
+STEAM_ENV = {
+    "SDL_GAMECONTROLLER_IGNORE_DEVICES": "0x054c/0x05c4,0x054c/0x09cc",
+    "SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD": "1",
+}
+
+
+class SteamInputFilterTests(unittest.TestCase):
+    """#288: one press on a pad Steam Input drives must count once."""
+
+    def test_nothing_is_skipped_without_steam(self):
+        keep = gamepad.ControllerFilter({})
+        self.assertFalse(keep.skips(DS4))
+        self.assertFalse(keep.skips(STEAM_VIRTUAL_PAD))
+
+    def test_the_pad_steam_took_over_is_skipped_and_its_virtual_pad_kept(self):
+        steam = gamepad.ControllerFilter(STEAM_ENV)
+        self.assertTrue(steam.skips(DS4))
+        self.assertTrue(steam.skips((0x054C, 0x05C4)))
+        self.assertFalse(steam.skips(STEAM_VIRTUAL_PAD))
+        # A controller Steam did not list is somebody else's to use.
+        self.assertFalse(steam.skips((0x045E, 0x0B12)))
+
+    def test_an_unreadable_identity_is_never_skipped(self):
+        self.assertFalse(gamepad.ControllerFilter(STEAM_ENV).skips(None))
+
+    def test_an_allow_list_skips_everything_it_does_not_name(self):
+        only = gamepad.ControllerFilter({
+            "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT": "0x28DE/0x11FF"})
+        self.assertFalse(only.skips(STEAM_VIRTUAL_PAD))
+        self.assertTrue(only.skips(DS4))
+
+    def test_the_list_can_come_from_a_file(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", delete=False) as handle:
+            handle.write("0x054c/0x09cc\n")
+        self.addCleanup(os.unlink, handle.name)
+        from_file = gamepad.ControllerFilter({
+            "SDL_GAMECONTROLLER_IGNORE_DEVICES": "@" + handle.name})
+        self.assertTrue(from_file.skips(DS4))
+        missing = gamepad.ControllerFilter({
+            "SDL_GAMECONTROLLER_IGNORE_DEVICES": "@/nonexistent/list"})
+        self.assertFalse(missing.skips(DS4))
+
+    def test_a_malformed_list_skips_nothing(self):
+        junk = gamepad.ControllerFilter({
+            "SDL_GAMECONTROLLER_IGNORE_DEVICES": "054c:09cc, nonsense"})
+        self.assertFalse(junk.skips(DS4))
+
+    def _probe_as(self, usb_id, environ):
+        import tempfile
+        from unittest import mock
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        node = os.path.join(tmp, "event5")
+        open(node, "w").close()
+        reader = GamepadReader(lambda action: None, input_dir=tmp,
+                               environ=environ)
+        with mock.patch.object(gamepad, "looks_like_gamepad",
+                               return_value=True), \
+                mock.patch.object(gamepad, "device_usb_id",
+                                  return_value=usb_id):
+            found = reader._probe(node)
+        if isinstance(found, _Device):
+            self.addCleanup(found.close)
+        return found
+
+    def test_the_reader_listens_to_the_virtual_pad_only(self):
+        self.assertIs(self._probe_as(DS4, STEAM_ENV), gamepad.NOT_A_GAMEPAD)
+        self.assertIsInstance(self._probe_as(STEAM_VIRTUAL_PAD, STEAM_ENV),
+                              _Device)
+        # Outside Steam the physical pad is the only one there is.
+        self.assertIsInstance(self._probe_as(DS4, {}), _Device)
+
+    def test_the_controller_status_lists_what_the_reader_uses(self):
+        import tempfile
+        from unittest import mock
+        ids = {"event3": DS4, "event7": STEAM_VIRTUAL_PAD}
+        nodes = {}
+        real_open = os.open
+
+        def tracked_open(path, flags):
+            fd = real_open(path, flags)
+            nodes[fd] = os.path.basename(path)
+            return fd
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ids:
+                open(os.path.join(tmp, name), "w").close()
+            with mock.patch.object(gamepad.os, "open",
+                                   side_effect=tracked_open), \
+                    mock.patch.object(gamepad, "looks_like_gamepad",
+                                      return_value=True), \
+                    mock.patch.object(gamepad, "device_name",
+                                      side_effect=lambda fd: nodes[fd]), \
+                    mock.patch.object(gamepad, "device_usb_id",
+                                      side_effect=lambda fd: ids[nodes[fd]]):
+                steam = gamepad.connected(tmp, "/nonexistent",
+                                          environ=STEAM_ENV)
+                plain = gamepad.connected(tmp, "/nonexistent", environ={})
+        self.assertEqual(steam, (["event7"], 0))
+        self.assertEqual(plain, (["event3", "event7"], 0))
 
 
 if __name__ == "__main__":

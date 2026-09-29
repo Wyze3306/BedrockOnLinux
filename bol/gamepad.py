@@ -15,8 +15,8 @@ python-evdev.  The launcher ships as a .deb, an AppImage, a Flatpak and a
 single-file .pyz, and a dependency that has to be present in all four — and
 importable *before* the GUI toolkit finishes bootstrapping — is a much larger
 liability than the ~100 lines of struct and ioctl work below.  The kernel ABI
-used here (``input_event``, ``EVIOCGBIT``, ``EVIOCGABS``) has been stable since
-Linux 2.6.
+used here (``input_event``, ``EVIOCGBIT``, ``EVIOCGABS``, ``EVIOCGID``) has
+been stable since Linux 2.6.
 
 Reading the device nodes needs no special privilege in practice: udev tags
 every ``ID_INPUT_JOYSTICK`` device with ``uaccess`` (70-uaccess.rules), so the
@@ -44,6 +44,7 @@ agree on.
 
 import errno
 import os
+import re
 import select
 import struct
 import threading
@@ -136,6 +137,14 @@ def _ioc(direction, type_char, number, size):
 _IOC_READ = 2
 
 
+# struct input_id { __u16 bustype, vendor, product, version; }
+_INPUT_ID = struct.Struct("4H")
+
+
+def _EVIOCGID():
+    return _ioc(_IOC_READ, "E", 0x02, _INPUT_ID.size)
+
+
 def _EVIOCGNAME(length):
     return _ioc(_IOC_READ, "E", 0x06, length)
 
@@ -170,6 +179,76 @@ def device_name(fd):
     if not raw:
         return ""
     return bytes(raw).split(b"\0", 1)[0].decode("utf-8", "replace").strip()
+
+
+def device_usb_id(fd):
+    """The device's (vendor, product) pair, or None when it cannot be read."""
+    raw = _ioctl_bytes(fd, _EVIOCGID(), _INPUT_ID.size)
+    if not raw:
+        return None
+    _bustype, vendor, product, _version = _INPUT_ID.unpack(bytes(raw))
+    return vendor, product
+
+
+# Steam Input drives a controller by reading the physical device and feeding
+# a virtual Xbox 360 pad of its own -- "Microsoft X-Box 360 pad 0" -- while the
+# physical one stays exactly where it was. A program that reads both takes
+# every press twice (#288). Steam's answer is the list it puts in the
+# environment of everything it starts: SDL_GAMECONTROLLER_IGNORE_DEVICES names
+# the physical controllers it has taken over, and SDL, Proton and every other
+# well-behaved reader skip those and keep the virtual pad. These are SDL's
+# hints, read the way SDL reads them.
+_IGNORE_DEVICES = "SDL_GAMECONTROLLER_IGNORE_DEVICES"
+_IGNORE_DEVICES_EXCEPT = "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT"
+_ALLOW_STEAM_VIRTUAL_GAMEPAD = "SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD"
+_STEAM_VIRTUAL_GAMEPAD = (0x28DE, 0x11FF)
+_VIDPID = re.compile(r"0x([0-9a-fA-F]+)\s*/\s*0x([0-9a-fA-F]+)")
+
+
+def _vidpid_list(value):
+    """The (vendor, product) pairs an SDL device-list hint names.
+
+    "0x054c/0x09cc,0x28de/0x1205", or "@path" to read that text from a file.
+    """
+    text = str(value or "")
+    if text.startswith("@"):
+        try:
+            with open(text[1:], "r", encoding="utf-8",
+                      errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            return frozenset()
+    return frozenset((int(vendor, 16) & 0xFFFF, int(product, 16) & 0xFFFF)
+                     for vendor, product in _VIDPID.findall(text))
+
+
+def _truthy(value):
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+class ControllerFilter:
+    """Which controllers Steam Input has asked everyone else to leave alone."""
+
+    def __init__(self, environ=None):
+        env = os.environ if environ is None else environ
+        self.ignored = _vidpid_list(env.get(_IGNORE_DEVICES))
+        self.allowed = _vidpid_list(env.get(_IGNORE_DEVICES_EXCEPT))
+        self.keep_steam_virtual = _truthy(env.get(_ALLOW_STEAM_VIRTUAL_GAMEPAD))
+
+    def skips(self, usb_id):
+        """Whether a controller with this (vendor, product) is to be skipped.
+
+        Mirrors SDL's own check: Steam's virtual pad is kept when Steam says
+        so, an allow list wins over an ignore list, and a device whose
+        identity cannot be read is never skipped.
+        """
+        if usb_id is None or not (self.ignored or self.allowed):
+            return False
+        if self.keep_steam_virtual and tuple(usb_id) == _STEAM_VIRTUAL_GAMEPAD:
+            return False
+        if self.allowed:
+            return tuple(usb_id) not in self.allowed
+        return tuple(usb_id) in self.ignored
 
 
 def looks_like_gamepad(fd):
@@ -286,6 +365,8 @@ class GamepadReader:
     and again on each auto-repeat, so a Tk consumer must hand the name over to
     the main loop rather than touching widgets from the callback.
     `on_devices(names)` reports the connected set whenever it changes.
+    A controller Steam Input has taken over is left alone, see
+    `ControllerFilter`.
     """
 
     REPEAT_DELAY = 0.40           # before a held direction starts repeating
@@ -293,10 +374,12 @@ class GamepadReader:
     SCROLL_INTERVAL = 0.05        # the scroll stick repeats much faster
     RESCAN_INTERVAL = 2.0         # hot-plug polling
 
-    def __init__(self, on_action, on_devices=None, input_dir=INPUT_DIR):
+    def __init__(self, on_action, on_devices=None, input_dir=INPUT_DIR,
+                 environ=None):
         self._on_action = on_action
         self._on_devices = on_devices
         self._input_dir = input_dir
+        self._filter = ControllerFilter(environ)
         self._devices = {}                     # path -> _Device
         self._ignored = {}                     # path -> identity, not a pad
         self._repeats = {}                     # channel -> [direction, due]
@@ -363,7 +446,8 @@ class GamepadReader:
         was read and is something else, and None when it could not be opened
         at all — which is not the same answer, because udev applies the ACL a
         moment after creating the node and a pad plugged in right now is
-        briefly unreadable.
+        briefly unreadable. A controller Steam Input reads for its own virtual
+        pad counts as something else: that pad is the one to listen to.
         """
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
@@ -372,7 +456,8 @@ class GamepadReader:
                 self._note_permission_problem(path)
             return None
         try:
-            if not looks_like_gamepad(fd):
+            if (not looks_like_gamepad(fd)
+                    or self._filter.skips(device_usb_id(fd))):
                 os.close(fd)
                 return NOT_A_GAMEPAD
             axes = {}
@@ -575,14 +660,16 @@ class GamepadReader:
             self._due_repeats(time.monotonic())
 
 
-def connected(input_dir=INPUT_DIR, proc_devices=PROC_DEVICES):
+def connected(input_dir=INPUT_DIR, proc_devices=PROC_DEVICES, environ=None):
     """(controller names, controllers that could not be opened).
 
     Cheap enough to call before building any UI: it opens each event node,
-    asks the driver two questions and closes it again.
+    asks the driver a few questions and closes it again. Controllers Steam
+    Input has taken over are left out, as `GamepadReader` leaves them.
     """
     names = []
     refused = 0
+    skipped = ControllerFilter(environ)
     joysticks = joystick_event_nodes(proc_devices)
     entries = sorted(os.listdir(input_dir)) if os.path.isdir(input_dir) else []
     for entry in entries:
@@ -596,7 +683,7 @@ def connected(input_dir=INPUT_DIR, proc_devices=PROC_DEVICES):
                 refused += 1
             continue
         try:
-            if looks_like_gamepad(fd):
+            if looks_like_gamepad(fd) and not skipped.skips(device_usb_id(fd)):
                 names.append(device_name(fd) or entry)
         finally:
             try:
