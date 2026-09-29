@@ -87,6 +87,8 @@ jobs:
                 > /etc/apt/preferences.d/99-pinned-snapshot
               apt-get update
               # protoc: the xodus crate runs prost-build.
+              # cmake: libz-ng-sys builds zlib-ng with it, for the flate2
+              #   backend xodus reads compressed package data through.
               # libwebkit2gtk-4.1-dev: wry/tao, linked unconditionally for the
               #   login webview.
               # libssl-dev: openssl-sys, pulled in through
@@ -101,7 +103,7 @@ jobs:
               # rest to the host shell.
               apt-get install -y --no-install-recommends --allow-downgrades \
                 build-essential pkg-config git ca-certificates curl \
-                protobuf-compiler libwebkit2gtk-4.1-dev libssl-dev \
+                cmake protobuf-compiler libwebkit2gtk-4.1-dev libssl-dev \
                 glib-networking patchelf xz-utils \
                 tar gzip coreutils
               curl -fsSL --retry 5 https://sh.rustup.rs \

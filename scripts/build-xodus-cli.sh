@@ -17,7 +17,7 @@ WORK="${1:?usage: build-xodus-cli.sh WORKDIR}"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 XODUS_REMOTE="${XODUS_REMOTE:-https://github.com/xodus-gaming/xodus}"
 
-for t in git cargo tar gzip sha256sum protoc; do
+for t in git cargo tar gzip sha256sum protoc cmake; do
   command -v "$t" >/dev/null || { echo "!! need $t" >&2; exit 1; }
 done
 # wry/tao link the login webview unconditionally, and the xodus crate pulls in
