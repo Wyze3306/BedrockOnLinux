@@ -116,7 +116,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native19"
 # native19 adds the Windows.Storage.Pickers.FileSavePicker of 0010, which every
 # export Minecraft offers asks for -- a structure, a world, the album -- and
 # which no engine had, so each of them stayed on its loading screen (#167).
-WINEGDK_ARCHIVE_SHA256 = "e0ead91c3003ff6d4e01995dc8590d21603251d2e71a51c594eab0c3271eabff"
+WINEGDK_ARCHIVE_SHA256 = "be0b4f14045c338a6f79a5350098b9edc8f78ec3165d6d7525c4edd31301e46b"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "f0d5b219ff1c8a42c9893e7d6bc17b42e37412ebbf1d1e6ca7a4882fee36893a"
 
