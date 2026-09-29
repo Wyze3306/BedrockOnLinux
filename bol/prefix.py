@@ -470,6 +470,8 @@ def boot_prefix(prefix=None):
             # Windows system DLLs no longer match the managed runtime.
             refresh_managed_prefix_runtime(pfx)
             _record_managed_engine_rev_if_managed(pfx)
+        # Also for a prefix refreshed by an earlier release, which kept them.
+        prune_engine_dll_backups(pfx)
         repair_managed_prefix_user32(pfx)
         return True
     # Refuse a known-bad graphics session before Wine can open a device.
@@ -707,6 +709,30 @@ def _dll_differs(source, target):
         return True
 
 
+# Wine marks every DLL it builds right after the DOS header, and the copies
+# wineboot puts into a prefix keep that mark: "Wine builtin DLL" for a real
+# one, "Wine placeholder DLL" for the stub that stands in for a DLL Wine loads
+# from the engine directory instead.
+_WINE_DLL_MARKS = (b"Wine builtin DLL", b"Wine placeholder DLL")
+_DOS_HEADER_SIZE = 0x40
+_RUNTIME_BACKUP_SUFFIX = ".bol-runtime-backup"
+
+
+def _is_wine_built_dll(path):
+    """Whether ``path`` is a DLL that any Wine engine builds again.
+
+    Anything else -- a DXVK or vkd3d-proton copy, a redistributable, a DLL
+    the player put there -- did not come from the engine, and cannot be
+    had back from it.
+    """
+    try:
+        with open(path, "rb") as stream:
+            head = stream.read(_DOS_HEADER_SIZE + 32)
+    except OSError:
+        return False
+    return head[_DOS_HEADER_SIZE:].startswith(_WINE_DLL_MARKS)
+
+
 def _replace_managed_dll(source, target):
     """Atomically refresh one prefix DLL from the engine; return if changed."""
     source_hash = sha256_file(source)
@@ -716,8 +742,13 @@ def _replace_managed_dll(source, target):
                 return False
         except OSError:
             pass
-    backup = target.with_name(target.name + ".bol-runtime-backup")
-    if not (backup.exists() or backup.is_symlink()):
+    backup = target.with_name(target.name + _RUNTIME_BACKUP_SUFFIX)
+    # A DLL the engine built is what any engine builds again, so a copy of the
+    # old one only costs its size: across system32 and syswow64 that came to
+    # more than a gigabyte, kept for good and never read back (#289). Only
+    # what did not come from an engine is worth keeping.
+    if not (backup.exists() or backup.is_symlink()) \
+            and not _is_wine_built_dll(target):
         if target.is_symlink():
             backup.symlink_to(os.readlink(target))
         elif target.exists():
@@ -801,6 +832,47 @@ def refresh_managed_prefix_runtime(prefix=None):
     if changed:
         ok("Managed Wine runtime refreshed to %s." % WINEGDK_BUILD_REV)
     return changed
+
+
+def prune_engine_dll_backups(prefix=None):
+    """Delete the refresh's copies of DLLs any Wine engine builds again.
+
+    An engine update used to leave a copy of every system DLL it replaced
+    beside it -- some 1,100 of Wine's own DLLs, over a gigabyte -- which
+    nothing ever restored (#289). Copies of anything that did not come from an
+    engine stay. Only the managed prefix is touched. Returns the bytes freed.
+    """
+    pfx = Path(prefix or PFX)
+    if not _managed_runtime_guards(pfx, proton_path()) or pfx.is_symlink():
+        return 0
+    freed = 0
+    try:
+        resolved_root = pfx.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return 0
+    for _engine_rel, prefix_rel in _MANAGED_RUNTIME_ARCH_DIRS:
+        folder = pfx / prefix_rel
+        try:
+            if folder.is_symlink() or not folder.is_dir():
+                continue
+            folder.resolve(strict=True).relative_to(resolved_root)
+            backups = sorted(folder.glob("*" + _RUNTIME_BACKUP_SUFFIX))
+        except (OSError, RuntimeError, ValueError):
+            continue
+        for backup in backups:
+            if backup.is_symlink() or not backup.is_file() \
+                    or not _is_wine_built_dll(backup):
+                continue
+            try:
+                size = backup.stat().st_size
+                backup.unlink()
+            except OSError:
+                continue
+            freed += size
+    if freed:
+        info("Removed %d MB of old Wine DLL copies from the Wine prefix."
+             % round(freed / 1024 ** 2))
+    return freed
 
 
 def stop_prefix_procs(prefix: Path, grace=5, kill_grace=2):

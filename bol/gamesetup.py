@@ -9,7 +9,13 @@ from .config import LOGS
 from .deps import ensure_login_deps
 from .fixups import fix_curl_ssl, hide_signin_button, install_gdk_xbox_dlls
 from .gameinput import install_gameinput
-from .games import _auto_selection, _game_root, install_game, use_game_dir
+from .games import (
+    _auto_selection,
+    _game_root,
+    install_game,
+    prune_legacy_game_archives,
+    use_game_dir,
+)
 from .log import BolError, info, ok, warn
 from .prefix import (
     active_prefix,
@@ -35,6 +41,7 @@ def do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
 def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
               force=False, progress=None):
     mkdirs()
+    prune_legacy_game_archives()
     s = load_settings()
     ensure_login_deps()
     if mc_edition:

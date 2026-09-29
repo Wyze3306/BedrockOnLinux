@@ -1175,6 +1175,97 @@ class ManagedRuntimeRefreshTests(unittest.TestCase):
                 (pfx / "drive_c/windows/system32/user32.dll").read_bytes(),
                 b"old-user32-64")
 
+    @staticmethod
+    def _wine_dll(mark, body):
+        """DLL bytes carrying Wine's own mark right after the DOS header."""
+        return b"MZ" + b"\0" * 0x3E + mark + b"\0" * 16 + body
+
+    def test_a_dll_the_engine_built_is_replaced_without_a_copy(self):
+        # Keeping one of these per engine update came to over a gigabyte of
+        # system32/syswow64 that nothing ever restored (#289).
+        with tempfile.TemporaryDirectory() as td:
+            engine, pfx = self._runtime_paths(Path(td))
+            sys32 = pfx / "drive_c/windows/system32"
+            (sys32 / "user32.dll").write_bytes(
+                self._wine_dll(b"Wine builtin DLL", b"old-user32"))
+            (sys32 / "ntdll.dll").write_bytes(
+                self._wine_dll(b"Wine placeholder DLL", b"old-ntdll"))
+            m = self._managed(engine, pfx)
+            with m[0], m[1], m[2], m[3], \
+                    mock.patch.object(prefix, "require_prefix_idle"), \
+                    mock.patch.object(prefix, "ok"):
+                self.assertTrue(prefix.refresh_managed_prefix_runtime(pfx))
+
+            self.assertEqual((sys32 / "user32.dll").read_bytes(),
+                             b"new-user32-64")
+            self.assertEqual((sys32 / "ntdll.dll").read_bytes(),
+                             b"new-ntdll-64")
+            self.assertEqual(list(sys32.glob("*.bol-runtime-backup")), [])
+            # Anything that did not come from an engine still gets its copy.
+            self.assertEqual(
+                (pfx / "drive_c/windows/syswow64/"
+                 "user32.dll.bol-runtime-backup").read_bytes(),
+                b"old-user32-32")
+
+    def test_old_copies_of_engine_dlls_are_pruned_and_others_kept(self):
+        with tempfile.TemporaryDirectory() as td:
+            engine, pfx = self._runtime_paths(
+                Path(td), marker_rev=prefix.WINEGDK_BUILD_REV)
+            sys32 = pfx / "drive_c/windows/system32"
+            wow = pfx / "drive_c/windows/syswow64"
+            builtin = self._wine_dll(b"Wine builtin DLL", b"x" * 1000)
+            placeholder = self._wine_dll(b"Wine placeholder DLL", b"stub")
+            (sys32 / "user32.dll.bol-runtime-backup").write_bytes(builtin)
+            (wow / "gdi32.dll.bol-runtime-backup").write_bytes(placeholder)
+            (sys32 / "d3d11.dll.bol-runtime-backup").write_bytes(
+                b"MZ dxvk d3d11")
+            (sys32 / "shell32.dll").write_bytes(builtin)
+            m = self._managed(engine, pfx)
+            with m[0], m[1], m[2], m[3], mock.patch.object(prefix, "info"):
+                freed = prefix.prune_engine_dll_backups(pfx)
+
+            self.assertEqual(freed, len(builtin) + len(placeholder))
+            self.assertFalse(
+                (sys32 / "user32.dll.bol-runtime-backup").exists())
+            self.assertFalse((wow / "gdi32.dll.bol-runtime-backup").exists())
+            self.assertEqual(
+                (sys32 / "d3d11.dll.bol-runtime-backup").read_bytes(),
+                b"MZ dxvk d3d11")
+            # Only the refresh's copies go, never a live DLL.
+            self.assertEqual((sys32 / "shell32.dll").read_bytes(), builtin)
+
+    def test_pruning_leaves_a_prefix_the_launcher_does_not_manage(self):
+        with tempfile.TemporaryDirectory() as td:
+            engine, pfx = self._runtime_paths(Path(td))
+            backup = (pfx / "drive_c/windows/system32/"
+                      "user32.dll.bol-runtime-backup")
+            backup.write_bytes(self._wine_dll(b"Wine builtin DLL", b"old"))
+            with mock.patch.dict(prefix.os.environ,
+                                 {"BOL_WINEPREFIX": str(pfx)}, clear=True), \
+                    mock.patch.object(prefix, "PFX", pfx), \
+                    mock.patch.object(prefix, "WINEGDK_OUT", engine), \
+                    mock.patch.object(prefix, "proton_path",
+                                      return_value=engine):
+                self.assertEqual(prefix.prune_engine_dll_backups(pfx), 0)
+            self.assertTrue(backup.exists())
+
+    def test_boot_prefix_prunes_even_when_the_engine_matches(self):
+        # The copies were left by an earlier release's refresh: a prefix whose
+        # engine is already current has to lose them too.
+        with tempfile.TemporaryDirectory() as td:
+            engine, pfx = self._runtime_paths(
+                Path(td), marker_rev=prefix.WINEGDK_BUILD_REV)
+            compat = Path(td) / "compatdata"
+            m = self._managed(engine, pfx)
+            with m[0], m[1], m[2], m[3], \
+                    mock.patch.object(prefix, "COMPAT", compat), \
+                    mock.patch.object(
+                        prefix, "repair_managed_prefix_user32"), \
+                    mock.patch.object(
+                        prefix, "prune_engine_dll_backups") as prune:
+                self.assertTrue(prefix.boot_prefix(pfx))
+            prune.assert_called_once_with(pfx)
+
     def test_engine_only_dlls_are_not_injected_into_prefix(self):
         # A DLL the engine ships but the prefix lacks is deliberately NOT
         # copied in: a prefix's system dir is the subset wineboot installed
@@ -1211,6 +1302,8 @@ class PrefixSetupTests(unittest.TestCase):
                 "proton_source": "proton",
             }
             with mock.patch.object(gamesetup, "mkdirs"), \
+                    mock.patch.object(gamesetup,
+                                      "prune_legacy_game_archives"), \
                     mock.patch.object(gamesetup, "load_settings",
                                       return_value=settings), \
                     mock.patch.object(gamesetup, "ensure_login_deps"), \

@@ -342,6 +342,45 @@ class ManifestVersionTests(unittest.TestCase):
             self.assertEqual(games.mc_version_str(root), "1.26.20.4")
 
 
+class LegacyArchiveTests(unittest.TestCase):
+    """#289: the zips launchers before 2.1 downloaded are not kept forever."""
+
+    def test_the_old_game_archives_go_and_nothing_else_does(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            legacy = [
+                "Microsoft.MinecraftUWP_1.26.4403.0_x64__8wekyb3d8bbwe.zip",
+                "Microsoft.MinecraftWindowsBeta_1.26.5020.0_x64__8wekyb3d8"
+                "bbwe.zip",
+                "Microsoft.MinecraftUWP_1.26.4201.0_x64__8wekyb3d8bbwe.zip"
+                ".part",
+            ]
+            kept = [
+                "GDK-Proton-xuser-wow64-archs-native18.tar.gz",
+                "xodus-cli-4615749c6e02-p4.tar.gz",
+                "releases_mc_360001186971_100.json",
+                "some-addon.zip",
+                "auto-inject-0123456789abcdef.dll",
+            ]
+            for name in legacy + kept:
+                (cache / name).write_bytes(b"12345")
+            (cache / "minecraft-folder.zip").mkdir()
+            with mock.patch.object(games, "info") as said:
+                freed = games.prune_legacy_game_archives(cache)
+            remaining = sorted(path.name for path in cache.iterdir())
+        self.assertEqual(freed, 5 * len(legacy))
+        self.assertEqual(remaining, sorted(kept + ["minecraft-folder.zip"]))
+        self.assertIn("3 Minecraft archive(s)", said.call_args.args[0])
+
+    def test_a_cache_with_nothing_to_remove_says_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(games, "info") as said:
+            self.assertEqual(games.prune_legacy_game_archives(Path(tmp)), 0)
+            self.assertEqual(
+                games.prune_legacy_game_archives(Path(tmp) / "missing"), 0)
+        said.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
 

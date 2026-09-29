@@ -9,12 +9,49 @@ import time
 from pathlib import Path
 
 from . import xodus
-from .config import CONTENT, GAMES
+from .config import CACHE, CONTENT, GAMES
 from .log import BolError, die, info, ok, warn
 from .util import load_settings, save_settings
 
 
 _INSTALL_METADATA = ".bedrock-on-linux-install.json"
+
+
+def prune_legacy_game_archives(cache=None):
+    """Delete the Minecraft archives launchers before 2.1 kept in the cache.
+
+    Until Minecraft came from Microsoft through Xodus, every version was
+    downloaded as a zip of well over a gigabyte -- "Microsoft.MinecraftUWP_
+    1.26.4403.0_x64__8wekyb3d8bbwe.zip" -- and kept in the cache once it was
+    extracted. Nothing has read one since, and nothing removed them either,
+    so an install that followed a few versions carried gigabytes of them
+    (#289). Returns the bytes freed.
+    """
+    folder = Path(cache or CACHE)
+    try:
+        candidates = sorted(folder.iterdir())
+    except OSError:
+        return 0
+    removed = freed = 0
+    for path in candidates:
+        name = path.name.lower()
+        if "minecraft" not in name or not name.endswith((".zip", ".zip.part")):
+            continue
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+            size = path.stat().st_size
+            path.unlink()
+        except OSError as exc:
+            warn(f"Could not remove {path.name}, a Minecraft archive an "
+                 f"earlier version of the launcher downloaded: {exc}")
+            continue
+        removed += 1
+        freed += size
+    if removed:
+        info(f"Removed {removed} Minecraft archive(s) an earlier version of "
+             f"the launcher downloaded ({freed / 1024 ** 3:.1f} GiB).")
+    return freed
 
 
 def list_editions(include_beta=True):

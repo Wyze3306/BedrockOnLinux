@@ -25,6 +25,19 @@
   https://account.microsoft.com/devices/content; a shortcut that starts the
   game without the window shows it as a desktop notification.
 
+- **The launcher gives back disk space it never used again**
+  ([#289](https://github.com/Wyze3306/BedrockOnLinux/issues/289),
+  [#295](https://github.com/Wyze3306/BedrockOnLinux/issues/295)). Two kinds
+  of leftovers went unnoticed. Launchers before 2.1 downloaded every
+  Minecraft version as a zip of about 1.3 GB and kept it in their cache once
+  it was extracted; nothing has read one since Minecraft comes from Microsoft
+  through Xodus. And the first engine update set aside a copy of every
+  system DLL of the Wine prefix it refreshed — some 1,100 of Wine's own
+  files, 1.1 GB on the machine this was measured on — which nothing ever put
+  back. Both go at the next PLAY. Copies of DLLs that did not come from the
+  engine, such as DXVK's and vkd3d-proton's, are kept, and no world, pack or
+  setting is touched.
+
 ## 2.2.7 — 2026-09-17
 
 ### Fixed
