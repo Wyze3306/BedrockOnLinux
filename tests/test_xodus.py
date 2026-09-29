@@ -208,6 +208,13 @@ class EnsureCliTests(unittest.TestCase):
             self.assertIn("XODUS_ARCHIVE_SHA256", str(raised.exception))
 
 
+# What `xodus-cli login` leaves in the keyring, reduced to the entry names the
+# launcher reads.
+SIGNED_IN = (b'(service: "Xodus Service", user: "device-tokens")'
+             b'(service: "Xodus Service", user: "user-tokens")'
+             b'(service: "Xodus Service", user: "user-DA")')
+
+
 class SignedInTests(unittest.TestCase):
     @contextlib.contextmanager
     def _keyring(self, tmp, body):
@@ -223,10 +230,17 @@ class SignedInTests(unittest.TestCase):
                 self._keyring(tmp, b'("device-tokens",("dev_license","..."))'):
             self.assertFalse(xodus.signed_in())
 
-    def test_a_user_token_is_a_sign_in(self):
+    def test_a_signed_in_account_is_a_sign_in(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                self._keyring(tmp, SIGNED_IN):
+            self.assertTrue(xodus.signed_in())
+
+    def test_user_tokens_without_the_account_are_not_a_sign_in(self):
+        # Every license request reads the account's "user-DA" entry too; a
+        # keyring without it made the download panic on NotFound (#260).
         with tempfile.TemporaryDirectory() as tmp, \
                 self._keyring(tmp, b'("device-tokens",...)("user-tokens",...)'):
-            self.assertTrue(xodus.signed_in())
+            self.assertFalse(xodus.signed_in())
 
     def test_a_missing_keyring_is_not_a_sign_in(self):
         with tempfile.TemporaryDirectory() as tmp, _own_home(tmp):
@@ -243,7 +257,7 @@ class XodusHomeTests(unittest.TestCase):
     the game at all.
     """
 
-    def _legacy(self, tmp, body=b'("user-tokens","...")'):
+    def _legacy(self, tmp, body=SIGNED_IN):
         path = Path(tmp) / "home" / ".xodus-keyring.ron"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(body)

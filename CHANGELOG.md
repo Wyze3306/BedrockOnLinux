@@ -25,6 +25,18 @@
   https://account.microsoft.com/devices/content; a shortcut that starts the
   game without the window shows it as a desktop notification.
 
+- **A Microsoft Store sign-in that was only half kept is asked for again,
+  instead of ending the download on `NotFound`**
+  ([#260](https://github.com/Wyze3306/BedrockOnLinux/issues/260)). The
+  downloader keeps the Store session in a keyring, and a license request
+  reads the account from it as well as its tokens. The launcher counted the
+  tokens alone as a sign-in, so a keyring holding them without the account
+  started the download anyway, which died at 0 % on *called
+  `Result::unwrap()` on an `Err` value: NotFound*, on every mirror in turn.
+  Reproduced by deleting that one entry from a copy of a working keyring. The
+  launcher now requires both, and offers the Store sign-in when either is
+  missing.
+
 - **The launcher gives back disk space it never used again**
   ([#289](https://github.com/Wyze3306/BedrockOnLinux/issues/289),
   [#295](https://github.com/Wyze3306/BedrockOnLinux/issues/295)). Two kinds

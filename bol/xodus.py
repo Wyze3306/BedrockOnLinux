@@ -456,6 +456,10 @@ def _adopt_legacy_keyring():
     return True
 
 
+# The keyring entries `xodus-cli login` writes for the account it signs in.
+_USER_ENTRIES = (b'"user-tokens"', b'"user-DA"')
+
+
 def signed_in():
     """True when Xodus holds a usable Microsoft *user* session.
 
@@ -468,16 +472,19 @@ def signed_in():
 
     The file existing proves nothing: every command that needs an identity
     provisions device credentials first, which creates the keyring with only a
-    'device-tokens' entry. Downloading needs the *user* token that
-    `xodus-cli login` stores under 'user-tokens' — without it the download dies
-    deep inside Xodus on a missing token instead of asking anyone to sign in.
+    'device-tokens' entry. Downloading needs what `xodus-cli login` stores for
+    the account: its tokens under 'user-tokens' and the account itself under
+    'user-DA'. Every license request reads both, and a keyring holding the
+    first without the second ended the download on "called
+    `Result::unwrap()` on an `Err` value: NotFound" instead of asking anyone to
+    sign in (#260).
     """
     _adopt_legacy_keyring()
     try:
         blob = XODUS_KEYRING.read_bytes()
     except OSError:
         return False
-    return b"user-tokens" in blob
+    return all(entry in blob for entry in _USER_ENTRIES)
 
 
 # The one command the launcher cannot see inside: xodus-cli opens Microsoft's
