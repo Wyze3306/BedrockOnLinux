@@ -1,7 +1,7 @@
-From f4a18671fca0987c3d257c7ae540c9d147d7dec0 Mon Sep 17 00:00:00 2001
+From cd70eb3d41ba1d4d0f77b3b0464c127256ac13aa Mon Sep 17 00:00:00 2001
 From: Wyze3306 <contact.wyze3306@gmail.com>
 Date: Sun, 23 Aug 2026 17:56:22 +0200
-Subject: [PATCH] msixvc: only count cache bytes that are on disk
+Subject: [PATCH 1/5] msixvc: only count cache bytes that are on disk
 
 PrefixCacheFile writes the package prefix through one tokio File and reads it
 back through a second handle on the same path. tokio performs a file write on
@@ -122,3 +122,6 @@ index 824f9c2..3e11325 100644
      #[tokio::test]
      async fn cached_backward_seek_uses_prefix() {
          let body = test_body();
+-- 
+2.47.3
+

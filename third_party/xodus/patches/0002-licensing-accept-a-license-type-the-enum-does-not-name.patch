@@ -1,7 +1,7 @@
-From 1ad68516aee459b42053d97cc3251f62a5ef9e9b Mon Sep 17 00:00:00 2001
+From 98f6e7fb2a54143306d948ad424fda458af1d263 Mon Sep 17 00:00:00 2001
 From: Wyze3306 <contact.wyze3306@gmail.com>
 Date: Sun, 23 Aug 2026 23:52:34 +0200
-Subject: [PATCH 2/4] licensing: accept a license type the enum does not name
+Subject: [PATCH 2/5] licensing: accept a license type the enum does not name
 
 A content license comes back from licensing.mp.microsoft.com with the kind of
 entitlement it was issued for in LicenseInfo/@Type, and LicenseType names four

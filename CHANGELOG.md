@@ -37,6 +37,21 @@
   launcher now requires both, and offers the Store sign-in when either is
   missing.
 
+- **The Minecraft downloader follows Xodus upstream again.** It moves to
+  xodus-gaming/xodus@64d39eb, 24 commits past the one it was pinned to:
+  malformed and oversized licensing replies are handled instead of taking
+  the download down, a length underflow in the licence parser is guarded,
+  DisplayCatalog replies it could not parse are read, and the MSIXVC reader
+  behind every download and launch was reworked. The launcher's patches are
+  carried on top, and a fifth joins them for
+  [#260](https://github.com/Wyze3306/BedrockOnLinux/issues/260): a keyring
+  missing any part of the Store session — the device's or the account's —
+  now ends the download on *not logged in: … sign in again*, which the
+  launcher answers with the Store sign-in, instead of a panic. Checked here
+  end to end: licensing, a full download of 1.26.52.3, and the decryption
+  every launch goes through, which gives the same executable, byte for
+  byte, as the previous build. Xodus now needs Rust 1.98 to build.
+
 - **The launcher gives back disk space it never used again**
   ([#289](https://github.com/Wyze3306/BedrockOnLinux/issues/289),
   [#295](https://github.com/Wyze3306/BedrockOnLinux/issues/295)). Two kinds

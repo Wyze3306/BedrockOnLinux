@@ -1,7 +1,7 @@
-From c955821fb44cd465fad89b6b065ca4dd3035ba2d Mon Sep 17 00:00:00 2001
+From 1a8e00e1bccc837558f1d09aff345416e3b82728 Mon Sep 17 00:00:00 2001
 From: Wyze3306 <contact.wyze3306@gmail.com>
 Date: Wed, 26 Aug 2026 16:31:58 +0200
-Subject: [PATCH 4/4] login: host the second leg of a sign-in like the first
+Subject: [PATCH 4/5] login: host the second leg of a sign-in like the first
 
 A sign-in that faults with an inline auth URL opens that URL in a second
 session, and finalize_request builds it with an empty HeaderMap. The first

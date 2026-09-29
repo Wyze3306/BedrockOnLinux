@@ -1,7 +1,7 @@
-From d7609308729a5763923bd798f6fbcb0fe30feff4 Mon Sep 17 00:00:00 2001
+From 1c4a4c2b50fd8602fe373efc559dc25b5b876143 Mon Sep 17 00:00:00 2001
 From: Wyze3306 <contact.wyze3306@gmail.com>
 Date: Sun, 23 Aug 2026 23:52:34 +0200
-Subject: [PATCH 3/4] licensing: report a license that cannot be read
+Subject: [PATCH 3/5] licensing: report a license that cannot be read
 
 Turning a licenses response into a License is three steps that can each meet
 something other than what was expected -- take the first key, base64-decode
@@ -19,7 +19,7 @@ now ends the download the way a refused entitlement does.
  1 file changed, 81 insertions(+), 3 deletions(-)
 
 diff --git a/crates/xodus/src/licensing/content.rs b/crates/xodus/src/licensing/content.rs
-index f350bad..bb542fe 100644
+index 2755f1b..300beff 100644
 --- a/crates/xodus/src/licensing/content.rs
 +++ b/crates/xodus/src/licensing/content.rs
 @@ -20,6 +20,13 @@ pub enum LicenseContentError {
@@ -36,7 +36,7 @@ index f350bad..bb542fe 100644
  }
  
  // we might need a bump in xal-rs concerning reqwest,
-@@ -71,8 +78,79 @@ pub async fn get_license_content(
+@@ -71,9 +78,7 @@ pub async fn get_license_content(
              });
          }
      };
@@ -45,6 +45,11 @@ index f350bad..bb542fe 100644
 -    let license = quick_xml::de::from_str::<License>(&String::from_utf8(license).unwrap()).unwrap();
 +    let license = read_license(&content)?;
      Ok((content, license))
+ }
+ 
+@@ -112,3 +117,76 @@ pub async fn get_license_token(
+ 
+     Ok(token_resp.license_token)
  }
 +
 +/// The license the response carries the content key in.

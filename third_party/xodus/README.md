@@ -1,7 +1,7 @@
 # Xodus — legitimate Minecraft Bedrock acquisition
 
 Upstream: https://github.com/xodus-gaming/xodus (GPL-3.0)
-Pinned commit: `4615749c6e02cc3b9acce2abbe9916fe8c376f9a`
+Pinned commit: `64d39eb87a56c7d0d7e7fde0b233654ac5477b0f`
 
 ## Why this is here
 
@@ -75,6 +75,7 @@ is a self-contained commit with the test that fails without it.
 | `0002-licensing-accept-a-license-type-the-enum-does-not-name.patch` | The download dying on the licence Microsoft issued for it. `LicenseInfo/@Type` names the kind of entitlement a licence was granted for, `LicenseType` names four of them, and Microsoft also issues `Trial` — `called Result::unwrap() on an Err value: Custom("unknown variant \`Trial\`, expected one of \`Device\`, \`User\`, \`Full\`, \`KeyHolder\`")`, in the middle of the download. Nothing reads the type: the content key travels in the `SPLicenseBlock` beside it. Same account, same content id and same market answered `Trial` twice seconds apart here and a known type seven times twenty minutes later. |
 | `0003-licensing-report-a-license-that-cannot-be-read.patch` | Reading the licence out of a licences response — first key, base64, XML — was an index and two unwraps inside a running download, so anything unexpected from the licensing service was a panic in a library rather than a line the caller could print. It now ends the download the way a refused entitlement does. |
 | `0004-login-host-the-second-leg-of-a-sign-in-like-the-first.patch` | The sign-in window that loads for ever (issue #214). A token exchange that faults hands back an `inline_auth_url`, and `finalize_request` opened it with an **empty** `HeaderMap` — none of the nine `cxh-*`/`hostApp` headers that tell login.live.com it is talking to the token broker. Without them Microsoft serves the ordinary consumer interrupt ("Please wait", a disabled *OK*) instead of the CloudExperienceHost one, so the page never reaches `ppsecure/post.srf` — the only URL `create_session` fires `Finish` on — `ServerData` is never read back, and `xodus-cli login` sits there printing nothing and never exiting. |
+| `0005-licensing-ask-for-a-sign-in-instead-of-unwrapping-a-missing-token.patch` | The download dying on a keyring that holds some of the account and not the rest (issue #260). A license request reads four entries — this device's STS token and license, the account (`user-DA`) and its Passport STS token — and unwrapped every lookup, so a keyring missing one of them ended the download on `called Result::unwrap() on an Err value: NotFound`. Reproduced by deleting `user-DA` from a copy of a working keyring: the unpatched binary panics at `license.rs:17`, the patched one prints "not logged in: the signed-in Microsoft account is missing from the keyring (entry not found); sign in again", which the launcher already reads as a sign-in to offer. |
 
 A patched binary is not the upstream commit's binary, so the rev names the
 patches too: `<commit12>-p<n>`, where `n` is how many patch files there are.
@@ -82,8 +83,8 @@ Publishing one takes two passes, like every other pinned artifact — run
 `.github/workflows/build-xodus.yml`, read the SHA-256 it reports, pin
 `XODUS_REV` and `XODUS_ARCHIVE_SHA256` in `bol/config.py`, then run it again
 with `publish` on. Until that pin lands, the launcher keeps downloading the
-unpatched asset it names today — which is exactly what happened to the four
-patches above: they sat on main for a week while every download still raced
+unpatched asset it names today — which is exactly what happened to the first
+four patches above: they sat on main for a week while every download still raced
 its own package cache (issues #241 and #242), because nothing tied the pin
 back to the directory. `ci.yml` now checks that `XODUS_REV` names the patch
 set on the branch, so a patch added here fails the build until it is built and
