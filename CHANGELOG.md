@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **Experimental OptiScaler integration for Minecraft RTX**
+  ([#276](https://github.com/Wyze3306/BedrockOnLinux/pull/276)).
+  `bedrock-on-linux optiscaler install` downloads a pinned, checksummed
+  OptiScaler v10 build — nothing is bundled — and attaches it to the active
+  Minecraft build, so the game's own DLSS input can feed XeSS or FSR, and
+  OptiFG frame generation, on GPUs that are not NVIDIA's. It copies the
+  game's own `nvngx_dlss.dll` to `nvngx.dll`, which is what makes Minecraft
+  offer its Upscaling switch under Wine. Off unless installed; `optiscaler
+  disable` and `uninstall` take it back out. See
+  [docs/OPTISCALER.md](docs/OPTISCALER.md). Contributed by
+  [@darrenintr](https://github.com/darrenintr).
+
 ### Fixed
 
 - **A controller that Steam Input drives moves the launcher's highlight once
