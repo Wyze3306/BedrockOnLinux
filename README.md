@@ -111,6 +111,22 @@ highlight, **A** selects, **B** goes back, the shoulder buttons change tab and
 *Minecraft Bedrock* entry to your app menu or to Steam. That is the one to use
 on a Steam Deck.
 
+### Experimental OptiScaler / frame generation
+
+This fork can install a tested OptiScaler v10 setup for Minecraft RTX under
+Wine/vkd3d-proton, including the physical `nvngx.dll` workaround needed to
+expose Bedrock's native DLSS input on the tested non-NVIDIA setup:
+
+```bash
+bedrock-on-linux optiscaler install
+bedrock-on-linux optiscaler status
+```
+
+OptiScaler is downloaded from upstream and is not bundled with this project.
+Frame generation remains opt-in in the OptiScaler overlay. See
+[docs/OPTISCALER.md](docs/OPTISCALER.md) for the exact setup, management
+commands, tested pipeline and compatibility notes.
+
 ## What you need
 
 - A 64-bit Linux desktop, reasonably up to date.

@@ -12,14 +12,21 @@ for _cand in (_here,
         break
 
 try:
-    from bol.cli import main
+    if len(sys.argv) > 1 and sys.argv[1] == "optiscaler":
+        from bol.optiscaler import cli_main
+        _entry = lambda: cli_main(sys.argv[2:])
+    else:
+        from bol.optiscaler import bootstrap
+        bootstrap()
+        from bol.cli import main
+        _entry = main
 except ModuleNotFoundError:
     sys.exit("BedrockOnLinux: the 'bol' package is missing — reinstall the app "
              "(https://github.com/Wyze3306/BedrockOnLinux).")
 
 if __name__ == "__main__":
     try:
-        main()
+        _entry()
     except KeyboardInterrupt:
         print()
         sys.exit(130)

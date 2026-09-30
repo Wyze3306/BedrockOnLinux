@@ -1,0 +1,28 @@
+# trigger: permissions fixed for reusable packaging workflow
+name: Build OptiScaler integration artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/optiscaler-integration
+    paths:
+      - "bedrock-on-linux"
+      - "bol/**"
+      - "docs/OPTISCALER.md"
+      - "tests/test_optiscaler.py"
+      - ".github/workflows/build-optiscaler-artifacts.yml"
+      - ".github/workflows/build-app.yml"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-app.yml
+    with:
+      publish: false
+      channel: nightly
+      dependency_repo: Wyze3306/BedrockOnLinux
