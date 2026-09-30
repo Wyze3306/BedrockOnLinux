@@ -1,6 +1,6 @@
 # OptiScaler integration (experimental)
 
-This fork can install and load a tested OptiScaler v10 build for Minecraft Bedrock RTX under Wine/vkd3d-proton. The integration was developed from a working Linux setup where Minecraft's native DLSS input is intercepted by OptiScaler and can feed another upscaler and OptiFG frame generation.
+BedrockOnLinux can install and load a tested OptiScaler v10 build for Minecraft Bedrock RTX under Wine/vkd3d-proton. The integration was developed from a working Linux setup where Minecraft's native DLSS input is intercepted by OptiScaler and can feed another upscaler and OptiFG frame generation.
 
 The tested path was:
 

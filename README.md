@@ -113,7 +113,7 @@ on a Steam Deck.
 
 ### Experimental OptiScaler / frame generation
 
-This fork can install a tested OptiScaler v10 setup for Minecraft RTX under
+The launcher can install a tested OptiScaler v10 setup for Minecraft RTX under
 Wine/vkd3d-proton, including the physical `nvngx.dll` workaround needed to
 expose Bedrock's native DLSS input on the tested non-NVIDIA setup:
 
