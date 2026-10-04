@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import stat
 import tarfile
 import tempfile
@@ -22,6 +23,12 @@ from unittest import mock
 from bol import launch, webview, xodus
 
 _EXEC_DIR = webview.XODUS_WEBVIEW_EXEC_DIR
+
+# The stand-ins for xodus-cli are shell scripts. A build sandbox such as
+# Guix's has no /bin/sh, and a stand-in that cannot start reads as a host
+# without WebKitGTK to the code under test, which then looks for the bundle
+# on the network (#303). PATH has the shell wherever these tests can run.
+SH = shutil.which("sh") or "/bin/sh"
 
 
 def _encrypted_build(game_dir):
@@ -39,17 +46,17 @@ def _restore_map(wrapper):
         line.split("json.loads(", 1)[1].rsplit(")", 1)[0]))
 
 
-def _library(extra=b""):
+def _library(extra=b"", exec_dir=_EXEC_DIR):
     """Bytes shaped like the bundled library: one helper-directory literal."""
-    return (b"\x7fELF" + b"filler\x00" * 4 + _EXEC_DIR.encode() + b"\x00"
+    return (b"\x7fELF" + b"filler\x00" * 4 + exec_dir.encode() + b"\x00"
             + b"more filler\x00" + extra)
 
 
-def _bundle_archive(path, rev="testrev"):
+def _bundle_archive(path, rev="testrev", exec_dir=_EXEC_DIR):
     """A tarball shaped like the published xodus-webview asset."""
     path.parent.mkdir(parents=True, exist_ok=True)
     members = {
-        "lib/libwebkit2gtk-4.1.so.0": _library(),
+        "lib/libwebkit2gtk-4.1.so.0": _library(exec_dir=exec_dir),
         "libexec/webkit2gtk-4.1/WebKitWebProcess": b"\x7fELFhelper",
         "libexec/webkit2gtk-4.1/WebKitNetworkProcess": b"\x7fELFhelper",
         "libexec/webkit2gtk-4.1/injected-bundle/"
@@ -88,12 +95,12 @@ class HostLibraryTests(unittest.TestCase):
         """The library can be listed by ldconfig and still not load."""
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "xodus-cli"
-            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.write_text(f"#!{SH}\nexit 0\n")
             binary.chmod(0o755)
             self.assertTrue(webview.binary_loads(binary))
 
             broken = Path(tmp) / "broken"
-            broken.write_text("#!/bin/sh\nexit 127\n")
+            broken.write_text(f"#!{SH}\nexit 127\n")
             broken.chmod(0o755)
             self.assertFalse(webview.binary_loads(broken))
             self.assertFalse(webview.binary_loads(Path(tmp) / "absent"))
@@ -337,7 +344,7 @@ class EnvironmentTests(unittest.TestCase):
         """Not the sign-in alone: the download draws the same window."""
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "xodus-cli"
-            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.write_text(f"#!{SH}\nexit 0\n")
             binary.chmod(0o755)
 
             with mock.patch.dict(os.environ, {}, clear=False), \
@@ -357,7 +364,7 @@ class EnvironmentTests(unittest.TestCase):
         """Nothing of the bundle is added -- but the renderer setting is."""
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "xodus-cli"
-            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.write_text(f"#!{SH}\nexit 0\n")
             binary.chmod(0o755)
             env = {"PATH": "/usr/bin"}
 
@@ -378,17 +385,23 @@ class EnvironmentTests(unittest.TestCase):
             # Stands in for the loader failure: it only starts when the
             # bundle's library directory is on LD_LIBRARY_PATH.
             binary.write_text(
-                "#!/bin/sh\ncase \"$LD_LIBRARY_PATH\" in *xodus-webview*) "
+                f"#!{SH}\ncase \"$LD_LIBRARY_PATH\" in *xodus-webview*) "
                 "exit 0;; *) exit 127;; esac\n")
             binary.chmod(0o755)
             asset = base / "sibling" / "xodus-webview-testrev.tar.xz"
-            digest = _bundle_archive(asset)
+            # The helper directory has to fit in the literal it replaces, and
+            # a build sandbox's TMPDIR alone can be longer than the real one
+            # (#303). That limit has tests of its own above; this bundle
+            # carries a literal with room for wherever TMPDIR is.
+            exec_dir = "/" + "x" * len(str(base / "run" / "bol-webkit"))
+            digest = _bundle_archive(asset, exec_dir=exec_dir)
             env = {"PATH": "/usr/bin"}
 
             with mock.patch.multiple(webview,
                                      XODUS_WEBVIEW_REV="testrev",
                                      XODUS_WEBVIEW_SHA256=digest,
                                      XODUS_WEBVIEW_DIR=base / "xodus-webview",
+                                     XODUS_WEBVIEW_EXEC_DIR=exec_dir,
                                      ASSET="xodus-webview-testrev.tar.xz"), \
                     mock.patch.object(webview.sys, "argv",
                                       [str(asset.parent / "launcher")]), \
@@ -406,7 +419,7 @@ class EnvironmentTests(unittest.TestCase):
     def test_an_unavailable_runtime_names_the_host_package(self):
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "xodus-cli"
-            binary.write_text("#!/bin/sh\nexit 127\n")
+            binary.write_text(f"#!{SH}\nexit 127\n")
             binary.chmod(0o755)
             env = {"PATH": "/usr/bin"}
 
@@ -426,7 +439,7 @@ class EnvironmentTests(unittest.TestCase):
             base = Path(tmp)
             binary = base / "xodus-cli"
             binary.write_text(
-                "#!/bin/sh\necho 'xodus-cli: error while loading shared "
+                f"#!{SH}\necho 'xodus-cli: error while loading shared "
                 "libraries: libicuuc.so.76: cannot open shared object file' "
                 ">&2\nexit 127\n")
             binary.chmod(0o755)
@@ -478,7 +491,7 @@ class OldGlibcTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "xodus-cli"
             binary.write_text(
-                "#!/bin/sh\ncat >&2 <<'EOF'\n" + _OLD_GLIBC + "EOF\nexit 1\n")
+                f"#!{SH}\ncat >&2 <<'EOF'\n" + _OLD_GLIBC + "EOF\nexit 1\n")
             binary.chmod(0o755)
             env = {"PATH": "/usr/bin"}
 
@@ -542,7 +555,7 @@ class LauncherIntegrationTests(unittest.TestCase):
             base = Path(tmp)
             binary = base / "xodus" / "xodus-cli"
             binary.parent.mkdir()
-            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.write_text(f"#!{SH}\nexit 0\n")
             binary.chmod(0o755)
             _encrypted_build(base / "game")
             env = {"LD_LIBRARY_PATH": "/game/lib", "PATH": "/usr/bin"}
@@ -578,7 +591,7 @@ class LauncherIntegrationTests(unittest.TestCase):
             base = Path(tmp)
             binary = base / "xodus" / "xodus-cli"
             binary.parent.mkdir()
-            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.write_text(f"#!{SH}\nexit 0\n")
             binary.chmod(0o755)
             _encrypted_build(base / "game")
             env = {"PATH": "/usr/bin"}

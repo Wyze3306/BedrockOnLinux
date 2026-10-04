@@ -129,6 +129,13 @@
   engine, such as DXVK's and vkd3d-proton's, are kept, and no world, pack or
   setting is touched.
 
+- **The test suite passes in a packaging sandbox**
+  ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
+  builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long
+  temporary directory. Stand-in programs written by the tests relied on the
+  first two, so some tests reached out to GitHub and one waited forever; the
+  suite now runs to the end there.
+
 ## 2.2.7 — 2026-09-17
 
 ### Fixed

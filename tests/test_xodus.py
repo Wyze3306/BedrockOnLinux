@@ -19,6 +19,24 @@ from unittest import mock
 
 from bol import xodus
 
+# The sign-in stand-ins are shell scripts that really run. A build sandbox
+# such as Guix's has no /bin/sh, so they name the shell PATH finds (#303).
+SH = shutil.which("sh") or "/bin/sh"
+
+
+def _wait_for_sign_in(timeout=10):
+    """Wait for the stand-in sign-in to be up; False if it never came.
+
+    Without the deadline, a stand-in that could not start was a test suite
+    that never finished rather than one that failed (#303).
+    """
+    deadline = time.monotonic() + timeout
+    while not xodus.login_running():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.02)
+    return True
+
 
 def _cli_archive(path, body=b"#!/bin/sh\nexit 0\n"):
     """A tarball shaped like the published xodus-cli asset."""
@@ -1438,7 +1456,7 @@ class StoreSignInTests(unittest.TestCase):
         """Run login() against a stand-in for xodus-cli."""
         tmp = Path(tmp)
         binary = tmp / "xodus-cli"
-        binary.write_text("#!/bin/sh\n" + script, encoding="utf-8")
+        binary.write_text(f"#!{SH}\n" + script, encoding="utf-8")
         binary.chmod(0o755)
         log = tmp / "logs" / "store-login.log"
         with _own_home(tmp), \
@@ -1454,9 +1472,8 @@ class StoreSignInTests(unittest.TestCase):
             def watch():
                 started.wait(10)
                 # The page is up and going nowhere: this is the button.
-                while not xodus.login_running():
-                    time.sleep(0.02)
-                xodus.cancel_login()
+                if _wait_for_sign_in():
+                    xodus.cancel_login()
 
             waiter = threading.Thread(target=watch, daemon=True)
             waiter.start()
@@ -1505,8 +1522,8 @@ class StoreSignInTests(unittest.TestCase):
             worker = threading.Thread(target=self._swallow, daemon=True)
             worker.start()
             try:
-                while not xodus.login_running():
-                    time.sleep(0.02)
+                self.assertTrue(_wait_for_sign_in(),
+                                "the stand-in sign-in never started")
                 with self.assertRaises(xodus.XodusError) as caught:
                     xodus.login()
                 self.assertIn("already open", str(caught.exception))
@@ -1576,7 +1593,7 @@ class SignInInterruptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             binary = tmp / "xodus-cli"
-            binary.write_text("#!/bin/sh\necho opening; sleep 60\n",
+            binary.write_text(f"#!{SH}\necho opening; sleep 60\n",
                               encoding="utf-8")
             binary.chmod(0o755)
             with _own_home(tmp), \

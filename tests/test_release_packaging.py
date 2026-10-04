@@ -32,6 +32,11 @@ BUILD_RELEASE = ROOT / "scripts/build-release.sh"
 PACKAGE_ENGINE = ROOT / "scripts/package-engine.sh"
 RUN_CANDIDATE = ROOT / "scripts/run-candidate.sh"
 
+# The scripts these tests write stand in for real ones and are executed. A
+# build sandbox such as Guix's has no /usr/bin/env to find bash through, so
+# they name the bash on PATH, as its packaging does for the real ones (#303).
+_BASH = shutil.which("bash") or "/usr/bin/env bash"
+
 
 # The engine pin is blank between adding an engine patch and publishing the
 # build that carries it, and the release scripts refuse a candidate in that
@@ -493,7 +498,7 @@ class BuildReleaseHygieneTests(unittest.TestCase):
             for name in ("build-deb.sh", "build-rpm.sh", "build-appimage.sh",
                          "build-flatpak.sh"):
                 (scripts / name).write_text(
-                    "#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+                    f"#!{_BASH}\nexit 1\n", encoding="utf-8")
 
             stale = (
                 dist / "BedrockOnLinux-x86_64.AppImage",
@@ -627,7 +632,7 @@ class RunCandidateSafetyTests(unittest.TestCase):
         )
         launcher = self.checkout / "bedrock-on-linux"
         launcher.write_text(
-            "#!/usr/bin/env bash\n"
+            f"#!{_BASH}\n"
             "printf '%s\\n' \"$@\" > \"$TEST_LAUNCH_MARKER\"\n",
             encoding="utf-8",
         )
