@@ -171,12 +171,16 @@ def doctor(acknowledge_gpu_crash=False):
     # here says nothing about playing -- only about navigating the launcher
     # with no mouse, which is how Steam Game Mode reaches PLAY.
     print(f"  {'controller':12} : {gamepad.summary()}")
-    gpu_problem = graphics_safety_problem()
+    gpu_notes = []
+    gpu_problem = graphics_safety_problem(notes=gpu_notes)
     print(f"  {'graphics':12} : "
           f"{'BLOQUÉ' if gpu_problem else 'OK (no unsafe state found)'}")
     if gpu_problem:
         warn("Unsafe graphics session: " + gpu_problem + ". Repair the host "
              "GPU driver and reboot; no Vulkan probe was attempted.")
+    else:
+        for note in gpu_notes:
+            warn(note)
     # Wine 11 has no esync/fsync; without ntsync every wait is a wineserver
     # round-trip and the game behaves as if it were single-threaded. Import
     # lazily so the ordinary doctor keeps not depending on the Wine modules.

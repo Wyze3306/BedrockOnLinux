@@ -711,7 +711,12 @@ def _gpu_fault_in_text(text: str) -> bool:
         re.compile(r"\bnvrm:.*\bxid\b.*\b(?:79|119|120)\b"),
         re.compile(r"\bamdgpu\b.*(?:gpu reset begin|ring\s+\S+\s+timeout|"
                    r"asic reset failed|gpu fault)"),
-        re.compile(r"\b(?:i915|xe)\b.*(?:gpu hang|wedged|reset.*failed)"),
+        # Not a bare "GPU HANG": i915 logs one for every hang, then resets
+        # the engine or the whole GPU and carries on. A reset that fails
+        # leaves the GPU wedged, and that is the fault; see
+        # _recovered_gpu_hang_in_text for the rest (#301).
+        re.compile(r"\b(?:i915|xe)\b.*(?:wedged|reset.*failed|"
+                   r"failed to reset)"),
     )
     if any(pattern.search(line) for line in lines for pattern in direct):
         return True
@@ -733,6 +738,27 @@ def _gpu_fault_in_text(text: str) -> bool:
         if any(vendor.search(candidate) for candidate in lines[lo:hi]):
             return True
     return False
+
+
+_RECOVERED_INTEL_HANG = re.compile(r"\b(?:i915|xe)\b.*\bgpu hang\b")
+
+RECOVERED_HANG_NOTE = (
+    "The Intel GPU hung and was reset during this boot (\"GPU HANG\" in the "
+    "kernel log). Its driver recovered, so the launch goes ahead. If "
+    "Minecraft is what hung it and it happens again, update Mesa, or turn on "
+    "Settings ▸ Advanced ▸ Legacy compatibility renderer.")
+
+
+def _recovered_gpu_hang_in_text(text: str) -> bool:
+    """An Intel GPU hang the driver reset its way out of.
+
+    Such a hang blocked every launch until a reboot, as a "fatal kernel
+    fault", although nothing was left broken: on a UHD 610 the reporter of
+    #301 could not get past it with any setting. A failed reset is still a
+    fault (see _gpu_fault_in_text); this is only the hang it recovered from.
+    """
+    return any(_RECOVERED_INTEL_HANG.search(line)
+               for line in text.lower().splitlines())
 
 
 def _kernel_journal_text(binary: str, runner, boot: int) -> Optional[str]:
@@ -758,8 +784,12 @@ def _kernel_journal_text(binary: str, runner, boot: int) -> Optional[str]:
             + getattr(result, "stderr", ""))[-2_000_000:]
 
 
-def _kernel_driver_fault_scope(runner=None) -> Optional[str]:
-    """Return ``current``/``previous`` for an unacknowledged kernel fault."""
+def _kernel_driver_fault_scope(runner=None, notes=None) -> Optional[str]:
+    """Return ``current``/``previous`` for an unacknowledged kernel fault.
+
+    A recovered GPU hang during this boot is no fault, but it is worth a
+    word: it goes on ``notes`` when a list is given.
+    """
 
     binary = shutil.which("journalctl")
     if not binary and runner is not None:
@@ -770,6 +800,9 @@ def _kernel_driver_fault_scope(runner=None) -> Optional[str]:
     current = _kernel_journal_text(binary, runner, 0)
     if current is not None and _gpu_fault_in_text(current):
         return "current"
+    if (notes is not None and current is not None
+            and _recovered_gpu_hang_in_text(current)):
+        notes.append(RECOVERED_HANG_NOTE)
     if _previous_boot_fault_acknowledged():
         return None
     previous = _kernel_journal_text(binary, runner, -1)
@@ -857,17 +890,19 @@ def graphics_safety_problem(
         xrandr_runner=None,
         journal_runner=None,
         atom_probe=None,
-        provider_probe=None) -> Optional[str]:
+        provider_probe=None,
+        notes=None) -> Optional[str]:
     """Return an actionable reason to refuse launch, or ``None``.
 
     No Vulkan, OpenGL, ``nvidia-smi`` or DRM ioctl is performed here.
+    Advisories that do not refuse the launch go on ``notes`` when given.
     """
 
     env = os.environ if environ is None else environ
     interrupted = interrupted_launch_problem()
     if interrupted:
         return interrupted
-    fault_scope = _kernel_driver_fault_scope(journal_runner)
+    fault_scope = _kernel_driver_fault_scope(journal_runner, notes)
     if fault_scope == "current":
         return (
             "the graphics driver has already reported a fatal kernel fault "
@@ -922,8 +957,11 @@ def require_safe_graphics_session(
     """Refuse a launch which could turn a known driver fault into a hard lock."""
 
     env = os.environ if environ is None else environ
-    problem = graphics_safety_problem(env)
+    notes = []
+    problem = graphics_safety_problem(env, notes=notes)
     if not problem:
+        for note in notes:
+            warn(note)
         return
     if env_flag(env.get("BOL_ALLOW_UNSAFE_GPU")):
         warn("BOL_ALLOW_UNSAFE_GPU=1 bypasses the graphics safety block: "

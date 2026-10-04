@@ -383,6 +383,55 @@ class GraphicsSafetyTests(unittest.TestCase):
         self.assertNotIn("--since", calls[0])
         self.assertEqual(calls[0][calls[0].index("-n") + 1], "5000")
 
+    # What i915 logs around a hang it recovers from, and around one it does
+    # not (#301).
+    _INTEL_HANG = (
+        "i915 0000:00:02.0: [drm] GPU HANG: ecode 9:1:85dffffb, in "
+        "Minecraft.Windo [3171]\n"
+        "i915 0000:00:02.0: [drm] Resetting rcs0 for stopped heartbeat on "
+        "rcs0\n"
+        "i915 0000:00:02.0: [drm] Minecraft.Windo[3171] context reset due to "
+        "GPU hang\n")
+
+    def test_a_recovered_intel_hang_warns_instead_of_blocking(self):
+        def journal(args, **_kwargs):
+            if args[args.index("-b") + 1] == "0":
+                return result(self._INTEL_HANG)
+            return result()
+
+        notes = []
+        self.assertIsNone(gpu_safety.graphics_safety_problem(
+            {"XDG_SESSION_TYPE": "wayland"}, journal_runner=journal,
+            notes=notes))
+        self.assertEqual(notes, [gpu_safety.RECOVERED_HANG_NOTE])
+        self.assertFalse(gpu_safety._gpu_fault_in_text(self._INTEL_HANG))
+
+    def test_an_intel_gpu_that_did_not_come_back_still_blocks(self):
+        for failure in (
+                "i915 0000:00:02.0: [drm] *ERROR* Failed to reset chip\n",
+                "i915 0000:00:02.0: [drm] GPU wedged, needs recovery\n",
+                "xe 0000:00:02.0: [drm] *ERROR* GT0: Engine reset failed\n"):
+            with self.subTest(failure=failure):
+                def journal(*_args, log=self._INTEL_HANG + failure,
+                            **_kwargs):
+                    return result(log)
+
+                problem = gpu_safety.graphics_safety_problem(
+                    {"XDG_SESSION_TYPE": "wayland"}, journal_runner=journal)
+                self.assertIn("fatal kernel fault", problem)
+
+    def test_a_recovered_hang_is_said_once_at_launch(self):
+        def journal(*_args, **_kwargs):
+            return result(self._INTEL_HANG)
+
+        with mock.patch.object(gpu_safety, "warn") as warned, \
+                mock.patch.object(gpu_safety.shutil, "which",
+                                  return_value="/usr/bin/journalctl"), \
+                mock.patch.object(gpu_safety.subprocess, "run", journal):
+            gpu_safety.require_safe_graphics_session(
+                {"XDG_SESSION_TYPE": "wayland"})
+        warned.assert_called_once_with(gpu_safety.RECOVERED_HANG_NOTE)
+
     def test_unrelated_kernel_oops_is_not_misattributed_to_gpu(self):
         text = "amdgpu: initialized normally\n" + ("quiet line\n" * 100)
         text += ("BUG: kernel NULL pointer dereference\n"

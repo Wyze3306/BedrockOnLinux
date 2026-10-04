@@ -198,6 +198,15 @@
   driver ("Game closed (exit 84)"), is now diagnosed with the fix that worked
   there: Settings ▸ Advanced ▸ Legacy compatibility renderer.
 
+- **An Intel GPU that recovered from a hang no longer blocks every launch
+  until a reboot** ([#301](https://github.com/Wyze3306/BedrockOnLinux/issues/301)).
+  The graphics-safety check read any "GPU HANG" from Intel's driver in the
+  kernel log as a fatal fault. The driver logs one for every hang it then
+  resets its way out of, and a laptop with a UHD 610 was refused with every
+  setting until it rebooted. A hang the driver recovered from is now a warning
+  at PLAY and in Doctor. A GPU the driver gave up on ("wedged", a failed
+  reset) still blocks, as do NVIDIA and AMD faults.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long
