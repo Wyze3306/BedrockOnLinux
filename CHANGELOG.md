@@ -129,6 +129,17 @@
   engine, such as DXVK's and vkd3d-proton's, are kept, and no world, pack or
   setting is touched.
 
+- **The password prompt of the first Store sign-in is explained before it
+  appears** ([#297](https://github.com/Wyze3306/BedrockOnLinux/issues/297)).
+  Xodus registers the PC as a Microsoft Store device the first time, as
+  Windows does, and reads the firmware's system information for it
+  (manufacturer, model, serial number and UUID). Only root can read that
+  record, so it asks through pkexec, and the desktop showed a password
+  prompt for `cat /sys/firmware/dmi/entries/1-0/raw` that nothing explained.
+  The launcher now says what the prompt is and that cancelling it is fine:
+  the PC is then registered without that record, as it always is in the
+  Flatpak.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long

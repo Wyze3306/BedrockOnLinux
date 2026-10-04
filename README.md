@@ -97,6 +97,11 @@ Or add it as a flake input to install it declaratively, for example into
    Microsoft Store, once to play online, because the Store needs a session
    of its own. Use the same account both times; the launcher offers the
    second sign-in right after the first, and again if a download needs it.
+   The first Store sign-in may also bring up a password prompt from your
+   desktop: it registers this PC as a Microsoft Store device, as Windows
+   does, and reads the firmware's system information for it (manufacturer,
+   model, serial number and UUID), which only root can read. Cancelling that
+   prompt is fine; the PC is registered without it, as in the Flatpak.
 2. Pick **Minecraft** or **Minecraft Preview**, choose a version, and hit
    **PLAY**.
 3. Play, including the **Friends**, **Servers** and **Realms** tabs.

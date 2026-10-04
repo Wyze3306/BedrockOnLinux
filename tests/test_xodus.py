@@ -1612,3 +1612,73 @@ class SignInInterruptTests(unittest.TestCase):
 
             # Still sleeping out its minute if the interrupt did not reach it.
             self.assertIsNotNone(held["proc"].poll())
+
+
+class DeviceRegistrationNoticeTests(unittest.TestCase):
+    """The password prompt the first sign-in can raise (issue #297).
+
+    xodus-cli registers the PC as a Microsoft Store device before anything
+    else, and reads the firmware's SMBIOS record for it through pkexec. The
+    launcher cannot spare anyone that prompt, but it can say what it is.
+    """
+
+    def setUp(self):
+        xodus._LOGIN["proc"] = None
+        xodus._LOGIN["cancelled"] = False
+
+    tearDown = setUp
+
+    def _sign_in(self, tmp, keyring=None, pkexec=True):
+        """Run a sign-in against a stand-in; return what the launcher said."""
+        tmp = Path(tmp)
+        binary = tmp / "xodus-cli"
+        binary.write_text(f"#!{SH}\nexit 1\n", encoding="utf-8")
+        binary.chmod(0o755)
+        bindir = tmp / "bin"
+        bindir.mkdir()
+        if pkexec:
+            (bindir / "pkexec").write_text(f"#!{SH}\nexit 126\n",
+                                           encoding="utf-8")
+            (bindir / "pkexec").chmod(0o755)
+        with _own_home(tmp) as home, \
+                mock.patch.object(xodus, "ensure_cli", return_value=binary), \
+                mock.patch.object(xodus, "LOGIN_LOG", tmp / "login.log"), \
+                mock.patch.object(xodus.webview, "apply", return_value={}), \
+                mock.patch.dict(os.environ, {"PATH": str(bindir)}), \
+                mock.patch.object(xodus, "info") as said:
+            if keyring is not None:
+                home.mkdir(parents=True)
+                (home / ".xodus-keyring.ron").write_bytes(keyring)
+            with self.assertRaises(xodus.XodusError):
+                xodus.login()
+        return [call.args[0] for call in said.call_args_list]
+
+    def test_the_first_sign_in_says_why_a_password_may_be_asked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            said = self._sign_in(tmp)
+        self.assertIn(xodus.DEVICE_REGISTRATION_NOTICE, said)
+        self.assertIn("pkexec", xodus.DEVICE_REGISTRATION_NOTICE)
+        self.assertIn("Cancelling", xodus.DEVICE_REGISTRATION_NOTICE)
+
+    def test_a_registered_pc_is_not_warned_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            said = self._sign_in(
+                tmp, keyring=b'(service: "Xodus Service", user: "dev_license")')
+        self.assertNotIn(xodus.DEVICE_REGISTRATION_NOTICE, said)
+
+    def test_nothing_is_announced_where_there_is_no_pkexec(self):
+        # The Flatpak: xodus-cli cannot ask, so registers without asking.
+        with tempfile.TemporaryDirectory() as tmp:
+            said = self._sign_in(tmp, pkexec=False)
+        self.assertNotIn(xodus.DEVICE_REGISTRATION_NOTICE, said)
+
+    def test_only_a_registered_device_counts(self):
+        with tempfile.TemporaryDirectory() as tmp, _own_home(tmp) as home:
+            self.assertFalse(xodus.device_registered())
+            home.mkdir(parents=True)
+            keyring = home / ".xodus-keyring.ron"
+            keyring.write_bytes(b'(service: "Xodus Service", user: "user-DA")')
+            self.assertFalse(xodus.device_registered())
+            keyring.write_bytes(
+                b'(service: "Xodus Service", user: "dev_license")')
+            self.assertTrue(xodus.device_registered())

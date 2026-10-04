@@ -487,6 +487,46 @@ def signed_in():
     return all(entry in blob for entry in _USER_ENTRIES)
 
 
+# The keyring entry xodus-cli writes once it has registered this PC as a
+# Microsoft Store device. Every command that needs an identity registers one
+# first when it is missing, `xodus-cli login` included.
+_DEVICE_ENTRY = b'"dev_license"'
+
+# Registering is where the password prompt of issue #297 comes from: xodus-cli
+# puts the firmware's SMBIOS system-information record in the request, as
+# Windows does, and only root can read it, so it asks through pkexec. A refusal
+# is not an error to it: the device is registered without the record. That is
+# what always happens in the Flatpak, which has no pkexec at all.
+DEVICE_REGISTRATION_NOTICE = (
+    "Your system may ask for your password now. The first sign-in registers "
+    "this PC as a Microsoft Store device, as Windows does, and xodus-cli "
+    "reads the firmware's system information for it (manufacturer, model, "
+    "serial number and UUID) through pkexec. Cancelling that prompt is fine: "
+    "the PC is then registered without it, as it always is in the Flatpak.")
+
+
+def device_registered():
+    """Whether xodus-cli has already registered this PC with Microsoft."""
+    _adopt_legacy_keyring()
+    try:
+        return _DEVICE_ENTRY in XODUS_KEYRING.read_bytes()
+    except OSError:
+        return False
+
+
+def _announce_device_registration(env):
+    """Say why a password prompt is coming, before xodus-cli raises it.
+
+    A game launcher asking for root out of nowhere is rightly alarming, and
+    nothing on screen said what wanted it or why (#297).
+    """
+    if device_registered():
+        return
+    if not shutil.which("pkexec", path=env.get("PATH")):
+        return
+    info(DEVICE_REGISTRATION_NOTICE)
+
+
 # The one command the launcher cannot see inside: xodus-cli opens Microsoft's
 # own sign-in page in a webview, and when that page stops making progress --
 # the "Please wait" screen of issue #214 -- it prints nothing and never
@@ -586,12 +626,14 @@ def login(on_line=None):
             "cancel it, before starting another.")
     binary = ensure_cli()
     reset_webview_state()
+    env = _env(binary)
     info("Sign in to the Microsoft account that owns Minecraft …")
+    _announce_device_registration(env)
     with _LOGIN_LOCK:
         _LOGIN["cancelled"] = False
     try:
         proc = subprocess.Popen(
-            [str(binary), "login"], env=_env(binary),
+            [str(binary), "login"], env=env,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, errors="replace",
             # Its own session, so cancel_login() can take the webview's
