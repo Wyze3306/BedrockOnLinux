@@ -20,7 +20,7 @@ class ReadyLaunchHarness:
                                lock_fds=(), managed_engine=True,
                                umu_env=None, account=None, on_started=None,
                                extra_settings=None, environ=None,
-                               diagnosis=()):
+                               diagnosis=(), swap_guard=False):
         content = root / "content"
         logs = root / "logs"
         data = root / "data"
@@ -44,6 +44,12 @@ class ReadyLaunchHarness:
                 self.options_calls.append(name)
                 return result
             return side_effect
+
+        def guard(command, _env):
+            if not swap_guard:
+                return list(command), False
+            return ["systemd-run", "--user", "--scope", "--"] + list(command), \
+                True
 
         patches = (
             mock.patch.dict(os.environ, dict(environ or {}), clear=True),
@@ -87,13 +93,15 @@ class ReadyLaunchHarness:
                               side_effect=record("snapshot")),
             mock.patch.object(launch, "restore_truncated_game_options",
                               side_effect=record("restore_truncated", [])),
-            # The machine's own prefix holds a real settings file, which a
-            # launch test must neither read nor write.
+            # Neither the machine's own prefix nor its systemd may be reached
+            # from a launch test: the first is a real settings file, the
+            # second would start a real probe scope.
             mock.patch.object(launch, "find_options_file", return_value=None),
             mock.patch.object(launch, "set_aside_game_frame_limit",
                               side_effect=record("set_aside_frame_limit")),
             mock.patch.object(launch, "restore_game_frame_limits",
                               side_effect=record("restore_frame_limits", [])),
+            mock.patch.object(launch, "guard_game_command", side_effect=guard),
             mock.patch.object(launch, "seed_default_servers"),
             mock.patch.object(launch, "diagnose",
                               return_value=list(diagnosis)),
@@ -1403,7 +1411,7 @@ class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
     the game really starts from; it is put back only after the game is gone.
     """
 
-    def _play(self, environ=None):
+    def _play(self, environ=None, swap_guard=False):
         self.commands = commands = []
 
         def popen(command, **_kwargs):
@@ -1419,6 +1427,7 @@ class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
                 arm=lambda: "owned-token",
                 disarm=lambda _token: True,
                 environ=environ,
+                swap_guard=swap_guard,
             )
 
     def test_a_paced_launch_sets_the_limit_aside_between_repair_and_copy(self):
@@ -1434,3 +1443,13 @@ class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.assertEqual(self._play(environ={"BOL_FRAME_RATE": "0"}), 0)
         self.assertNotIn("set_aside_frame_limit", self.options_calls)
         self.assertEqual(self.options_calls[-1], "restore_frame_limits")
+
+    def test_the_game_starts_inside_the_swap_guard_when_there_is_one(self):
+        self.assertEqual(self._play(swap_guard=True), 0)
+        self.assertEqual(self.commands,
+                         [["systemd-run", "--user", "--scope", "--",
+                           "fake-umu"]])
+
+    def test_the_game_starts_unwrapped_when_there_is_none(self):
+        self.assertEqual(self._play(swap_guard=False), 0)
+        self.assertEqual(self.commands, [["fake-umu"]])

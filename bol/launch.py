@@ -66,6 +66,7 @@ from .prefix import (
     snapshot_game_options,
 )
 from .proton import custom_proton, patch_proton, proton_path
+from .swapguard import guard_game_command
 from .util import (
     _screen_refresh_hz,
     _screen_wh,
@@ -292,6 +293,21 @@ def _set_aside_game_frame_limit(prefix=None):
     return set_aside_game_frame_limit(
         find_options_file(active_prefix() if prefix is None else prefix),
         prefix_idle=True)
+
+
+def _keep_game_out_of_swap(cmd, env):
+    """Start the game in a scope the kernel may not swap (see bol.swapguard).
+
+    A desktop short of memory otherwise pages the game out first — it is
+    what was touched least recently — and every page then comes back through
+    a major fault on the thread that needs it, mid-frame.
+    """
+    guarded, applied = guard_game_command(cmd, env)
+    if applied:
+        info("Minecraft's memory stays in RAM for this session: when memory "
+             "runs short the kernel swaps other programs, not the game "
+             "(BOL_ALLOW_GAME_SWAP=1 turns this off).")
+    return guarded
 
 
 def _steam_input_available(environ=None):
@@ -814,6 +830,9 @@ def _launch_once(lock_fds=(), on_started=None):
             "Minecraft was not started; click PLAY again.")
     apply_custom_env(env, s.get("custom_env") or "")
     _warn_custom_env_overrides(s.get("custom_env") or "")
+    # Outermost of all, so the scope holds everything above it, gamescope
+    # included; and after the custom environment, where its opt-out lives.
+    cmd = _keep_game_out_of_swap(cmd, env)
     # Prevent diagnosis from attributing stale Proton logs to this launch.
     _clear_previous_proton_logs()
     # Repair a settings file a previous crash cut off before the game reads

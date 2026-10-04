@@ -35,6 +35,24 @@
   is the player's, only the wait is cheaper. `BOL_FRAME_RATE=0` leaves the
   game to pace itself.
 
+- **The game's memory stays in RAM while it runs.** A desktop that runs short
+  of memory pages out what was touched least recently. In a game, that is
+  the world behind the player, and the whole game while its window is in the
+  background. Every page then comes back through a major fault on the thread
+  that needs it. Measured on a 16 GiB desktop with 13 GiB already in swap,
+  with the GPU at 7-20% throughout:
+  - 27,203 major faults in three seconds after coming back to the game;
+  - frames of up to 983 ms;
+  - one stretch of about 30 seconds without a single presented frame.
+
+  Where the user's systemd can enforce it, the launcher now starts the game
+  in a scope that may not use swap at all (`MemorySwapMax=0`, no privilege
+  needed), so reclaim falls on the page cache and on other programs. Whether
+  that works is probed at every launch through the game's own environment.
+  A Flatpak, a host without systemd, or a memory controller that is not
+  delegated starts the game exactly as before. `BOL_ALLOW_GAME_SWAP=1` turns
+  it off.
+
 - **A controller that Steam Input drives moves the launcher's highlight once
   per press** ([#288](https://github.com/Wyze3306/BedrockOnLinux/issues/288)).
   With Steam Input on — Game Mode on a Steam Deck, Big Picture anywhere — a
