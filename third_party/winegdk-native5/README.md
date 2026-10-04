@@ -142,7 +142,21 @@ that includes it. Wine registers a class only when it updates a prefix, which
 the engine's reproducible `wine.inf` timestamp never triggers, so the launcher
 registers this one in the prefix before every launch.
 
+The `0011` patch binds `wl_seat` no newer than the pointer listener can
+handle. Version 8 of the seat makes the compositor send
+`wl_pointer.axis_value120` for every turn of the mouse wheel, and
+`wayland_pointer.c` adds a handler for that event only when
+`WL_POINTER_AXIS_VALUE120_SINCE_VERSION` exists, which wayland-client defines
+from 1.21. The engine is built against Bullseye's 1.18, so its listener ends
+at `axis_discrete` (72 bytes in the native18 `winewayland.so`) while the seat
+was still bound at version 8: under the Wayland driver, the first wheel event
+found a NULL handler and libwayland aborted the game with "listener function
+for opcode 9 of wl_pointer is NULL" (issue #296). Built against those headers,
+the seat is now bound at version 7, where the wheel arrives as
+`axis_discrete`, which the driver already turns into the same `WHEEL_DELTA`
+steps; with newer headers nothing changes.
+
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
 native5 delta and its follow-ups. The Bullseye builder applies the reviewed r12
 and native patches when the target commit is unavailable, always applies `0002`
-through `0010`, then verifies the complete resulting source tree.
+through `0011`, then verifies the complete resulting source tree.

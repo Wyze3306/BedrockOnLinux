@@ -43,6 +43,8 @@ readonly VENDORED_XSYSTEM_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0009-
 readonly VENDORED_XSYSTEM_PATCH_SHA256="c0a8e35717368fdc31f5ba6374ecb64aacb84cbd1dc22958077cff9ab5e2c301"
 readonly VENDORED_SAVE_PICKER_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0010-windows.storage-implement-the-file-save-picker.patch"
 readonly VENDORED_SAVE_PICKER_PATCH_SHA256="6ec2431cd854c2ae9f47ca6936dff19b0309c82ad3f3bc3fdcd0a9361ecd511c"
+readonly VENDORED_WAYLAND_SEAT_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0011-winewayland-bind-wl_seat-no-newer-than-the-pointer-listener.patch"
+readonly VENDORED_WAYLAND_SEAT_PATCH_SHA256="ed550ec1c78d581fbd21d25da429b9b37fb137e19df7128056cb2ec5340a5c59"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
@@ -196,6 +198,16 @@ echo "== Applying the Windows.Storage file save picker"
 git -C "$SRC" apply --check "$VENDORED_SAVE_PICKER_PATCH" \
   || { echo "!! file save picker patch does not apply" >&2; exit 1; }
 git -C "$SRC" apply "$VENDORED_SAVE_PICKER_PATCH"
+
+echo "== Applying the Wayland seat version fix"
+[ -f "$VENDORED_WAYLAND_SEAT_PATCH" ] \
+  || { echo "!! missing Wayland seat version patch" >&2; exit 1; }
+[ "$(sha256sum "$VENDORED_WAYLAND_SEAT_PATCH" | cut -d' ' -f1)" = \
+  "$VENDORED_WAYLAND_SEAT_PATCH_SHA256" ] \
+  || { echo "!! Wayland seat version patch hash mismatch" >&2; exit 1; }
+git -C "$SRC" apply --check "$VENDORED_WAYLAND_SEAT_PATCH" \
+  || { echo "!! Wayland seat version patch does not apply" >&2; exit 1; }
+git -C "$SRC" apply "$VENDORED_WAYLAND_SEAT_PATCH"
 
 echo "== Verifying reviewed source hashes"
 [ -f "$SOURCE_SHA256SUMS" ] || { echo "!! missing SOURCE-SHA256SUMS" >&2; exit 1; }

@@ -1,0 +1,50 @@
+From: BedrockOnLinux contributors
+Subject: [PATCH] winewayland: bind wl_seat no newer than the pointer listener
+ handles
+
+Version 8 of wl_seat makes the compositor send wl_pointer.axis_value120
+for every turn of the mouse wheel. The pointer listener only has a slot
+for that event when it is compiled against wayland-client 1.21 or newer
+(the WL_POINTER_AXIS_VALUE120_SINCE_VERSION guard), but the seat was bound
+at version 8 regardless. Built against older headers, as the engine is on
+Debian bullseye's libwayland 1.18, the listener ends at axis_discrete and
+the first wheel event finds a NULL handler: libwayland prints "listener
+function for opcode 9 of wl_pointer is NULL" and aborts the process.
+
+Bind version 7 when the headers have no axis_value120. The wheel still
+arrives, through wl_pointer.axis_discrete, which the driver already turns
+into the same WHEEL_DELTA steps.
+
+diff --git a/dlls/winewayland.drv/wayland.c b/dlls/winewayland.drv/wayland.c
+index b164210..2f216ad 100644
+--- a/dlls/winewayland.drv/wayland.c
++++ b/dlls/winewayland.drv/wayland.c
+@@ -32,6 +32,18 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
+ 
++/* wl_seat version 8 makes the compositor send wl_pointer.axis_value120, and
++ * the pointer listener only has a slot for that event when wayland-client is
++ * 1.21 or newer. Built against older headers, binding version 8 regardless
++ * hands the first turn of the mouse wheel to a NULL handler, and libwayland
++ * aborts the process on it. Version 7 still delivers the wheel, through
++ * wl_pointer.axis_discrete. */
++#ifdef WL_POINTER_AXIS_VALUE120_SINCE_VERSION
++#define WAYLAND_SEAT_VERSION 8
++#else
++#define WAYLAND_SEAT_VERSION 7
++#endif
++
+ struct wayland process_wayland =
+ {
+     .seat.mutex = PTHREAD_MUTEX_INITIALIZER,
+@@ -141,7 +153,8 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
+         }
+         pthread_mutex_lock(&seat->mutex);
+         seat->wl_seat = wl_registry_bind(registry, id, &wl_seat_interface,
+-                                         version < 8 ? version : 8);
++                                         version < WAYLAND_SEAT_VERSION ?
++                                         version : WAYLAND_SEAT_VERSION);
+         seat->global_id = id;
+         wl_seat_add_listener(seat->wl_seat, &seat_listener, NULL);
+         pthread_mutex_unlock(&seat->mutex);

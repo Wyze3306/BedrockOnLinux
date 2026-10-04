@@ -214,6 +214,16 @@
   *Uninstalling* section lists each location, what to save first (the worlds)
   and the one Flatpak command that does it all.
 
+- **The mouse wheel no longer closes the game under the Wayland driver**
+  ([#296](https://github.com/Wyze3306/BedrockOnLinux/issues/296)). With
+  `BOL_INPUT=wayland` or `PROTON_ENABLE_WAYLAND=1`, the first turn of the
+  wheel ended the game with "listener function for opcode 9 of wl_pointer is
+  NULL". Wine's Wayland driver asked the compositor for the newest seat
+  version, whose wheel event its pointer handler has no place for when it is
+  built against the libwayland the engine is built with. The engine (native20)
+  now asks for the version before it, which delivers the wheel the way the
+  driver already handles.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long

@@ -51,6 +51,10 @@ XSYSTEM_PATCH = (
 SAVE_PICKER_PATCH = (
     DELTA / "0010-windows.storage-implement-the-file-save-picker.patch"
 )
+WAYLAND_SEAT_PATCH = (
+    DELTA / "0011-winewayland-bind-wl_seat-no-newer-than-the-pointer-"
+            "listener.patch"
+)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -72,6 +76,7 @@ CHANGED_FILES = {
     "dlls/windows.storage/savepicker.c",
     "dlls/windows.storage/tests/storage.c",
     "dlls/windows.storage/vector.c",
+    "dlls/winewayland.drv/wayland.c",
     "dlls/xgameruntime/GDKComponent/System/User/XUser.c",
     "dlls/xgameruntime/GDKComponent/System/User/XUser.h",
     "dlls/xgameruntime/GDKComponent/System/User/DeviceAuth.c",
@@ -158,6 +163,10 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
             self._constant("VENDORED_SAVE_PICKER_PATCH_SHA256"),
         )
         self.assertEqual(
+            hashlib.sha256(WAYLAND_SEAT_PATCH.read_bytes()).hexdigest(),
+            self._constant("VENDORED_WAYLAND_SEAT_PATCH_SHA256"),
+        )
+        self.assertEqual(
             hashlib.sha256(SOURCE_SUMS.read_bytes()).hexdigest(),
             self._constant("SOURCE_SHA256SUMS_SHA256"),
         )
@@ -179,7 +188,8 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         xstore = XSTORE_PATCH.read_text()
         mapped_fd = (MAPPED_FD_PATCH.read_text() + PATH_MAP_PATCH.read_text()
                      + XSYSTEM_PATCH.read_text()
-                     + SAVE_PICKER_PATCH.read_text())
+                     + SAVE_PICKER_PATCH.read_text()
+                     + WAYLAND_SEAT_PATCH.read_text())
         self.assertTrue(text.startswith(f"From {WINEGDK_SOURCE_COMMIT} "))
         changed = {
             left for left, right in re.findall(
@@ -782,6 +792,23 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         # The flattened vtable itself is untouched: slot 4 stays the sandbox
         # query every one of those callers makes.
         self.assertNotIn("x_system_vtbl", XSYSTEM_PATCH.read_text())
+
+    def test_the_wayland_seat_is_bound_no_newer_than_its_listener(self):
+        # #296: wl_seat 8 sends wl_pointer.axis_value120, which a listener
+        # built against Bullseye's libwayland has no slot for, and the first
+        # turn of the wheel aborted the game.
+        text = WAYLAND_SEAT_PATCH.read_text()
+        additions = "\n".join(
+            line[1:] for line in text.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        self.assertIn("#ifdef WL_POINTER_AXIS_VALUE120_SINCE_VERSION",
+                      additions)
+        self.assertIn("#define WAYLAND_SEAT_VERSION 8", additions)
+        self.assertIn("#define WAYLAND_SEAT_VERSION 7", additions)
+        self.assertIn("version < WAYLAND_SEAT_VERSION ?", additions)
+        self.assertIn("-                                         version < 8 ? "
+                      "version : 8);", text)
 
     def test_the_save_picker_is_what_every_export_activates(self):
         # #167: RoActivateInstance of this class failed with

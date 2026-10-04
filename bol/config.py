@@ -91,9 +91,9 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 # match the reviewed pins below.
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
 # The commit alone does not identify vendored follow-up patches.
-WINEGDK_SOURCE_MANIFEST_SHA256 = "92b278c21e3e0e344369b4bdddee720c5ad0e7c5768b70fad71c714ea22a5f02"
-WINEGDK_BUILD_REV = "wow64-archs-native19"
-# native19 carries the ntdll loader patches the Microsoft Store packages need:
+WINEGDK_SOURCE_MANIFEST_SHA256 = "954afa1bc968c36cd8379ea9a53a318261944d5e1dbeaceeba58e0c63fc3c432"
+WINEGDK_BUILD_REV = "wow64-archs-native20"
+# native20 carries the ntdll loader patches the Microsoft Store packages need:
 # 0007 maps the main image from a descriptor, 0008 from a path so it survives
 # the Steam Linux Runtime container. Their game executable stays encrypted on
 # disk, so an engine without them cannot start the game -- which is why an
@@ -116,6 +116,11 @@ WINEGDK_BUILD_REV = "wow64-archs-native19"
 # native19 adds the Windows.Storage.Pickers.FileSavePicker of 0010, which every
 # export Minecraft offers asks for -- a structure, a world, the album -- and
 # which no engine had, so each of them stayed on its loading screen (#167).
+#
+# native20 binds the Wayland seat at the version its pointer listener
+# handles (0011). Built against Bullseye's libwayland, the listener has no
+# slot for the wheel event version 8 sends, and under the Wayland driver the
+# first turn of the mouse wheel aborted the game (#296).
 WINEGDK_ARCHIVE_SHA256 = "be0b4f14045c338a6f79a5350098b9edc8f78ec3165d6d7525c4edd31301e46b"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "f0d5b219ff1c8a42c9893e7d6bc17b42e37412ebbf1d1e6ca7a4882fee36893a"
