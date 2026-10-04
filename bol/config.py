@@ -121,7 +121,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native20"
 # handles (0011). Built against Bullseye's libwayland, the listener has no
 # slot for the wheel event version 8 sends, and under the Wayland driver the
 # first turn of the mouse wheel aborted the game (#296).
-WINEGDK_ARCHIVE_SHA256 = "be0b4f14045c338a6f79a5350098b9edc8f78ec3165d6d7525c4edd31301e46b"
+WINEGDK_ARCHIVE_SHA256 = "2f30533b249954438bf6b425631539c8d8036261ce25cffa0d1ea5d30f1d3e27"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "e76d21e706dec9775a41b176b48e69dade034a8248b6f4b9a169dc4c336e2600"
 
