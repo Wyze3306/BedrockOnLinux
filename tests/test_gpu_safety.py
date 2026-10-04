@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,20 @@ from types import SimpleNamespace
 from unittest import mock
 
 from bol import gpu_safety
+
+
+def _live_pid(test):
+    """A process other than this one, alive until the test ends.
+
+    It stands in for another launcher that is still running. The test
+    process cannot: a marker naming it without a start time can only be
+    a recycled PID (#299), and the parent can be PID 1 in a sandbox.
+    """
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"])
+    test.addCleanup(child.wait)
+    test.addCleanup(child.kill)
+    return child.pid
 
 
 def result(stdout="", stderr="", returncode=0):
@@ -525,8 +540,8 @@ class GraphicsSafetyTests(unittest.TestCase):
 
         self.assertFalse(status.can_acknowledge)
         self.assertIn("during this boot", problem)
-        self.assertIn("cannot be acknowledged", problem)
-        self.assertIn("only clears it after that reboot", problem)
+        self.assertIn("the next PLAY clears this record by itself", problem)
+        self.assertNotIn("--acknowledge-gpu-crash", problem)
 
     def test_torn_hard_reboot_marker_is_still_blocking(self):
         self.marker.write_text("{torn")
@@ -566,14 +581,14 @@ class GraphicsSafetyTests(unittest.TestCase):
         self.assertFalse(self.marker.exists())
         warning.assert_called_once()
 
-    def test_idle_recovery_keeps_running_and_old_boot_markers(self):
+    def test_idle_recovery_keeps_live_and_old_boot_markers(self):
         state = {
             "version": gpu_safety._STATE_VERSION,
             "engine_rev": "wow64-archs-r12",
             "phase": "running",
             "token": "1" * 32,
             "boot_id": "boot-now",
-            "launcher_pid": 424242,
+            "launcher_pid": _live_pid(self),
             "created": 1,
         }
         self.marker.write_text(json.dumps(state))
@@ -585,6 +600,40 @@ class GraphicsSafetyTests(unittest.TestCase):
         self.marker.write_text(json.dumps(state))
         self.assertFalse(gpu_safety.retire_idle_current_boot_marker())
         self.assertTrue(self.marker.exists())
+
+    def test_a_session_whose_launcher_is_gone_is_cleared(self):
+        # Killed with its terminal, Flatpak or container while the game ran:
+        # this blocked every launch until a reboot (#299).
+        self.marker.write_text(json.dumps({
+            "version": gpu_safety._STATE_VERSION,
+            "engine_rev": "wow64-archs-native18",
+            "phase": "running",
+            "token": "1" * 32,
+            "boot_id": "boot-now",
+            "launcher_pid": 424242,
+            "created": 1,
+        }))
+        with mock.patch.object(gpu_safety, "warn") as warning:
+            self.assertTrue(gpu_safety.retire_idle_current_boot_marker())
+        self.assertFalse(self.marker.exists())
+        self.assertIn("launcher stopped during this boot",
+                      warning.call_args.args[0])
+
+    def test_an_older_launchers_marker_with_a_recycled_pid_is_cleared(self):
+        # The Flatpak's launcher is PID 2 in every sandbox: an older one's
+        # marker naming PID 2 cannot be the one now asking.
+        self.marker.write_text(json.dumps({
+            "version": gpu_safety._STATE_VERSION,
+            "engine_rev": "wow64-archs-native18",
+            "phase": "running",
+            "token": "1" * 32,
+            "boot_id": "boot-now",
+            "launcher_pid": os.getpid(),
+            "created": 1,
+        }))
+        with mock.patch.object(gpu_safety, "warn"):
+            self.assertTrue(gpu_safety.retire_idle_current_boot_marker())
+        self.assertFalse(self.marker.exists())
 
     def test_idle_recovery_keeps_malformed_current_boot_marker(self):
         self.marker.write_text(json.dumps({
@@ -656,7 +705,7 @@ class GraphicsSafetyTests(unittest.TestCase):
             "engine_rev": "wow64-archs-r12",
             "token": "active-token",
             "boot_id": "boot-now",
-            "launcher_pid": os.getpid(),
+            "launcher_pid": _live_pid(self),
             "created": 1,
         }))
         with self.assertRaisesRegex(gpu_safety.BolError, "still active"):
@@ -789,7 +838,7 @@ class GraphicsSafetyTests(unittest.TestCase):
             "version": gpu_safety._LEGACY_MARKER_VERSION,
             "token": "1" * 32,
             "boot_id": "boot-now",
-            "launcher_pid": os.getpid(),
+            "launcher_pid": _live_pid(self),
             "created": 1,
         }))
         problem = gpu_safety.graphics_safety_problem(
@@ -891,8 +940,14 @@ class LauncherIdentityTests(unittest.TestCase):
             gpu_safety._acknowledgement_marker_scope(self.marker), "active")
 
     def test_a_marker_from_before_the_start_time_keeps_the_pid_answer(self):
-        self._running_marker()
+        self._running_marker(launcher_pid=_live_pid(self))
         self.assertIn("still marked active", self._problem())
+
+    def test_an_older_marker_naming_this_process_is_a_recycled_pid(self):
+        # This launcher records its start time; a marker without one that
+        # names its PID was written by another process in another namespace.
+        self._running_marker()
+        self.assertNotIn("still marked active", self._problem())
 
     def test_an_orphan_with_a_start_time_can_still_be_retired(self):
         self._running_marker(phase="wrapper_returned", wrapper_returned=2,

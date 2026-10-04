@@ -380,6 +380,10 @@ def _launcher_alive(state: dict) -> bool:
     pid = state.get("launcher_pid")
     if not _pid_alive(pid):
         return False
+    if "launcher_start" not in state:
+        # Written by an older launcher: this process would have recorded
+        # its start time, so its own PID there can only be a recycled one.
+        return pid != os.getpid()
     started = state.get("launcher_start")
     if started is None:
         return True
@@ -442,13 +446,13 @@ def interrupted_launch_problem(path: Optional[Path] = None) -> Optional[str]:
             "close or force-stop it instead of starting a second session"
         )
     if same_boot:
-        # The acknowledgement is deliberately refused for a marker created
-        # during this boot, so do not advertise it as the immediate next step.
+        # PLAY retires this marker itself (retire_idle_current_boot_marker),
+        # so the acknowledgement is not the next step for it.
         return (
             "the previous Minecraft GPU session did not return cleanly during "
-            "this boot; inspect why the session or machine stopped, then "
-            "reboot — an interrupted launch from the running boot cannot be "
-            f"acknowledged, and '{command}' only clears it after that reboot"
+            "this boot; once nothing of that session is left running, the "
+            "next PLAY clears this record by itself — reboot first if the "
+            "screen froze or the graphics misbehaved"
         )
     return (
         "the previous Minecraft GPU session did not return cleanly before the "
@@ -540,23 +544,35 @@ def retire_idle_current_boot_marker(path: Optional[Path] = None) -> bool:
     normal shutdown.  If that exceeds the launcher's grace period, retaining
     the marker is correct while those processes are live but must not turn
     into a permanent same-boot block after the prefix has stopped. The launch
-    lock and idle-prefix check are owned by the caller. Only a marker which
-    durably records that the wrapper returned is eligible; a marker left while
-    Minecraft was running, an old-boot marker, malformed state, and token
-    races remain untouched. Kernel, journal, and display-provider checks still
-    run immediately after this recovery.
+    lock and idle-prefix check are owned by the caller.
+
+    A marker left "running" goes too once the launcher that wrote it is gone:
+    one killed with its terminal, its Flatpak or its container while the game
+    ran. Nothing of that session is left -- the caller holds the launch lock,
+    which the game's wrapper keeps for as long as it runs, and found the
+    prefix idle -- and the machine never stopped, since this is the same
+    boot. It used to block every launch until a reboot, which is what made a
+    Guix container user delete the marker by hand (#299). An old-boot marker,
+    a running marker whose launcher is still alive, malformed state, and
+    token races remain untouched. Kernel, journal, and display-provider
+    checks still run immediately after this recovery.
     """
 
     marker = Path(path) if path is not None else GPU_LAUNCH_MARKER
     state = _read_state(marker)
+    if not state or state.get("version") != _STATE_VERSION:
+        return False
+    phase = state.get("phase")
     expected_fields = {
         "version", "engine_rev", "phase", "token", "boot_id",
-        "launcher_pid", "created", "wrapper_returned",
+        "launcher_pid", "created",
     }
+    if phase == "wrapper_returned":
+        expected_fields.add("wrapper_returned")
+    elif phase != "running":
+        return False
     # Markers written before the launcher's start time was recorded lack it.
-    if (not state or state.get("version") != _STATE_VERSION
-            or state.get("phase") != "wrapper_returned"
-            or set(state) - {"launcher_start"} != expected_fields):
+    if set(state) - {"launcher_start"} != expected_fields:
         return False
     launcher_start = state.get("launcher_start")
     if launcher_start is not None and (
@@ -574,19 +590,31 @@ def retire_idle_current_boot_marker(path: Optional[Path] = None) -> bool:
     if (isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1
             or isinstance(created, bool) or not isinstance(created, int)
             or created < 0 or not isinstance(engine_rev, str)
-            or isinstance(wrapper_returned, bool)
-            or not isinstance(wrapper_returned, int)
-            or wrapper_returned < created
             or not engine_rev or not isinstance(token, str)
             or not re.fullmatch(r"[0-9a-f]{32}", token)):
         return False
+    if phase == "wrapper_returned":
+        if (isinstance(wrapper_returned, bool)
+                or not isinstance(wrapper_returned, int)
+                or wrapper_returned < created):
+            return False
+    elif _launcher_alive(state):
+        return False
     if not disarm_gpu_launch(token, marker):
         return False
-    warn(
-        "Removed an orphaned current-boot GPU marker after confirming the "
-        "Wine prefix is idle; kernel and display-server safety checks still "
-        "apply."
-    )
+    if phase == "wrapper_returned":
+        warn(
+            "Removed an orphaned current-boot GPU marker after confirming the "
+            "Wine prefix is idle; kernel and display-server safety checks "
+            "still apply."
+        )
+    else:
+        warn(
+            "Cleared the record of a Minecraft session whose launcher stopped "
+            "during this boot while the game ran (closed with its terminal, "
+            "Flatpak or container): nothing of it is left running. Kernel "
+            "and display-server safety checks still apply."
+        )
     return True
 
 
@@ -835,7 +863,8 @@ def gpu_safety_acknowledgement_status(
         return GpuSafetyAcknowledgementStatus(
             "current-boot-launch", False,
             "The interrupted Minecraft launch happened during this boot. "
-            "Inspect the graphics driver and reboot before acknowledging it.",
+            "PLAY clears it by itself once nothing of that session is left "
+            "running; reboot first if the graphics misbehaved.",
             marker_present=True,
         )
     if marker_scope == "unknown":

@@ -224,6 +224,16 @@
   now asks for the version before it, which delivers the wheel the way the
   driver already handles.
 
+- **A launch interrupted by its launcher no longer blocks PLAY until a
+  reboot** ([#299](https://github.com/Wyze3306/BedrockOnLinux/issues/299)).
+  When the launcher was closed with its terminal, its Flatpak or its
+  container while the game ran, its safety record stayed "running", and every
+  launch was refused until the machine restarted; one Guix user deleted the
+  file by hand. PLAY now clears that record itself when its launcher is gone,
+  nothing of the session is left running and the boot is the same one, then
+  runs the kernel and display checks as before. A session whose launcher is
+  still alive, and one interrupted by a reboot, are handled as they were.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long
