@@ -1307,6 +1307,41 @@ def _drawable_term(env):
     return env
 
 
+# A download that has stopped moving looks exactly like one that is about to
+# finish: the bar sits on its last value -- 93% in #304 -- and nothing else is
+# said. xodus-cli redraws its bars whenever a byte arrives, so silence on its
+# terminal means nothing arrived. It gives a stalled connection five seconds
+# and then asks for the same range again, for ever, without a word; and when
+# it cannot write a file it says so and tries again every 30 seconds, for
+# ever, on a terminal nobody reads. After _STALL_NOTICE seconds of silence the
+# player is told; after _STALL_LIMIT the attempt is stopped, and the next
+# mirror gets its turn.
+_STALL_NOTICE = 90
+_STALL_LIMIT = 600
+_WRITE_ERROR = re.compile(r"Error write file (?P<error>.+?) waiting \d+s")
+
+
+def _duration(seconds):
+    if seconds >= 120:
+        return f"{seconds // 60} minutes"
+    return f"{seconds} seconds"
+
+
+def _write_error_message(dest, error):
+    """What to tell the player when xodus-cli cannot write the game."""
+    lowered = error.lower()
+    if "no space left" in lowered or "os error 28" in lowered:
+        remedy = ("The disk is full: free some space on it and the download "
+                  "carries on by itself.")
+    elif "quota" in lowered or "os error 122" in lowered:
+        remedy = ("Your disk quota is used up: free some of it and the "
+                  "download carries on by itself.")
+    else:
+        remedy = "It tries again every 30 seconds."
+    return (f"Minecraft could not be written to {dest} ({error}). The "
+            f"download is waiting, not finished. {remedy}")
+
+
 def _run_streaming(cmd, progress=None, record=None):
     """Run xodus-cli and translate its progress bars into progress(done, total).
 
@@ -1316,8 +1351,22 @@ def _run_streaming(cmd, progress=None, record=None):
     ``record`` is called with every line that is not a progress frame, so a
     download that fails leaves more behind than the last forty lines held in
     memory.
+
+    A write error is reported the moment xodus-cli prints it, and a download
+    silent for _STALL_LIMIT seconds is stopped; see _STALL_NOTICE.
     """
     tail = []
+    dest = cmd[-1]
+    write_errors = set()
+
+    def recorded(line):
+        match = _WRITE_ERROR.search(line)
+        if match and match.group("error") not in write_errors:
+            write_errors.add(match.group("error"))
+            warn(_write_error_message(dest, match.group("error")))
+        if record:
+            record(line)
+
     env = _drawable_term(_env(cmd[0]))
     master, slave = pty.openpty()
     # A pty starts out reporting no size at all, and indicatif pads every
@@ -1345,6 +1394,8 @@ def _run_streaming(cmd, progress=None, record=None):
     # exactly there. Once it is gone, keep draining until a read comes back
     # with nothing rather than leaving on the first idle poll.
     exited = False
+    heard = time.monotonic()
+    noticed = stalled = False
     try:
         while True:
             ready, _, _ = select.select([master], [], [], 0 if exited else 0.5)
@@ -1355,22 +1406,42 @@ def _run_streaming(cmd, progress=None, record=None):
                     chunk = b""
                 if not chunk:
                     break
+                heard = time.monotonic()
+                noticed = False
                 buffer += chunk.decode("utf-8", "replace")
                 # indicatif redraws with \r and ANSI cursor moves rather than
                 # newlines, so split on both.
                 parts = re.split(r"[\r\n]", buffer)
                 buffer = parts.pop()
                 for line in parts:
-                    _consume(_ANSI.sub("", line), tail, progress, record)
+                    _consume(_ANSI.sub("", line), tail, progress, recorded)
                 continue
             if exited:
                 break
             exited = proc.poll() is not None
+            silent = time.monotonic() - heard
+            if exited or stalled:
+                continue
+            if silent >= _STALL_LIMIT:
+                stalled = True
+                proc.kill()
+            elif silent >= _STALL_NOTICE and not noticed:
+                noticed = True
+                warn(f"Nothing has reached the Minecraft download for "
+                     f"{_duration(_STALL_NOTICE)}. It keeps asking on its "
+                     "own and carries on when the connection comes back; "
+                     f"after {_duration(_STALL_LIMIT)} without anything, it "
+                     "starts again from another Microsoft mirror.")
     finally:
         os.close(master)
         proc.wait()
     if buffer:
-        _consume(_ANSI.sub("", buffer), tail, progress, record)
+        _consume(_ANSI.sub("", buffer), tail, progress, recorded)
+    if stalled:
+        line = (f"Nothing reached the download for {_duration(_STALL_LIMIT)}, "
+                "so this attempt was stopped.")
+        recorded(line)
+        tail.append(line)
     return proc.returncode, tail
 
 

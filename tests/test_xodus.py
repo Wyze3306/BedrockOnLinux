@@ -1682,3 +1682,103 @@ class DeviceRegistrationNoticeTests(unittest.TestCase):
             keyring.write_bytes(
                 b'(service: "Xodus Service", user: "dev_license")')
             self.assertTrue(xodus.device_registered())
+
+
+class StallWatchTests(unittest.TestCase):
+    """A download that stops moving says so, and is given up (#304).
+
+    The bar used to sit on its last value -- 93% in that report -- while
+    xodus-cli asked for the same range again and again without a word, or
+    waited on a disk it could not write to.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        patch = mock.patch.object(xodus, "DOWNLOAD_LOG",
+                                  self.tmp / "store-download.log")
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def _binary(self, script):
+        binary = self.tmp / "xodus-cli"
+        binary.write_text(f"#!{SH}\n" + script, encoding="utf-8")
+        binary.chmod(0o755)
+        return binary
+
+    @contextlib.contextmanager
+    def _limits(self, notice=1, limit=2):
+        with _own_home(self.tmp), \
+                mock.patch.object(xodus.webview, "apply", return_value={}), \
+                mock.patch.object(xodus, "_STALL_NOTICE", notice), \
+                mock.patch.object(xodus, "_STALL_LIMIT", limit), \
+                mock.patch.object(xodus, "warn") as warned:
+            yield warned
+
+    def _stream(self, binary):
+        return xodus._run_streaming(
+            [str(binary), "streaming", "http://assets1.example/p.msixvc",
+             str(self.tmp / "dest")])
+
+    _FRAME = ("printf 'Downloading                       1.00 MiB/    "
+              "2.00 GiB  1.00 MiB/s [#>---] 0%%\\r'\n")
+
+    def test_a_silent_download_is_stopped(self):
+        binary = self._binary(self._FRAME + "exec sleep 30\n")
+        with self._limits() as warned:
+            started = time.monotonic()
+            code, tail = self._stream(binary)
+            elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 15)
+        self.assertNotEqual(code, 0)
+        self.assertTrue(tail[-1].startswith("Nothing reached the download"),
+                        tail)
+        notices = [call.args[0] for call in warned.call_args_list]
+        self.assertTrue(any("Nothing has reached the Minecraft download"
+                            in notice for notice in notices), notices)
+
+    def test_a_slow_download_is_left_to_finish(self):
+        binary = self._binary(
+            "i=0\nwhile [ $i -lt 8 ]; do\n  " + self._FRAME
+            + "  sleep 0.4\n  i=$((i + 1))\ndone\nexit 0\n")
+        with self._limits() as warned:
+            code, tail = self._stream(binary)
+        self.assertEqual(code, 0)
+        self.assertEqual(tail, [])
+        warned.assert_not_called()
+
+    def test_a_disk_that_cannot_be_written_is_reported_at_once(self):
+        error = "No space left on device (os error 28)"
+        binary = self._binary(
+            f"echo 'Error write file {error} waiting 30s' >&2\n"
+            f"echo 'Error write file {error} waiting 30s'\n"
+            "exit 0\n")
+        with self._limits(notice=60, limit=120) as warned:
+            self._stream(binary)
+        warned.assert_called_once()
+        message = warned.call_args.args[0]
+        self.assertIn(str(self.tmp / "dest"), message)
+        self.assertIn("The disk is full", message)
+        self.assertIn("waiting, not finished", message)
+
+    def test_a_stalled_mirror_hands_over_to_the_next(self):
+        dest = self.tmp / "dest"
+        binary = self._binary(
+            'case "$2" in\n'
+            "  *assets1*) " + self._FRAME.strip() + "; exec sleep 30 ;;\n"
+            '  *) mkdir -p "$3/game" && : > "$3/game/Minecraft.Windows.exe"'
+            ' && : > "$3/game/appxmanifest.xml"'
+            ' && : > "$3/.xodus-streaming.msixvc" ;;\n'
+            "esac\n")
+        with self._limits() as warned, \
+                mock.patch.object(xodus, "ensure_cli", return_value=binary), \
+                mock.patch.object(xodus, "signed_in", return_value=True), \
+                mock.patch.object(xodus, "_package_size", return_value=0):
+            installed = xodus.install(
+                ["http://assets1.xboxlive.com/p.msixvc",
+                 "http://assets2.xboxlive.com/p.msixvc"], dest)
+        self.assertEqual(installed, dest)
+        said = " ".join(call.args[0] for call in warned.call_args_list)
+        self.assertIn("Retrying from another Microsoft mirror", said)
+        self.assertIn("Nothing reached the download", said)

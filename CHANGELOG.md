@@ -179,6 +179,15 @@
   data instead. Nothing in the launcher needs root, so it now says to run it
   without sudo. `BOL_ALLOW_ROOT=1` overrides this.
 
+- **A Minecraft download that stops moving says so, and is retried**
+  ([#304](https://github.com/Wyze3306/BedrockOnLinux/issues/304)). A stalled
+  download looked like one about to finish: the bar sat on its last value
+  while xodus-cli asked Microsoft for the same data again without a word, or
+  waited on a disk it could not write to. A write error is now shown the moment
+  it happens, with what to do about a full disk; after 90 seconds without any
+  data the launcher says the download is waiting; after 10 minutes it stops that
+  attempt and starts again from Microsoft's other mirror.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long
