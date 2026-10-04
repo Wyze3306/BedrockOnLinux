@@ -160,6 +160,27 @@ Still stuck? Ask on [Discord](https://discord.gg/5YJq54Yhbu) or
 launcher version, your distribution, your GPU and the log, but never your
 account details.
 
+## Uninstalling
+
+Removing the app leaves what it downloaded where it was: the game, the Wine
+prefix with your worlds in it, the game engine and its runtime, several
+gigabytes in all. A package manager does not know about those files, and an
+AppImage has no uninstaller at all. To remove everything:
+
+1. If you want to keep your worlds, copy
+   `~/.local/share/bedrock-on-linux/compatdata/pfx/drive_c/users/steamuser/AppData/Roaming/Minecraft Bedrock`
+   somewhere first.
+2. Delete `~/.local/share/bedrock-on-linux`, or the folder you moved the
+   installation to in **Settings** (`~/.config/bedrock-on-linux` records it;
+   delete that too).
+3. Delete the shortcuts the launcher made, if any:
+   `~/.local/share/applications/bedrock-on-linux-*.desktop`, and the
+   *Minecraft Bedrock* entry you added to Steam. Launchers before 2.2.2 also
+   left `~/.xodus-keyring.ron` in your home folder.
+
+For the Flatpak, `flatpak uninstall --delete-data io.github.wyze3306.BedrockOnLinux`
+does all of it.
+
 ## Building
 
 Everything is built from source by a public, reproducible pipeline, and each

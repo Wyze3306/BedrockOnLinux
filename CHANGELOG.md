@@ -207,6 +207,13 @@
   at PLAY and in Doctor. A GPU the driver gave up on ("wedged", a failed
   reset) still blocks, as do NVIDIA and AMD faults.
 
+- **The README says how to remove everything**
+  ([#295](https://github.com/Wyze3306/BedrockOnLinux/issues/295)). Removing
+  the app left the game, the Wine prefix, the engine and its runtime behind,
+  more than 8 GB for one reporter, and nothing said where they were. The new
+  *Uninstalling* section lists each location, what to save first (the worlds)
+  and the one Flatpak command that does it all.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long
