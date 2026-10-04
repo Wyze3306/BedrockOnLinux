@@ -23,7 +23,7 @@ from pathlib import Path
 
 from .config import CACHE, CONTENT, DATA
 from .log import BolError, info, ok, warn
-from .util import download
+from .util import download, env_flag, sudo_invoker
 
 # Tested on Minecraft 1.26.51.1 + WineGDK/vkd3d-proton on an RX 7600 XT.
 # Keep this pinned: silently moving a proxy DLL that is loaded into the game is
@@ -490,7 +490,12 @@ def bootstrap(environ=None) -> None:
     """
     if not enabled(environ):
         return
-    apply_environment(os.environ if environ is None else environ)
+    source = os.environ if environ is None else environ
+    if sudo_invoker(source) and not env_flag(source.get("BOL_ALLOW_ROOT")):
+        # The CLI refuses to run through sudo right after this; nothing is
+        # synced into a game directory as root before it does.
+        return
+    apply_environment(source)
     if not PAYLOAD.is_dir():
         warn("OptiScaler is enabled but its payload is missing; run "
              "'bedrock-on-linux optiscaler install'.")

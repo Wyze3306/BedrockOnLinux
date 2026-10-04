@@ -1,6 +1,7 @@
 """Tests for bol.util's screen-geometry helper."""
 # SPDX-License-Identifier: MIT
 
+import contextlib
 import io
 import json
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from bol import util
+from bol.log import BolError
 
 
 class HttpJsonNoCredentialTests(unittest.TestCase):
@@ -80,6 +82,37 @@ class SteamAppIdTests(unittest.TestCase):
         # A non-Steam shortcut carries a different, 64-bit identifier there.
         self.assertIsNone(
             util.steam_app_id({"SteamGameId": "11668020851441139712"}))
+
+
+class SudoTests(unittest.TestCase):
+    """Elevated from an account, the launcher would use root's data (#299)."""
+
+    def test_the_account_behind_sudo_or_doas_is_named(self):
+        self.assertEqual(util.sudo_invoker({"SUDO_USER": "bilal"}, euid=0),
+                         "bilal")
+        self.assertEqual(util.sudo_invoker({"DOAS_USER": "maxim"}, euid=0),
+                         "maxim")
+
+    def test_root_on_its_own_is_not_elevation(self):
+        # A container that runs everything as root has no one else to be.
+        self.assertIsNone(util.sudo_invoker({}, euid=0))
+        self.assertIsNone(util.sudo_invoker({"SUDO_USER": "root"}, euid=0))
+
+    def test_an_ordinary_account_is_not_elevated(self):
+        self.assertIsNone(util.sudo_invoker({"SUDO_USER": "bilal"}, euid=1000))
+
+    def test_sudo_is_refused_with_the_account_to_use(self):
+        with self.assertRaises(BolError) as raised, \
+                contextlib.redirect_stdout(io.StringIO()):
+            util.refuse_sudo({"SUDO_USER": "bilal"}, euid=0)
+        message = str(raised.exception)
+        self.assertIn("as bilal, without sudo", message)
+        self.assertIn("BOL_ALLOW_ROOT=1", message)
+
+    def test_the_refusal_can_be_overridden(self):
+        util.refuse_sudo({"SUDO_USER": "bilal", "BOL_ALLOW_ROOT": "1"},
+                         euid=0)
+        util.refuse_sudo({"SUDO_USER": "bilal"}, euid=1000)
 
 
 class LauncherCommandTests(unittest.TestCase):

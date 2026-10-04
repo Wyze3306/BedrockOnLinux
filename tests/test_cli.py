@@ -292,6 +292,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exited.exception.code, 1)
 
 
+class SudoRefusalTests(unittest.TestCase):
+    def test_nothing_runs_as_root_for_someone_else(self):
+        # `sudo ... doctor --acknowledge-gpu-crash` looked at root's data
+        # and found no incident to acknowledge (#299).
+        output = io.StringIO()
+        with mock.patch.object(
+                sys, "argv",
+                ["bedrock-on-linux", "doctor", "--acknowledge-gpu-crash"]), \
+                mock.patch.dict(os.environ, {"SUDO_USER": "bilal"}), \
+                mock.patch.object(os, "geteuid", return_value=0), \
+                mock.patch("bol.util._ensure_xdg_storage") as storage, \
+                mock.patch.object(cli, "doctor") as doctor, \
+                contextlib.redirect_stdout(output), \
+                self.assertRaises(SystemExit) as exited:
+            cli.main()
+
+        self.assertEqual(exited.exception.code, 1)
+        self.assertIn("without sudo", output.getvalue())
+        storage.assert_not_called()
+        doctor.assert_not_called()
+
+
 class LauncherStartTests(unittest.TestCase):
     """Starting the launcher opens the launcher — in Game Mode too."""
 

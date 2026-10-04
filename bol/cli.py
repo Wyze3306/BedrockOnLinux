@@ -255,6 +255,9 @@ def main():
 
     a = p.parse_args()
     try:
+        # Before anything is read or written: as root, it would be root's.
+        from .util import refuse_sudo
+        refuse_sudo()
         # Migration must precede every write to the new XDG root.
         from .util import _ensure_xdg_storage
         _ensure_xdg_storage()

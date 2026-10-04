@@ -25,6 +25,7 @@ from .config import (
     FLATPAK_APP_ID,
     GAMES,
     LOGS,
+    PRETTY,
     PROTON_DIR,
     SETTINGS,
     UMU_DIR,
@@ -583,3 +584,37 @@ def remove_path(path):
 def env_flag(value):
     """Whether an environment or settings string opts in."""
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def sudo_invoker(environ=None, euid=None):
+    """The account that started this as root through sudo or doas, or None.
+
+    Root alone is not the question: a container that runs everything as
+    root has no one else to be. Elevated from an account, the launcher
+    reads root's data instead of that account's -- `sudo ... doctor` found
+    no GPU incident to acknowledge because the marker was in the user's
+    data, not root's (#299) -- or, where sudo keeps HOME, leaves files only
+    root can change in the user's own.
+    """
+    source = os.environ if environ is None else environ
+    if (os.geteuid() if euid is None else euid) != 0:
+        return None
+    for key in ("SUDO_USER", "DOAS_USER"):
+        name = str(source.get(key) or "").strip()
+        if name and name != "root":
+            return name
+    return None
+
+
+def refuse_sudo(environ=None, euid=None):
+    """Stop before anything is read or written as root for someone else."""
+    source = os.environ if environ is None else environ
+    invoker = sudo_invoker(source, euid)
+    if invoker is None or env_flag(source.get("BOL_ALLOW_ROOT")):
+        return
+    die(f"Run {PRETTY} as {invoker}, without sudo. As root it uses root's "
+        "copy of the game, the sign-ins and the safety records instead of "
+        "yours, or leaves files only root can change among yours, and it "
+        "would start the game as root. Nothing in it needs root: the one "
+        "system password prompt, at the first Store sign-in, asks for "
+        "itself. BOL_ALLOW_ROOT=1 overrides this.")

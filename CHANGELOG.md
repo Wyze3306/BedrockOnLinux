@@ -170,6 +170,15 @@
   record now carries the process's start time as well, so that session reads
   as what it is: interrupted during this boot.
 
+- **The launcher refuses to run through sudo**
+  ([#299](https://github.com/Wyze3306/BedrockOnLinux/issues/299)). As root
+  it read root's copy of the game, the sign-ins and the safety records:
+  `sudo bedrock-on-linux doctor --acknowledge-gpu-crash` found no incident to
+  acknowledge, because the incident was recorded in the user's data. Where
+  sudo keeps `HOME`, it left files that only root can change in the user's
+  data instead. Nothing in the launcher needs root, so it now says to run it
+  without sudo. `BOL_ALLOW_ROOT=1` overrides this.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long
