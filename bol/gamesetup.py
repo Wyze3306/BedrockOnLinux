@@ -85,6 +85,30 @@ LICENCE_REFUSED = (
     "again.")
 
 
+# DRM devices, for telling a virtual GPU from a real one (#302).
+DRM_SYSFS = Path("/sys/class/drm")
+
+
+def _virtio_gpu(text=""):
+    """Whether the game drew through a virtio-gpu device.
+
+    That is what ChromeOS's Linux container and most virtual machines hand
+    a guest: Mesa's Venus driver forwards Vulkan to the host through it.
+    The log names it when vkd3d-proton or Mesa did; sysfs says so for every
+    virtio-gpu device (PCI vendor 0x1af4) either way.
+    """
+    if re.search(r"\bVenus\b|virtio[-_ ]?gpu|\b1af4:10[0-9a-f]{2}\b",
+                 text, re.I):
+        return True
+    for vendor in DRM_SYSFS.glob("card*/device/vendor"):
+        try:
+            if vendor.read_text().strip().lower() == "0x1af4":
+                return True
+        except OSError:
+            continue
+    return False
+
+
 _DIAG_RULES = [
     (r"d3d12_command_signature_init_state_template_dgc_(?:ext|nv):.*"
      r"Cannot implement command signature|"
@@ -238,6 +262,18 @@ def diagnose():
         text,
         re.I,
     )
+    # A Chromebook got from "Game closed (exit 84)", the access violation
+    # above, to a world by turning the legacy renderer on (#302): Venus
+    # forwards Vulkan to the host, and Minecraft's Direct3D 12 path through
+    # vkd3d-proton did not survive it.
+    crashed = any("memory access violation" in hit for hit in hits)
+    if crashed and _virtio_gpu(text):
+        hits.append("This system draws through a virtual GPU (virtio-gpu, as "
+                    "in ChromeOS's Linux container or a virtual machine), "
+                    "which Minecraft's Direct3D 12 renderer can crash on. "
+                    "Turn on Settings ▸ Advanced ▸ Legacy compatibility "
+                    "renderer: on a Chromebook, that is what got the game "
+                    "running. It costs visual quality and ray tracing.")
     if lacks_vulkan_13 and no_dxvk_adapter and not software_only:
         hits.append("DXVK found no usable Vulkan 1.3 adapter — choose the "
                     "Legacy compatibility renderer (renderer=opengl) in "

@@ -188,6 +188,16 @@
   data the launcher says the download is waiting; after 10 minutes it stops that
   attempt and starts again from Microsoft's other mirror.
 
+- **ChromeOS: the launcher window opens, and a crash on a virtual GPU points
+  at the setting that fixes it**
+  ([#302](https://github.com/Wyze3306/BedrockOnLinux/issues/302)). In
+  ChromeOS's Linux container, Qt's Wayland backend crashed the window on
+  ChromeOS's compositor; the launcher now draws it through XWayland there,
+  unless `QT_QPA_PLATFORM` says otherwise. And a game that dies of an access
+  violation on a virtio-gpu device, as Minecraft did on a Chromebook's Venus
+  driver ("Game closed (exit 84)"), is now diagnosed with the fix that worked
+  there: Settings ▸ Advanced ▸ Legacy compatibility renderer.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long

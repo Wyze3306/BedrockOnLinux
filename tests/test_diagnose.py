@@ -63,6 +63,44 @@ class GameCrashDiagnosisTests(unittest.TestCase):
         self.assertTrue(
             any("memory access violation" in hit for hit in hits), hits)
 
+    _PAGE_FAULT = ("wine: Unhandled page fault on read access to "
+                   "0000000000000008 at address 0000000140427AB5 (thread "
+                   "0118), starting debugger...\n")
+
+    def _diagnose_on(self, log, drm):
+        with mock.patch.object(gamesetup, "DRM_SYSFS", drm):
+            return self._diagnose(log)
+
+    def test_a_crash_on_a_virtual_gpu_suggests_the_legacy_renderer(self):
+        # A Chromebook's Venus driver: exit 84 until the legacy renderer (#302).
+        with tempfile.TemporaryDirectory() as td:
+            hits = self._diagnose_on(
+                "info:vkd3d-proton: Virtio-GPU Venus (Intel(R) UHD Graphics "
+                "(JSL))\n" + self._PAGE_FAULT, Path(td))
+        self.assertTrue(any("Legacy compatibility renderer" in hit
+                            and "virtual GPU" in hit for hit in hits), hits)
+
+    def test_sysfs_names_a_virtual_gpu_the_log_does_not(self):
+        with tempfile.TemporaryDirectory() as td:
+            card = Path(td) / "card0" / "device"
+            card.mkdir(parents=True)
+            (card / "vendor").write_text("0x1af4\n")
+            hits = self._diagnose_on(self._PAGE_FAULT, Path(td))
+        self.assertTrue(any("virtual GPU" in hit for hit in hits), hits)
+
+    def test_a_crash_on_a_real_gpu_does_not_blame_virtualisation(self):
+        with tempfile.TemporaryDirectory() as td:
+            card = Path(td) / "card0" / "device"
+            card.mkdir(parents=True)
+            (card / "vendor").write_text("0x10de\n")
+            hits = self._diagnose_on(self._PAGE_FAULT, Path(td))
+        self.assertFalse(any("virtual GPU" in hit for hit in hits), hits)
+
+    def test_a_virtual_gpu_that_did_not_crash_is_not_mentioned(self):
+        with tempfile.TemporaryDirectory() as td:
+            hits = self._diagnose_on("Virtio-GPU Venus\n", Path(td))
+        self.assertFalse(any("virtual GPU" in hit for hit in hits), hits)
+
     def test_ordinary_log_traffic_is_not_a_crash(self):
         hits = self._diagnose(
             "fixme:seh:page fault handling discussed in a fixme\n"

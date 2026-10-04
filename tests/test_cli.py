@@ -6,6 +6,7 @@ import contextlib
 import io
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -290,6 +291,46 @@ class CliTests(unittest.TestCase):
             cli.main()
 
         self.assertEqual(exited.exception.code, 1)
+
+
+class ChromeOsWindowTests(unittest.TestCase):
+    """Qt's Wayland backend crashed the window in ChromeOS's container (#302)."""
+
+    def _root(self, tmp, marker=True):
+        root = Path(tmp)
+        if marker:
+            (root / "dev").mkdir()
+            (root / "dev" / ".cros_milestone").write_text("128\n")
+        return root
+
+    def test_the_container_gets_xwayland(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"}
+            self.assertTrue(cli._prefer_x11_on_chromeos(env, self._root(tmp)))
+        self.assertEqual(env["QT_QPA_PLATFORM"], "xcb")
+
+    def test_the_compositor_alone_is_enough_to_tell(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"DISPLAY": ":0", "SOMMELIER_VERSION": "0.20"}
+            self.assertTrue(cli._prefer_x11_on_chromeos(
+                env, self._root(tmp, marker=False)))
+        self.assertEqual(env["QT_QPA_PLATFORM"], "xcb")
+
+    def test_a_platform_someone_chose_is_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"DISPLAY": ":0", "QT_QPA_PLATFORM": "wayland"}
+            self.assertFalse(cli._prefer_x11_on_chromeos(env, self._root(tmp)))
+        self.assertEqual(env["QT_QPA_PLATFORM"], "wayland")
+
+    def test_nothing_changes_without_xwayland_or_off_chromeos(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            no_x = {"WAYLAND_DISPLAY": "wayland-0"}
+            self.assertFalse(cli._prefer_x11_on_chromeos(no_x, self._root(tmp)))
+            desktop = {"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"}
+            self.assertFalse(cli._prefer_x11_on_chromeos(
+                desktop, self._root(tmp + "-none", marker=False)))
+        self.assertNotIn("QT_QPA_PLATFORM", no_x)
+        self.assertNotIn("QT_QPA_PLATFORM", desktop)
 
 
 class SudoRefusalTests(unittest.TestCase):

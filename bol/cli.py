@@ -126,6 +126,32 @@ def _remove_installed_build(wanted, edition_id=None):
     info(_BUILDS_KEEP_NOTE)
 
 
+def _chromeos_container(root=Path("/")):
+    """Whether this runs in ChromeOS's Linux container (Crostini)."""
+    return ((root / "dev/.cros_milestone").exists()
+            or (root / "opt/google/cros-containers").is_dir())
+
+
+def _prefer_x11_on_chromeos(environ=None, root=Path("/")):
+    """Draw the window through XWayland in ChromeOS's Linux container.
+
+    Qt's own Wayland backend crashed the launcher there, on ChromeOS's
+    compositor, and XWayland always runs beside it: the reporter of #302
+    got the window with QT_QPA_PLATFORM=xcb. A platform someone chose is
+    left alone. True when it set one.
+    """
+    env = os.environ if environ is None else environ
+    if (env.get("QT_QPA_PLATFORM") or "").strip():
+        return False
+    if not (env.get("DISPLAY") or "").strip():
+        return False
+    if not (_chromeos_container(root)
+            or (env.get("SOMMELIER_VERSION") or "").strip()):
+        return False
+    env["QT_QPA_PLATFORM"] = "xcb"
+    return True
+
+
 def _open_gui():
     """Open the launcher window, loading Qt only when it is actually asked for.
 
@@ -147,6 +173,8 @@ def _open_gui():
             "not installed here and could not be installed automatically. "
             "Install it with pip, or use the AppImage, Flatpak, .deb or .rpm "
             f"— each of those carries it. `{APP} play` needs none of it.")
+    # Qt picks its platform when it starts, so before bol.gui is imported.
+    _prefer_x11_on_chromeos()
     try:
         from .gui import gui
     except ImportError as exc:
