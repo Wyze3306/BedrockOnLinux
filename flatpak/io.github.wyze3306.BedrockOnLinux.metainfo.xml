@@ -77,6 +77,34 @@
   </supports>
 
   <releases>
+    <release version="2.2.8" date="2026-10-04">
+      <description>
+        <p>Exports work, the mouse wheel no longer closes the game under the
+           Wayland driver, and setups that blocked PLAY or the download now
+           explain themselves or recover on their own.</p>
+        <ul>
+          <li>exports structures, worlds and the album through a save picker
+              the engine now implements</li>
+          <li>keeps the mouse wheel from closing the game under the Wayland
+              driver</li>
+          <li>brings GameInput up to the version each Minecraft build ships,
+              for the camera and controllers</li>
+          <li>clears the safety record of a launch whose launcher was closed
+              with its terminal, Flatpak or container, instead of blocking
+              until a reboot, and no longer treats a recovered Intel GPU hang
+              as fatal</li>
+          <li>reports a stalled or disk-full download and retries it from the
+              other Microsoft mirror</li>
+          <li>explains the one-time password prompt of the first Store sign-in
+              and refuses to run through sudo</li>
+          <li>opens its window on Chromebooks and points at the legacy renderer
+              after a crash on a virtual GPU</li>
+          <li>holds Minecraft's own frame cap without spinning a CPU core,
+              keeps the game out of swap, and adds an experimental OptiScaler
+              integration</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.7" date="2026-09-17">
       <description>
         <p>Repair keeps your worlds, the Flatpak starts Minecraft on X11 desktops
