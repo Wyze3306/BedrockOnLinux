@@ -56,6 +56,25 @@ def acknowledge_gpu_crash_command() -> str:
     return launcher_command("doctor", "--acknowledge-gpu-crash")
 
 
+def unsafe_gpu_override_command(
+        environ: Optional[Mapping[str, str]] = None) -> str:
+    """A command line that starts this installation with the override set.
+
+    The variable has to reach the launcher's own process. The Advanced
+    custom-environment setting only reaches the game, and ``flatpak run``
+    passes nothing from the calling shell into the sandbox, so the bare
+    "BOL_ALLOW_UNSAFE_GPU=1" this message used to end on did nothing for a
+    Flatpak, nor for a launcher opened from the application menu (#301).
+    ``env`` rather than a shell assignment: it means the same in every shell.
+    """
+    command = launcher_command(environ=environ)
+    flatpak = "flatpak run "
+    if command.startswith(flatpak):
+        return (flatpak + "--env=BOL_ALLOW_UNSAFE_GPU=1 "
+                + command[len(flatpak):])
+    return "env BOL_ALLOW_UNSAFE_GPU=1 " + command
+
+
 def _x11_session(env: Mapping[str, str]) -> bool:
     session = (env.get("XDG_SESSION_TYPE") or "").strip().lower()
     if session:
@@ -871,5 +890,7 @@ def require_safe_graphics_session(
     die("Unsafe graphics session: " + problem + ". BedrockOnLinux did not "
         "start Wine, Vulkan, or Minecraft. Repair/reinstall the host GPU "
         "driver, ensure the desktop uses the hardware DRM provider, then "
-        "reboot. Advanced override (at your own risk): "
-        "BOL_ALLOW_UNSAFE_GPU=1.")
+        "reboot. Advanced override (at your own risk): start the launcher "
+        f"itself with BOL_ALLOW_UNSAFE_GPU=1, as in "
+        f"'{unsafe_gpu_override_command(env)}' — the custom environment "
+        "variables in Settings only reach the game.")

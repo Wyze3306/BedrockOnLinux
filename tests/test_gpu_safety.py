@@ -835,5 +835,42 @@ class AcknowledgementGuidanceTests(unittest.TestCase):
         )
 
 
+class OverrideGuidanceTests(unittest.TestCase):
+    """The override has to reach the launcher, not only be named (#301).
+
+    "BOL_ALLOW_UNSAFE_GPU=1" alone was tried as written and changed nothing:
+    `flatpak run` passes no variable from the calling shell into the sandbox,
+    and the custom-environment setting only reaches the game.
+    """
+
+    def test_a_flatpak_is_given_the_variable_through_flatpak_run(self):
+        command = gpu_safety.unsafe_gpu_override_command(
+            {"FLATPAK_ID": "io.github.wyze3306.BedrockOnLinux"})
+        self.assertEqual(
+            command, "flatpak run --env=BOL_ALLOW_UNSAFE_GPU=1 "
+                     "io.github.wyze3306.BedrockOnLinux")
+
+    def test_an_appimage_is_started_through_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            appimage = Path(tmp) / "BedrockOnLinux-2.2.7-x86_64.AppImage"
+            appimage.write_bytes(b"")
+            with mock.patch.object(gpu_safety, "launcher_command",
+                                   lambda environ=None: str(appimage)):
+                command = gpu_safety.unsafe_gpu_override_command({})
+        self.assertEqual(command, f"env BOL_ALLOW_UNSAFE_GPU=1 {appimage}")
+
+    def test_the_block_names_the_command_and_where_the_setting_goes(self):
+        with mock.patch.object(gpu_safety, "graphics_safety_problem",
+                               return_value="injected unsafe state"), \
+                mock.patch.object(gpu_safety, "launcher_command",
+                                  lambda environ=None: "bedrock-on-linux"):
+            with self.assertRaises(gpu_safety.BolError) as raised:
+                gpu_safety.require_safe_graphics_session({})
+        message = str(raised.exception)
+        self.assertIn("'env BOL_ALLOW_UNSAFE_GPU=1 bedrock-on-linux'",
+                      message)
+        self.assertIn("only reach the game", message)
+
+
 if __name__ == "__main__":
     unittest.main()

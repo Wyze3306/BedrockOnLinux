@@ -140,6 +140,15 @@
   the PC is then registered without that record, as it always is in the
   Flatpak.
 
+- **The graphics-safety block says how to apply its override**
+  ([#301](https://github.com/Wyze3306/BedrockOnLinux/issues/301)). It ended
+  on a bare `BOL_ALLOW_UNSAFE_GPU=1`, which only works in the launcher's own
+  environment: `flatpak run` passes nothing from the calling shell into the
+  sandbox, and the custom environment variables in Settings only reach the
+  game. Typed into either, it changed nothing. The message now gives the
+  command line for the installation it runs from, such as
+  `flatpak run --env=BOL_ALLOW_UNSAFE_GPU=1 io.github.wyze3306.BedrockOnLinux`.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long
