@@ -123,7 +123,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native20"
 # first turn of the mouse wheel aborted the game (#296).
 WINEGDK_ARCHIVE_SHA256 = "be0b4f14045c338a6f79a5350098b9edc8f78ec3165d6d7525c4edd31301e46b"
 # Build workflows verify this deterministic intermediate before reusing it.
-WINEGDK_PREFIX_SHA256 = "f0d5b219ff1c8a42c9893e7d6bc17b42e37412ebbf1d1e6ca7a4882fee36893a"
+WINEGDK_PREFIX_SHA256 = "e76d21e706dec9775a41b176b48e69dade034a8248b6f4b9a169dc4c336e2600"
 
 SELF_REPO = WINEGDK_PREBUILT_REPO
 
