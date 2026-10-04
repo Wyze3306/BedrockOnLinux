@@ -34,6 +34,17 @@ class ReadyLaunchHarness:
         # a stand-in, and the presence tests below assert on what it was told.
         self.presence = mock.MagicMock()
         self.presence_calls = []
+        # What touched the settings file, and in which order: the game must
+        # start from a file that has been repaired and set up, and nothing
+        # may rewrite it before the game is gone again (#175).
+        self.options_calls = []
+
+        def record(name, result=None):
+            def side_effect(*args, **kwargs):
+                self.options_calls.append(name)
+                return result
+            return side_effect
+
         patches = (
             mock.patch.dict(os.environ, dict(environ or {}), clear=True),
             mock.patch.object(launch, "CONTENT", content),
@@ -70,9 +81,19 @@ class ReadyLaunchHarness:
             mock.patch.object(launch, "hide_signin_button"),
             mock.patch.object(launch, "proton_umu_cmd",
                               return_value=(["fake-umu"], dict(umu_env or {}))),
-            mock.patch.object(launch, "patch_options"),
-            mock.patch.object(launch, "snapshot_game_options"),
-            mock.patch.object(launch, "restore_truncated_game_options"),
+            mock.patch.object(launch, "patch_options",
+                              side_effect=record("patch_options")),
+            mock.patch.object(launch, "snapshot_game_options",
+                              side_effect=record("snapshot")),
+            mock.patch.object(launch, "restore_truncated_game_options",
+                              side_effect=record("restore_truncated", [])),
+            # The machine's own prefix holds a real settings file, which a
+            # launch test must neither read nor write.
+            mock.patch.object(launch, "find_options_file", return_value=None),
+            mock.patch.object(launch, "set_aside_game_frame_limit",
+                              side_effect=record("set_aside_frame_limit")),
+            mock.patch.object(launch, "restore_game_frame_limits",
+                              side_effect=record("restore_frame_limits", [])),
             mock.patch.object(launch, "seed_default_servers"),
             mock.patch.object(launch, "diagnose",
                               return_value=list(diagnosis)),
@@ -1372,3 +1393,44 @@ class DiscordPresenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.launch_mocks["hide_signin_button"].assert_called_once()
 
 
+
+
+class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
+    """What a launch does to the game's own settings and process, in order.
+
+    The player's Max Framerate is set aside only once the settings file has
+    been repaired and before its copy is taken, so the copy is of the file
+    the game really starts from; it is put back only after the game is gone.
+    """
+
+    def _play(self, environ=None):
+        self.commands = commands = []
+
+        def popen(command, **_kwargs):
+            commands.append(list(command))
+            self.options_calls.append("game")
+            proc = mock.Mock()
+            proc.wait.return_value = 0
+            return proc
+
+        with tempfile.TemporaryDirectory() as td:
+            return self._exercise_ready_launch(
+                Path(td), popen,
+                arm=lambda: "owned-token",
+                disarm=lambda _token: True,
+                environ=environ,
+            )
+
+    def test_a_paced_launch_sets_the_limit_aside_between_repair_and_copy(self):
+        self.assertEqual(self._play(environ={"BOL_FRAME_RATE": "60"}), 0)
+        self.assertEqual(
+            self.options_calls,
+            ["restore_truncated", "set_aside_frame_limit", "snapshot", "game",
+             "restore_truncated", "patch_options", "restore_frame_limits"])
+
+    def test_an_unpaced_launch_writes_no_limit_but_still_puts_one_back(self):
+        # Nothing to hand over this time; a value an interrupted session
+        # left aside still has to find its way home.
+        self.assertEqual(self._play(environ={"BOL_FRAME_RATE": "0"}), 0)
+        self.assertNotIn("set_aside_frame_limit", self.options_calls)
+        self.assertEqual(self.options_calls[-1], "restore_frame_limits")

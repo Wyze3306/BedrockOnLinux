@@ -1257,6 +1257,137 @@ def patch_options(prefix_idle=None):
         ok("Multiplayer warning disabled")
 
 
+# Minecraft's own Max Framerate waits for each frame's deadline by polling for
+# window messages, and under Wine every empty poll is a sched_yield between two
+# getrusage calls: the main thread, which builds every frame, sits at a full
+# core doing nothing, half of it in the kernel (#173). vkd3d-proton's limiter
+# sleeps instead, but it only gets the job while the game's own limiter is off.
+# So for the length of a session the player's value waits in this file beside
+# options.txt and the setting reads Unlimited; once the game has exited, the
+# value goes back where the player left it.
+FRAME_LIMIT_SUFFIX = ".bol-max-framerate"
+
+_MAX_FRAMERATE_KEY = b"gfx_max_framerate"
+
+
+def _frame_limit_path(options_path: Path) -> Path:
+    return options_path.with_name(options_path.name + FRAME_LIMIT_SUFFIX)
+
+
+def _option_line_int(data, key: bytes):
+    """One ``key:value`` line of a settings file as an int, or None."""
+    for line in (data or b"").splitlines():
+        name, separator, value = line.partition(b":")
+        if separator and name.strip() == key:
+            try:
+                return int(value.strip())
+            except ValueError:
+                return None
+    return None
+
+
+def _held_frame_limit(options_path: Path):
+    """The Max Framerate a session set aside and has not put back, or None."""
+    try:
+        value = int((_read_bytes(_frame_limit_path(options_path))
+                     or b"").strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def game_frame_limit(options_path):
+    """The player's own Max Framerate in one settings file, or None.
+
+    A value set aside by an earlier session still counts while the file reads
+    Unlimited: that session ended before it could put it back — the launcher
+    was killed, or the machine went down with the game.
+    """
+    if not options_path:
+        return None
+    path = Path(options_path)
+    value = _option_line_int(_read_bytes(path), _MAX_FRAMERATE_KEY)
+    if value is not None and value > 0:
+        return value
+    return _held_frame_limit(path) if value == 0 else None
+
+
+def set_aside_game_frame_limit(options_path, prefix_idle=None):
+    """Switch Minecraft's own Max Framerate off for one session.
+
+    Returns the player's limit once the file reads Unlimited with the value
+    kept beside it, or None when nothing changed: no limit set, a torn file,
+    a prefix still in use, a write that failed. None is always safe — the
+    game then paces itself exactly as it did before.
+    """
+    if not options_path:
+        return None
+    path = Path(options_path)
+    data = _read_bytes(path)
+    if not _options_intact(data):
+        return None
+    limit = _option_line_int(data, _MAX_FRAMERATE_KEY)
+    if limit is None or limit <= 0:
+        # Already Unlimited: a value an interrupted session kept is still
+        # waiting beside the file, and nothing needs writing.
+        return _held_frame_limit(path) if limit == 0 else None
+    if not _prefix_is_idle(prefix_idle):
+        return None
+    # The player's value is written down first, so that no interruption
+    # between the two writes can lose it.
+    side = _frame_limit_path(path)
+    if not _write_file_atomically(side, b"%d\n" % limit):
+        return None
+    if not _write_file_atomically(
+            path, _set_option_line(data, _MAX_FRAMERATE_KEY, b"0")):
+        try:
+            side.unlink()
+        except OSError:
+            pass
+        return None
+    return limit
+
+
+def restore_game_frame_limits(prefix=None, prefix_idle=None):
+    """Put back every Max Framerate a session set aside.
+
+    Runs once the game has exited. A file that still reads Unlimited gets the
+    player's value back; one that reads anything else was changed in-game
+    during the session, and that newer choice is the one kept. A torn file is
+    left for restore_truncated_game_options and retried after the next game.
+    """
+    restored = []
+    for path in _options_files(prefix):
+        held = _held_frame_limit(path)
+        side = _frame_limit_path(path)
+        if held is None:
+            if side.exists():
+                # Unreadable or not a limit: nothing in it can be put back.
+                try:
+                    side.unlink()
+                except OSError:
+                    pass
+            continue
+        if not _prefix_is_idle(prefix_idle):
+            # The game may still be saving; the value waits for next time.
+            return restored
+        data = _read_bytes(path)
+        if not _options_intact(data):
+            continue
+        if not _option_line_int(data, _MAX_FRAMERATE_KEY):
+            updated = _set_option_line(data, _MAX_FRAMERATE_KEY,
+                                       b"%d" % held)
+            if updated is not None and not _write_file_atomically(path,
+                                                                  updated):
+                continue
+            restored.append(path)
+        try:
+            side.unlink()
+        except OSError:
+            pass
+    return restored
+
+
 # The Servers tab keeps the player's own server list beside options.txt, in
 # the same per-account folder (#188): one
 # "<id>:<name>:<host>:<port>:<added>" line per server, in no particular

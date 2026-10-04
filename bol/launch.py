@@ -54,12 +54,15 @@ from .perfcheck import (
 from .prefix import (
     active_prefix,
     boot_prefix,
+    game_frame_limit,
     launch_lock,
     patch_options,
     prefix_processes,
     proton_umu_cmd,
+    restore_game_frame_limits,
     restore_truncated_game_options,
     seed_default_servers,
+    set_aside_game_frame_limit,
     snapshot_game_options,
 )
 from .proton import custom_proton, patch_proton, proton_path
@@ -181,29 +184,37 @@ def _requested_frame_rate(environ=None):
 
 def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
                                 refresh_probe=None):
-    """Stop Minecraft drawing frames no display will ever show.
+    """Pace Minecraft's frames with a limiter that sleeps instead of spinning.
 
-    With vsync off and *Max Framerate* on Unlimited nothing paces the render
-    loop, and the main menu — the cheapest frame in the game — then runs into
-    four figures of FPS and takes most of the GPU to display a still image
-    (issue #150). vkd3d-proton's own limiter is the right place to stop that:
-    it sleeps until the frame deadline instead of spinning, and it applies to
-    every frame the game presents, menu included.
+    Minecraft's own *Max Framerate* waits for each frame's deadline by polling
+    for window messages, and under Wine every empty poll is a sched_yield
+    between two getrusage calls. The main thread — the one that builds every
+    frame in Bedrock — then sits at a full core doing nothing, most of it in
+    the kernel: 99% of a core in the menu (#173), and 99% again in a loaded
+    world at 60 FPS with vsync on, about 70 points of it kernel time, since
+    with the cap below the display's refresh rate the present call never has
+    to wait. vkd3d-proton's limiter sleeps
+    until the deadline instead, so when the player has set a limit the
+    launcher holds that same rate through it, and the game's own limiter is
+    set aside for the session (see _set_aside_game_frame_limit). Nothing the
+    player chose changes: the frame rate is theirs, only the wait is cheaper.
 
-    Only the genuinely unpaced case is capped, and only at the refresh rate of
-    the fastest display attached, so a player who set either of Minecraft's
-    own limits keeps exactly what they chose and nobody loses a frame they
-    could have seen.
+    With no limit at all — vsync off and *Max Framerate* on Unlimited —
+    nothing paces the render loop, and the main menu, the cheapest frame in
+    the game, then runs into four figures of FPS and takes most of the GPU to
+    display a still image (#150). That case is capped at the refresh rate of
+    the fastest display attached, so nobody loses a frame they could have
+    seen. The *Limit the frame rate to the display* switch in Settings turns
+    that cap off; it is on by default, because the uncapped menu is a bug
+    report and not a preference.
 
-    Two things override that, in order. ``BOL_FRAME_RATE`` wins outright,
-    since it is the only one that can name a rate: 0 never caps, a number
-    always caps at it, whatever the game and the switch say. Callers pass
+    ``BOL_FRAME_RATE`` outranks both, since it is the only one that can name
+    a rate: 0 never caps and leaves the game to pace itself, a number always
+    caps at it, whatever the game and the switch say. Callers pass
     ``environ`` with the Advanced custom-environment field overlaid, since
     that field is where it is documented and it is applied too late in the
-    launch to be visible here. Failing that, the *Limit the frame rate to the
-    display* switch in Settings decides whether the automatic cap applies at
-    all; it is on by default, because the uncapped menu is a bug report and
-    not a preference.
+    launch to be visible here. A ``VKD3D_FRAME_RATE`` set by hand, in either
+    place, is an answer already and is left alone.
 
     The limit is always whole frames per second, rounded up. That is not
     cosmetic: a value carrying a decimal point is parsed as no limit at all
@@ -215,46 +226,72 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
     requested = _requested_frame_rate(source)
     if requested == 0.0:
         return None
-    if requested is None and not (settings or {}).get("limit_frame_rate", True):
-        return None
-    if env.get("VKD3D_FRAME_RATE", "").strip():
+    if (env.get("VKD3D_FRAME_RATE", "").strip()
+            or str(source.get("VKD3D_FRAME_RATE", "")).strip()):
         # An inherited limit is already an explicit answer to this question.
         return None
 
-    if requested is None:
-        options = read_game_options(find_options_file(prefix))
-        if not frame_rate_is_unlimited(options):
-            return None
-        probe = _screen_refresh_hz if refresh_probe is None else refresh_probe
-        try:
-            refresh = probe()
-        except Exception:
-            # A display that cannot be measured must cost the cap, never the
-            # launch.
-            refresh = None
-        if not refresh or refresh <= 0:
-            # Without a refresh rate there is no defensible number to pick,
-            # and inventing one would cap a display we never measured.
-            warn("Minecraft has vsync off and Max Framerate on Unlimited, so "
-                 "nothing limits how fast it draws — the main menu alone can "
-                 "take most of the GPU. The launcher could not read any "
-                 "display's refresh rate to cap it; set Max Framerate in "
-                 "Video settings, or BOL_FRAME_RATE=<fps>.")
-            return None
-        limit = math.ceil(refresh)
-        info("Nothing in Minecraft's settings limits the frame rate (vsync "
-             "off, Max Framerate on Unlimited), so the launcher caps it at "
-             "%d FPS for this display's %.2f Hz — frames past that are never "
-             "shown, and the menu alone would otherwise take most of the "
-             "GPU. Turn off 'Limit the frame rate to the display' in "
-             "Settings ▸ Advanced to render uncapped."
-             % (limit, refresh))
-    else:
+    if requested is not None:
         limit = math.ceil(requested)
         info("BOL_FRAME_RATE limits Minecraft to %d FPS." % limit)
+        env["VKD3D_FRAME_RATE"] = str(limit)
+        return limit
 
+    options_path = find_options_file(prefix)
+    own = game_frame_limit(options_path)
+    if own:
+        info("Minecraft's Max Framerate is %d FPS. The game waits for each "
+             "frame by polling for window messages, which under Wine holds "
+             "a whole CPU core, so the launcher holds the same %d FPS "
+             "instead and puts the setting back when the game closes — in "
+             "game it reads Unlimited meanwhile." % (own, own))
+        env["VKD3D_FRAME_RATE"] = str(own)
+        return own
+
+    if not (settings or {}).get("limit_frame_rate", True):
+        return None
+    if not frame_rate_is_unlimited(read_game_options(options_path)):
+        return None
+    probe = _screen_refresh_hz if refresh_probe is None else refresh_probe
+    try:
+        refresh = probe()
+    except Exception:
+        # A display that cannot be measured must cost the cap, never the
+        # launch.
+        refresh = None
+    if not refresh or refresh <= 0:
+        # Without a refresh rate there is no defensible number to pick, and
+        # inventing one would cap a display we never measured.
+        warn("Minecraft has vsync off and Max Framerate on Unlimited, so "
+             "nothing limits how fast it draws — the main menu alone can "
+             "take most of the GPU. The launcher could not read any "
+             "display's refresh rate to cap it; set Max Framerate in Video "
+             "settings, or BOL_FRAME_RATE=<fps>.")
+        return None
+    limit = math.ceil(refresh)
+    info("Nothing in Minecraft's settings limits the frame rate (vsync off, "
+         "Max Framerate on Unlimited), so the launcher caps it at %d FPS for "
+         "this display's %.2f Hz — frames past that are never shown, and the "
+         "menu alone would otherwise take most of the GPU. Turn off 'Limit "
+         "the frame rate to the display' in Settings ▸ Advanced to render "
+         "uncapped." % (limit, refresh))
     env["VKD3D_FRAME_RATE"] = str(limit)
     return limit
+
+
+def _set_aside_game_frame_limit(prefix=None):
+    """Switch Minecraft's own limiter off once the launcher paces the frames.
+
+    Two limiters at the same rate are not one too many but one too slow: the
+    game spins on its own deadline before it ever presents, so vkd3d-proton's
+    sleep would never be reached. Called only once nothing can still be
+    writing options.txt and before its copy is taken, so the copy is of the
+    file the game will really start from. Failing is harmless: the game then
+    paces itself, exactly as it always has.
+    """
+    return set_aside_game_frame_limit(
+        find_options_file(active_prefix() if prefix is None else prefix),
+        prefix_idle=True)
 
 
 def _steam_input_available(environ=None):
@@ -659,7 +696,7 @@ def _launch_once(lock_fds=(), on_started=None):
     # The Advanced custom-environment field is applied at the end of this
     # function, far too late to be read here, so overlay it explicitly: it is
     # where BOL_FRAME_RATE is documented, and the supported way to set it.
-    _configure_frame_rate_limit(
+    frame_limit = _configure_frame_rate_limit(
         env, s, active_prefix(),
         environ={**os.environ,
                  **custom_env_map(s.get("custom_env") or "")})
@@ -780,11 +817,15 @@ def _launch_once(lock_fds=(), on_started=None):
     # Prevent diagnosis from attributing stale Proton logs to this launch.
     _clear_previous_proton_logs()
     # Repair a settings file a previous crash cut off before the game reads
-    # it, then keep a copy of what it is about to start rewriting (#175).
-    # Safe to declare idle: _prepare_launch_engine() refused to get this far
-    # with a live prefix and the game has not been started yet, so nothing
-    # that writes options.txt can be running, whatever wineboot left behind.
+    # it, hand its frame limit to the launcher's limiter when that one paces
+    # the session, then keep a copy of what the game is about to start
+    # rewriting (#175). Safe to declare idle: _prepare_launch_engine()
+    # refused to get this far with a live prefix and the game has not been
+    # started yet, so nothing that writes options.txt can be running,
+    # whatever wineboot left behind.
     restore_truncated_game_options(prefix_idle=True)
+    if frame_limit:
+        _set_aside_game_frame_limit()
     snapshot_game_options()
     # The Servers tab is read from disk at startup, so the servers this
     # launcher ships with have to be in the list before the game opens it.
@@ -902,12 +943,13 @@ def _launch_once(lock_fds=(), on_started=None):
                      f"be cleared. Run '{acknowledge_gpu_crash_command()}' "
                      "after checking the driver.")
         glog.close()
-        # Both of these rewrite the file Minecraft keeps its settings in, so
-        # neither may run while the game could still be saving to it (#175).
+        # All three rewrite the file Minecraft keeps its settings in, so none
+        # may run while the game could still be saving to it (#175).
         if prefix_idle is None:
             prefix_idle = _prefix_stably_idle_after_wrapper()
         restore_truncated_game_options(prefix_idle=prefix_idle)
         patch_options(prefix_idle=prefix_idle)
+        restore_game_frame_limits(prefix_idle=prefix_idle)
         logs = sorted(LOGS.glob("steam-*.log"),
                       key=lambda p: p.stat().st_mtime if p.exists() else 0)
         if logs:

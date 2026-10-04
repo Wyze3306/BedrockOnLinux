@@ -18,6 +18,23 @@
 
 ### Fixed
 
+- **Minecraft's own Max Framerate no longer holds a whole CPU core**
+  ([#173](https://github.com/Wyze3306/BedrockOnLinux/issues/173)). The
+  game waits for each frame's deadline by polling for window messages, and
+  under Wine every empty poll is a `sched_yield` between two `getrusage`
+  calls. Measured in a loaded world at 60 FPS, vsync on, on a 144 Hz display:
+  the main thread, the one that builds every frame, sat at 99% of a core,
+  about 70 points of it in the kernel. The launcher used to warn about this
+  only with vsync off, on the assumption that vsync makes the game wait in
+  its present call instead. It does not while the cap is below the display's
+  refresh rate. The launcher now holds the player's own limit through
+  vkd3d-proton, whose limiter sleeps. For the
+  length of a session the setting reads *Unlimited* in game, and the
+  player's value goes back into `options.txt` once the game has exited. A
+  value chosen in game during the session is kept instead. The frame rate
+  is the player's, only the wait is cheaper. `BOL_FRAME_RATE=0` leaves the
+  game to pace itself.
+
 - **A controller that Steam Input drives moves the launcher's highlight once
   per press** ([#288](https://github.com/Wyze3306/BedrockOnLinux/issues/288)).
   With Steam Input on — Game Mode on a Steam Deck, Big Picture anywhere — a

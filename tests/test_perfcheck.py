@@ -342,38 +342,19 @@ class UnlimitedFrameRateTests(unittest.TestCase):
 class GameFrameLimiterTests(unittest.TestCase):
     """Minecraft's own limiter spins in Wine's message pump (#173).
 
-    Measured in the main menu, same scene and same 60 FPS: Max Framerate at
-    60 holds the main thread at 99% of a core (56 points of it kernel time),
-    against 10% when the launcher caps instead.
+    It used to be reported before every launch. The launcher now holds the
+    player's limit itself (FrameRateLimitTests below), so a Max Framerate is
+    no longer a condition to name — it is one that has been dealt with.
     """
 
-    def test_the_games_own_limit_is_reported_with_its_value(self):
-        problem = perfcheck.game_frame_limiter_problem(
-            {"gfx_vsync": "0", "gfx_max_framerate": "60"})
-        self.assertIsNotNone(problem)
-        self.assertIn("60 FPS", problem)
-        self.assertIn("BOL_FRAME_RATE=60", problem)
-
-    def test_unlimited_has_no_limiter_to_spin_in(self):
-        self.assertIsNone(perfcheck.game_frame_limiter_problem(
-            {"gfx_vsync": "0", "gfx_max_framerate": "0"}))
-
-    def test_vsync_waits_inside_present_instead(self):
-        # Only the measured configuration is reported: with vsync on the main
-        # thread stayed near 20%, so warning there would be noise.
-        self.assertIsNone(perfcheck.game_frame_limiter_problem(
-            {"gfx_vsync": "1", "gfx_max_framerate": "60"}))
-
-    def test_settings_never_written_stay_quiet(self):
-        self.assertIsNone(perfcheck.game_frame_limiter_problem({}))
-
-    def test_it_is_reported_at_launch_with_the_other_conditions(self):
-        with tempfile.TemporaryDirectory() as td:
-            prefix = _prefix(td, gfx_vsync="0", gfx_max_framerate="60")
-            problems = perfcheck.performance_problems(
-                prefix, None, environ={}, meminfo_path=_meminfo(td, 9000))
-        self.assertEqual(len(problems), 1)
-        self.assertIn("Max Framerate", problems[0])
+    def test_a_max_framerate_is_no_longer_reported(self):
+        for vsync in ("0", "1"):
+            with tempfile.TemporaryDirectory() as td:
+                prefix = _prefix(td, gfx_vsync=vsync, gfx_max_framerate="60",
+                                 gfx_fullscreen="1")
+                problems = perfcheck.performance_problems(
+                    prefix, None, environ={}, meminfo_path=_meminfo(td, 9000))
+            self.assertEqual(problems, [], vsync)
 
 
 class FrameRateLimitTests(unittest.TestCase):
@@ -496,6 +477,71 @@ class FrameRateLimitTests(unittest.TestCase):
                                  gfx_max_framerate="0")
         self.assertIsNone(applied)
         self.assertEqual(env["VKD3D_FRAME_RATE"], "30")
+
+    def test_a_limit_set_by_hand_in_the_custom_environment_is_kept(self):
+        # Applied to the launch environment after this runs, so it is only
+        # visible through the overlaid environ — and is an answer already.
+        env = {}
+        applied, _ = self._apply(env=env, environ={"VKD3D_FRAME_RATE": "45"},
+                                 gfx_vsync="1", gfx_max_framerate="60")
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
+    def test_the_players_own_limit_is_held_at_the_same_rate(self):
+        env = {}
+        applied, _ = self._apply(env=env, gfx_vsync="0",
+                                 gfx_max_framerate="60")
+        self.assertEqual(applied, 60)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+
+    def test_the_players_own_limit_is_held_with_vsync_on_too(self):
+        # Measured in a loaded world: vsync on, Max Framerate 60 on a 144 Hz
+        # display, and the main thread at 99% of a core, about 70 points of
+        # it in the kernel. The present never waits when the cap is under the
+        # refresh rate, so vsync does not save the game from its own spin.
+        env = {}
+        applied, _ = self._apply(env=env, gfx_vsync="1",
+                                 gfx_max_framerate="60")
+        self.assertEqual(applied, 60)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+
+    def test_the_players_own_limit_needs_no_display_probe(self):
+        env = {}
+        applied, warned = self._apply(env=env, refresh_hz=None,
+                                      gfx_vsync="0", gfx_max_framerate="75")
+        self.assertEqual(applied, 75)
+        self.assertFalse(warned.called)
+
+    def test_the_display_switch_does_not_drop_the_players_own_limit(self):
+        # The switch turns off the cap at the display's rate; the rate the
+        # player chose in game is theirs, not the launcher's.
+        env = {}
+        applied, _ = self._apply(env=env, settings={"limit_frame_rate": False},
+                                 gfx_vsync="0", gfx_max_framerate="60")
+        self.assertEqual(applied, 60)
+
+    def test_uncapped_on_request_leaves_the_game_to_pace_itself(self):
+        env = {}
+        applied, _ = self._apply(env=env, environ={"BOL_FRAME_RATE": "0"},
+                                 gfx_vsync="0", gfx_max_framerate="60")
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
+    def test_a_limit_left_aside_by_an_unfinished_session_still_applies(self):
+        env = {}
+        with tempfile.TemporaryDirectory() as td:
+            prefix = _prefix(td, gfx_vsync="0", gfx_max_framerate="0")
+            options = perfcheck.find_options_file(prefix)
+            options.with_name(options.name + ".bol-max-framerate") \
+                .write_text("60\n")
+            with mock.patch.object(launch, "info"), \
+                    mock.patch.object(launch, "warn"):
+                applied = launch._configure_frame_rate_limit(
+                    env, {}, prefix, environ={},
+                    refresh_probe=lambda: 143.85)
+        # The player's 60, not the display's 144 the file alone would give.
+        self.assertEqual(applied, 60)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
 
     def test_a_display_probe_that_raises_never_fails_a_launch(self):
         env = {}
