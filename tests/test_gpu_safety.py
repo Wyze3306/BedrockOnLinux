@@ -767,6 +767,98 @@ class GraphicsSafetyTests(unittest.TestCase):
                 gpu_safety.require_safe_graphics_session({})
 
 
+class LauncherIdentityTests(unittest.TestCase):
+    """A PID is not a launcher once namespaces recycle it (#299).
+
+    Every Flatpak or container session starts a fresh PID namespace, so the
+    next session's launcher usually holds the PID the last one recorded.
+    """
+
+    def setUp(self):
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        self.marker = Path(tempdir.name) / "gpu-launch.json"
+        for patcher in (
+                mock.patch.object(gpu_safety, "GPU_LAUNCH_MARKER", self.marker),
+                mock.patch.object(gpu_safety, "GPU_SAFETY_ACK",
+                                  Path(tempdir.name) / "gpu-ack.json"),
+                mock.patch.object(gpu_safety, "_boot_id",
+                                  return_value="boot-now")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def clean_journal(*_args, **_kwargs):
+        return result()
+
+    def _running_marker(self, **fields):
+        state = {
+            "version": gpu_safety._STATE_VERSION,
+            "engine_rev": "wow64-archs-native19",
+            "phase": "running",
+            "token": "1" * 32,
+            "boot_id": "boot-now",
+            "launcher_pid": os.getpid(),
+            "created": 1,
+        }
+        state.update(fields)
+        self.marker.write_text(json.dumps(state))
+
+    def _problem(self):
+        return gpu_safety.graphics_safety_problem(
+            {"XDG_SESSION_TYPE": "wayland"},
+            journal_runner=self.clean_journal,
+        )
+
+    def test_a_process_reports_its_own_start(self):
+        started = gpu_safety._process_start(os.getpid())
+        self.assertIsInstance(started, int)
+        self.assertGreater(started, 0)
+        self.assertIsNone(gpu_safety._process_start(2 ** 31))
+
+    def test_a_marker_records_who_armed_it(self):
+        token = gpu_safety.arm_gpu_launch()
+        state = json.loads(self.marker.read_text())
+        self.assertEqual(state["launcher_pid"], os.getpid())
+        self.assertEqual(state["launcher_start"],
+                         gpu_safety._process_start(os.getpid()))
+        self.assertTrue(gpu_safety.disarm_gpu_launch(token))
+
+    def test_a_recycled_pid_is_not_a_running_launcher(self):
+        # The previous session's launcher had this PID in its own namespace.
+        self._running_marker(
+            launcher_start=gpu_safety._process_start(os.getpid()) - 1)
+        problem = self._problem()
+        self.assertNotIn("still marked active", problem)
+        self.assertIn("did not return cleanly during this boot", problem)
+        self.assertEqual(
+            gpu_safety._acknowledgement_marker_scope(self.marker), "current")
+
+    def test_the_launcher_itself_is_still_recognised(self):
+        self._running_marker(
+            launcher_start=gpu_safety._process_start(os.getpid()))
+        self.assertIn("still marked active", self._problem())
+        self.assertEqual(
+            gpu_safety._acknowledgement_marker_scope(self.marker), "active")
+
+    def test_a_marker_from_before_the_start_time_keeps_the_pid_answer(self):
+        self._running_marker()
+        self.assertIn("still marked active", self._problem())
+
+    def test_an_orphan_with_a_start_time_can_still_be_retired(self):
+        self._running_marker(phase="wrapper_returned", wrapper_returned=2,
+                             launcher_start=12345)
+        self.assertTrue(gpu_safety.retire_idle_current_boot_marker())
+        self.assertFalse(self.marker.exists())
+
+    def test_a_malformed_start_time_is_not_retired(self):
+        self._running_marker(phase="wrapper_returned", wrapper_returned=2,
+                             launcher_start="yesterday")
+        self.assertFalse(gpu_safety.retire_idle_current_boot_marker())
+        self.assertTrue(self.marker.exists())
+
+
+
 class RandrLibraryProbeTests(unittest.TestCase):
     def test_the_library_probe_needs_a_display(self):
         self.assertIsNone(gpu_safety._randr_provider_count({}))

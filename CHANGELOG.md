@@ -159,6 +159,17 @@
   the launcher now compares the two and installs the game's when it is the
   newer one. A newer GameInput than the game's is kept.
 
+- **A launch whose launcher was killed with its Flatpak or container is no
+  longer reported as still running**
+  ([#299](https://github.com/Wyze3306/BedrockOnLinux/issues/299)). The
+  graphics-safety record of a launch names the launcher by its process ID,
+  and a Flatpak or a container gives every session a namespace of its own, so
+  the next session's launcher usually has the very ID the last one recorded.
+  The launcher then took itself for the session it was blocked by, and asked
+  for it to be closed or force-stopped when nothing was left to stop. The
+  record now carries the process's start time as well, so that session reads
+  as what it is: interrupted during this boot.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long

@@ -351,6 +351,41 @@ def _pid_alive(pid) -> bool:
         return True
 
 
+def _process_start(pid) -> Optional[int]:
+    """When ``pid`` started, in clock ticks after boot, or None if unknown."""
+    try:
+        line = Path(f"/proc/{pid}/stat").read_text(errors="replace")
+    except OSError:
+        return None
+    # Field 22. The command name before it is parenthesised and may itself
+    # hold spaces or parentheses, so count from the last ')'.
+    fields = line.rpartition(")")[2].split()
+    try:
+        return int(fields[19])
+    except (IndexError, ValueError):
+        return None
+
+
+def _launcher_alive(state: dict) -> bool:
+    """Whether the launcher that wrote a marker is still running.
+
+    Its PID alone does not say. A Flatpak or a container starts every
+    session in a PID namespace of its own, so the launcher of the next
+    session tends to get the very PID the previous one recorded -- it can
+    be the process asking -- and a launch whose launcher was killed with
+    its container read as one still running, to be closed or force-stopped
+    although nothing was left to stop (#299). Markers record the process's
+    start time too; one written before that keeps the PID-only answer.
+    """
+    pid = state.get("launcher_pid")
+    if not _pid_alive(pid):
+        return False
+    started = state.get("launcher_start")
+    if started is None:
+        return True
+    return _process_start(pid) == started
+
+
 def interrupted_launch_problem(path: Optional[Path] = None) -> Optional[str]:
     """Describe a launch which never returned to the launcher.
 
@@ -381,7 +416,7 @@ def interrupted_launch_problem(path: Optional[Path] = None) -> Optional[str]:
         # whether Wine merely crashed in userspace (as in issue #31) or the GPU
         # session contributed to a hard lock, so never delete it implicitly.
         same_boot = bool(_boot_id() and state.get("boot_id") == _boot_id())
-        if same_boot and _pid_alive(state.get("launcher_pid")):
+        if same_boot and _launcher_alive(state):
             return (
                 "a legacy Minecraft GPU session is still marked active in "
                 "this launcher; close or force-stop it instead of starting a "
@@ -401,7 +436,7 @@ def interrupted_launch_problem(path: Optional[Path] = None) -> Optional[str]:
             f"after repairing the graphics driver and rebooting, run '{command}'"
         )
     same_boot = bool(_boot_id() and state.get("boot_id") == _boot_id())
-    if same_boot and _pid_alive(state.get("launcher_pid")):
+    if same_boot and _launcher_alive(state):
         return (
             "a Minecraft GPU session is still marked active in this launcher; "
             "close or force-stop it instead of starting a second session"
@@ -436,6 +471,7 @@ def arm_gpu_launch(path: Optional[Path] = None) -> str:
         "token": token,
         "boot_id": _boot_id(),
         "launcher_pid": os.getpid(),
+        "launcher_start": _process_start(os.getpid()),
         "created": int(time.time()),
     }
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
@@ -517,9 +553,15 @@ def retire_idle_current_boot_marker(path: Optional[Path] = None) -> bool:
         "version", "engine_rev", "phase", "token", "boot_id",
         "launcher_pid", "created", "wrapper_returned",
     }
+    # Markers written before the launcher's start time was recorded lack it.
     if (not state or state.get("version") != _STATE_VERSION
             or state.get("phase") != "wrapper_returned"
-            or set(state) != expected_fields):
+            or set(state) - {"launcher_start"} != expected_fields):
+        return False
+    launcher_start = state.get("launcher_start")
+    if launcher_start is not None and (
+            isinstance(launcher_start, bool)
+            or not isinstance(launcher_start, int) or launcher_start < 0):
         return False
     boot = _boot_id()
     if not boot or state.get("boot_id") != boot:
@@ -564,7 +606,7 @@ def _acknowledgement_marker_scope(marker: Path) -> str:
         return "unknown"
     if marker_boot != boot:
         return "previous"
-    if _pid_alive(state.get("launcher_pid")):
+    if _launcher_alive(state):
         return "active"
     return "current"
 
