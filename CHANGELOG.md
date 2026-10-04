@@ -149,6 +149,16 @@
   command line for the installation it runs from, such as
   `flatpak run --env=BOL_ALLOW_UNSAFE_GPU=1 io.github.wyze3306.BedrockOnLinux`.
 
+- **GameInput follows the Minecraft build it serves**
+  ([#300](https://github.com/Wyze3306/BedrockOnLinux/issues/300)). The
+  camera's mouse movement and every controller reach Minecraft through
+  Microsoft's GameInput, which the launcher installs into the Wine prefix
+  from the game's own package. It did that once: a prefix kept the GameInput
+  of the build it was made for, through every Minecraft update after it,
+  where Windows brings GameInput up to the version each build ships. At PLAY
+  the launcher now compares the two and installs the game's when it is the
+  newer one. A newer GameInput than the game's is kept.
+
 - **The test suite passes in a packaging sandbox**
   ([#303](https://github.com/Wyze3306/BedrockOnLinux/issues/303)). Guix
   builds without `/bin/sh`, `/usr/bin/env` or a network, and with a long
