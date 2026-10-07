@@ -190,6 +190,12 @@ in that order, and uses the best one you have. It installs none of them: they
 are separate products with their own licences. Point it at a specific build
 with `BOL_WINE=/path/to/wine` if you want a different one.
 
+With CrossOver, the launcher's Wine prefix becomes a CrossOver bottle of its
+own, kept where the launcher keeps its prefix
+(`~/Library/Application Support/bedrock-on-linux/compatdata/pfx`). It does
+not use or need your `default` bottle, and it does not show up among
+CrossOver's bottles.
+
 [gptk]: https://developer.apple.com/games/game-porting-toolkit/
 
 Two things do **not** work on macOS, and neither is fixable from this
@@ -198,7 +204,15 @@ repository alone:
 - **Downloading Minecraft.** The Microsoft Store download and the decryption
   the game needs at every launch both live in `xodus-cli`, which is built for
   Linux and links WebKitGTK. So on a Mac you bring your own **decrypted**
-  Minecraft for Windows folder and point the launcher at it in Settings.
+  Minecraft for Windows folder: **Settings ▸ Versions ▸ Use a Minecraft
+  folder…**, or PLAY, which offers the same choice when there is no game yet.
+  Choose the folder that holds `Minecraft.Windows.exe` and `appxmanifest.xml`,
+  or any folder above it. The launcher copies it into its own `games` folder
+  and leaves the original untouched; on APFS the copy is a clone, which takes
+  no extra space. From a terminal:
+  `bedrock-on-linux setup --game-dir "/path/to/Minecraft for Windows"`.
+  A folder whose `Minecraft.Windows.exe` is still encrypted, as the Microsoft
+  Store and the Xbox app keep it on disk, is refused by name.
 - **Signing in to Xbox Live.** The in-game sign-in is the WineGDK XUser fork
   compiled into GDK-Proton, and there is no macOS build of it. The game runs
   **offline and on the LAN**: single-player worlds and LAN play, no Realms, no

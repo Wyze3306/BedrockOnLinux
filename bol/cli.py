@@ -213,6 +213,10 @@ def main():
                          "see 'versions'")
     sp.add_argument("--beta", action="store_true", help="allow beta editions")
     sp.add_argument("--force", action="store_true", help="re-download / rebuild")
+    sp.add_argument("--game-dir", metavar="FOLDER",
+                    help="copy in a Minecraft for Windows folder you already "
+                         "have (the one holding Minecraft.Windows.exe) and "
+                         "play that; the only way to get the game on macOS")
     lv = sub.add_parser("versions", help="list installable Minecraft builds")
     lv.add_argument("--beta", action="store_true")
     lv.add_argument(
@@ -309,7 +313,9 @@ def main():
                     die(f"Unknown Minecraft edition '{a.mc}'; expected "
                         + " or ".join(v["id"] for v in list_editions(True))
                         + ".")
-            do_setup(mc_edition=mc, mc_version=a.version, force=a.force)
+            extra = {"import_dir": a.game_dir} if a.game_dir else {}
+            do_setup(mc_edition=mc, mc_version=a.version, force=a.force,
+                     **extra)
             ok(f"Done. Run:  {APP} play")
         elif a.cmd == "play":
             # Offline is a real way to play, so this warns and carries on --

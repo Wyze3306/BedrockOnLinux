@@ -204,13 +204,17 @@ def free_disk_problem(path, threshold_mib=LOW_DISK_MIB):
         return None
     used_percent = (100.0 * (usage.total - usage.free) / usage.total
                     if usage.total else 0.0)
+    # vkd3d-proton's on Linux; on a Mac it is the Wine backend's own
+    # (D3DMetal's), which also needs room to grow.
+    recompiles = ("the game's shaders are recompiled every session" if IS_MAC
+                  else "vkd3d recompiles pipelines every session")
     return (
         "Only %d MiB is free where the game lives (%s, %.0f%% full). The "
-        "shader cache cannot grow there, so vkd3d recompiles pipelines every "
-        "session instead of reusing them — that is stutter on first sight of "
-        "each new effect, every time you play — and a world save or a game "
-        "update can fail outright. Free a few GiB before playing. %s"
-        % (free_mib, path, used_percent, _SILENCE))
+        "shader cache cannot grow there, so %s instead of reusing them — "
+        "that is stutter on first sight of each new effect, every time you "
+        "play — and a world save or a game update can fail outright. Free a "
+        "few GiB before playing. %s"
+        % (free_mib, path, used_percent, recompiles, _SILENCE))
 
 
 def find_options_files(prefix):

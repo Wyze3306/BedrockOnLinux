@@ -13,9 +13,13 @@ from .gameinput import install_gameinput
 from .games import (
     _auto_selection,
     _game_root,
+    import_game_folder,
     install_game,
+    installed_builds,
+    mc_version_str,
     prune_legacy_game_archives,
     use_game_dir,
+    version_dir,
 )
 from .log import BolError, info, ok, warn
 from .platform import IS_MAC
@@ -31,13 +35,29 @@ from .util import launcher_owned_overrides, load_settings, mkdirs
 from .winegdk import ensure_winegdk
 
 def do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
-             force=False, progress=None):
-    """Install/update shared game, engine and prefix state exclusively."""
+             force=False, progress=None, import_dir=None):
+    """Install/update shared game, engine and prefix state exclusively.
+
+    ``import_dir`` is a Minecraft for Windows folder the player already has,
+    copied into the launcher first (bol.games.import_game_folder).
+    """
     with shared_assets_lock(
             "install or update BedrockOnLinux", exclusive=True), \
             prefix_operation_lock("install or update BedrockOnLinux"):
+        if import_dir:
+            use_game_dir(import_game_folder(import_dir))
         return _do_setup(game_dir, mc_edition, mc_version, proton_tag,
                          force, progress)
+
+
+def import_game(folder):
+    """Copy a Minecraft for Windows folder in and make it the one PLAY starts.
+
+    The window's "Use a Minecraft folder…": only the copy, since the rest of
+    setup happens at the next PLAY anyway.
+    """
+    with shared_assets_lock("import a Minecraft folder", exclusive=True):
+        return use_game_dir(import_game_folder(folder))
 
 
 # What setup can and cannot do on a Mac, said once. The download and the
@@ -46,11 +66,46 @@ def do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
 # after that -- the prefix, the CA bundle, GameInput, the UI patches -- is the
 # same work on either platform, because all of it operates on Windows files.
 _MAC_NO_GAME = (
-    "No Minecraft folder is set, and macOS cannot download one: the Microsoft "
-    "Store downloader is Linux-only. Open Settings and point 'Minecraft "
-    "folder' at a Minecraft for Windows installation you already have (the "
-    "folder holding Minecraft.Windows.exe), then run Install / Update again."
+    "There is no Minecraft to start yet, and macOS cannot download one: the "
+    "Microsoft Store downloader is Linux-only. Use a Minecraft for Windows "
+    "folder you already have -- the one holding Minecraft.Windows.exe -- "
+    "with Settings ▸ Versions ▸ Use a Minecraft folder…, or from a terminal "
+    "with:  bedrock-on-linux setup --game-dir /path/to/that/folder"
 )
+
+
+class NoGameFolder(BolError):
+    """macOS has no Minecraft to start, and cannot download one."""
+
+
+def _mac_build(edition, version):
+    """The build PLAY starts on a Mac, which cannot download the one picked.
+
+    The build picked when it is on disk; otherwise the one already set up,
+    then the newest one on disk. Saying which is part of the answer: the
+    picker lists every build Microsoft has, and on a Mac it is not the one
+    that runs unless it was copied in.
+    """
+    wanted = str(version or "").strip()
+    if edition and wanted:
+        root = _game_root(version_dir(edition["id"], wanted))
+        if root is not None:
+            return root
+    current = (load_settings().get("game_dir") or "").strip()
+    root = _game_root(Path(current)) if current else None
+    if root is None:
+        playable = [build for build in installed_builds(with_size=False)
+                    if build["playable"]]
+        root = _game_root(playable[0]["path"]) if playable else None
+    if root is None:
+        raise NoGameFolder(_MAC_NO_GAME)
+    if wanted:
+        have = mc_version_str(root)
+        info(f"Minecraft {wanted} is not on this Mac, and macOS cannot "
+             "download it; starting "
+             + (f"Minecraft {have}" if have else "the Minecraft you added")
+             + " instead.")
+    return root
 
 
 def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
@@ -64,7 +119,9 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
     prune_legacy_game_archives()
     s = load_settings()
     ensure_login_deps()
-    if mc_edition:
+    if mc_edition and IS_MAC:
+        use_game_dir(_mac_build(mc_edition, mc_version))
+    elif mc_edition:
         use_game_dir(install_game(mc_edition, mc_version, progress,
                                   force=force))
     elif game_dir and _game_root(Path(game_dir).expanduser()):
@@ -72,12 +129,14 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
     cur = load_settings().get("game_dir")
     if not cur or not _game_root(Path(cur)):
         if IS_MAC:
-            # Stop here rather than in the middle of install_game(): the
-            # engine below is worth preparing only for a game that exists,
-            # and the answer a Mac needs is which folder to point at.
-            raise BolError(_MAC_NO_GAME)
-        edition, version = _auto_selection(s)
-        use_game_dir(install_game(edition, version, progress, force=force))
+            # A build already on this Mac, or NoGameFolder -- before the
+            # engine below, which is worth preparing only for a game that
+            # exists, and never install_game(), which cannot work here.
+            use_game_dir(_mac_build(None, None))
+        else:
+            edition, version = _auto_selection(s)
+            use_game_dir(install_game(edition, version, progress,
+                                      force=force))
     gd = Path(load_settings()["game_dir"])
     if IS_MAC:
         # A native Wine (Game Porting Toolkit, CrossOver, Whisky or plain),
@@ -360,7 +419,8 @@ def diagnose():
                     "PROTON_USE_WINED3D forces the legacy renderer, which "
                     "Minecraft's menu can crash on. Use the Renderer setting "
                     "instead." % ", ".join(overrides))
-    if not msa_signed_in():
+    # On a Mac there is no sign-in to suggest: it needs the WineGDK engine.
+    if not msa_signed_in() and not IS_MAC:
         hits.append("No Microsoft account linked — the game runs, but in "
                     "offline mode: single-player worlds and LAN play only. "
                     "Click 'Sign in' before PLAY for Realms, servers, the "

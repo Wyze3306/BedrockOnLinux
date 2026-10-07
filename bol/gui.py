@@ -40,7 +40,7 @@ from .relocation import migrate_data, paths_overlap, DIRS_TO_MOVE, FILES_TO_MOVE
 from .content import game_content_dir, import_content
 from .doctor import acknowledge_gpu_crash, gpu_crash_acknowledgement_status
 from .games import installed_builds, list_editions, list_versions, remove_build
-from .gamesetup import do_setup
+from .gamesetup import NoGameFolder, do_setup, import_game
 from . import betterrtx, gpus
 from .inject import run_injector
 from .launch import direct_launch_readiness, launch, single_window_session
@@ -1048,6 +1048,9 @@ class LaunchWorker(QThread):
     # it is reported apart from failed() rather than being recovered by
     # matching on the message text.
     needs_store_signin = Signal(str)
+    # macOS has no game to start and no way to download one. Also an offer
+    # rather than a failure: the window answers it with a folder picker.
+    needs_game_folder = Signal(str)
     # qint64: this is the signal that carries the Minecraft download, and that
     # package is well past the 2 GiB a Qt `int` holds (#216).
     progress = Signal("qint64", "qint64")
@@ -1090,6 +1093,8 @@ class LaunchWorker(QThread):
             from .xodus import NotSignedIn
             if isinstance(exc, NotSignedIn):
                 self.needs_store_signin.emit(message)
+            elif isinstance(exc, NoGameFolder):
+                self.needs_game_folder.emit(message)
             else:
                 self.failed.emit(message)
 
@@ -2382,6 +2387,7 @@ class MainWindow(QMainWindow):
         w.done.connect(self._play_finished)
         w.failed.connect(self._play_failed)
         w.needs_store_signin.connect(self._store_signin_needed)
+        w.needs_game_folder.connect(self._game_folder_needed)
         w.close_window.connect(self._close_for_game)
         w.step_aside.connect(self._step_aside_for_game)
         w.come_back.connect(self._come_back_from_game)
@@ -2537,6 +2543,82 @@ class MainWindow(QMainWindow):
             self.ui_state["store_signin_offered"] = True
             self._link_store_account(then=self.do_play)
         self._offer_pending_restart()
+
+    def _game_folder_needed(self, message):
+        """PLAY on a Mac found no Minecraft, and a Mac cannot download one.
+
+        The remedy is a folder the player already has, so offer the picker
+        right here and start the game once it is copied in, instead of an
+        error that sends them looking for a setting.
+        """
+        self.ui_state["launch_active"] = False
+        log._LOG_SINK(f"xx {message}")
+        if self.ui_state.get("window_gone"):
+            desktop_notify(message[:400], "Minecraft could not start")
+            QApplication.instance().quit()
+            return
+        self.end_progress()
+        self._set_busy(False)
+        self.set_status("Choose your Minecraft for Windows folder.",
+                        self.theme.gold)
+        box = self._box(
+            QMessageBox.Information, "Where is Minecraft?",
+            "macOS cannot download Minecraft: the Microsoft Store downloader "
+            "is built for Linux only.\n\n"
+            "Choose a Minecraft for Windows folder you already have — the one "
+            "holding Minecraft.Windows.exe and appxmanifest.xml, copied from "
+            "a Windows PC. The launcher copies it in and leaves the original "
+            "as it is.")
+        later = box.addButton("Not now", QMessageBox.RejectRole)
+        choose = box.addButton("Choose folder…", QMessageBox.AcceptRole)
+        box.setDefaultButton(choose)
+        box.exec()
+        if box.clickedButton() is not later:
+            self._import_game_folder(then=self.do_play)
+
+    def _import_game_folder(self, then=None):
+        """Copy in a Minecraft for Windows folder the player already has."""
+        if self.ui_state.get("launch_active") or _mc_running():
+            self.warn_box("Minecraft is running",
+                          "Close the game before choosing another Minecraft "
+                          "folder.")
+            return
+        if self.ui_state.get("busy"):
+            return
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose your Minecraft for Windows folder")
+        if not chosen:
+            return
+        self._set_busy(True)
+        self.set_status("Copying Minecraft into the launcher…")
+        self._show_bar_busy()
+        worker = Worker(import_game, chosen)
+
+        def finished(_root):
+            if not _alive(self):
+                return
+            self.end_progress()
+            self._set_busy(False)
+            self.set_status("Minecraft is ready — click PLAY.",
+                            self.theme.green)
+            self.refresh_builds()
+            self.refresh_versions()
+            if then is not None:
+                then()
+
+        def failed(message):
+            if not _alive(self):
+                return
+            self.end_progress()
+            self._set_busy(False)
+            self.set_status("That folder could not be used.", self.theme.gold)
+            self.error_box("That folder could not be used", message[:2000])
+
+        worker.done.connect(finished)
+        worker.failed.connect(failed)
+        if not self._start_worker("import_game", worker):
+            self.end_progress()
+            self._set_busy(False)
 
     def _set_busy(self, on):
         self.ui_state["busy"] = on
@@ -2798,6 +2880,14 @@ class MainWindow(QMainWindow):
         builds.addLayout(self.builds_list)
 
         actions = QHBoxLayout()
+        if IS_MAC:
+            # The only way a Mac gets the game (bol.xodus.MAC_UNSUPPORTED).
+            actions.addWidget(btn(
+                "Use a Minecraft folder…", lambda: self._import_game_folder(),
+                kind="ghost", h=30,
+                tip="Copy in a Minecraft for Windows folder you already have "
+                    "(the one holding Minecraft.Windows.exe). macOS cannot "
+                    "download Minecraft."))
         actions.addStretch(1)
         actions.addWidget(btn("Refresh", self.refresh_builds, kind="ghost",
                               w=84, h=30,
@@ -2908,7 +2998,24 @@ class MainWindow(QMainWindow):
         return row
 
     def _open_folder(self, path):
-        open_path(path)
+        if not open_path(path):
+            self.set_status(f"{path} could not be opened.", self.theme.gold)
+
+    def _open_minecraft_folder(self):
+        folder = game_content_dir()
+        if open_path(folder):
+            return
+        # Minecraft makes this folder itself, the first time it runs; before
+        # that there is nothing to open, and saying so is the whole answer.
+        self.info_box(
+            "Nothing to open yet",
+            "Minecraft creates this folder — your worlds, packs and "
+            "screenshots — the first time it starts. Click PLAY once, then "
+            f"open it from here.\n\n{folder}")
+
+    def _open_logs_folder(self):
+        LOGS.mkdir(parents=True, exist_ok=True)
+        self._open_folder(LOGS)
 
     def _open_backups(self):
         saves.BACKUPS.mkdir(parents=True, exist_ok=True)
@@ -3006,6 +3113,9 @@ class MainWindow(QMainWindow):
                 widget.deleteLater()
         if not builds:
             self.builds_summary.setText(
+                "No Minecraft build is here yet. macOS cannot download one: "
+                "use “Use a Minecraft folder…” below with a Minecraft for "
+                "Windows folder you already have." if IS_MAC else
                 "No Minecraft build is installed yet — PLAY downloads the "
                 "version selected on the main screen.")
             return
@@ -3413,7 +3523,7 @@ class MainWindow(QMainWindow):
                                tip="Load a client-side .dll into the running game. "
                                    "Native / AppImage only."))
         content.addWidget(tool_row("Open Minecraft folder",
-                               lambda: open_path(game_content_dir()),
+                               self._open_minecraft_folder,
                                tip="Open the folder holding your worlds, templates "
                                    "and screenshots in your file manager."))
 
@@ -3526,7 +3636,7 @@ class MainWindow(QMainWindow):
                     "checked, so PLAY is unblocked again.")
             maintenance.addWidget(self.gpu_ack_btn)
         maintenance.addWidget(tool_row("Open logs folder",
-                                   lambda: open_path(LOGS),
+                                   self._open_logs_folder,
                                    tip="Open the folder with launch and activity logs, "
                                        "useful for bug reports."))
         maintenance.addWidget(tool_row("Repair (reset Wine prefix)",

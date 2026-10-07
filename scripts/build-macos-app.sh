@@ -29,7 +29,8 @@ PYTHON="${PYTHON:-python3}"
 
 NATIVE=0
 [[ "$(uname -s)" == "Darwin" ]] && NATIVE=1
-[[ -f "$SRC/data/icon.png" ]] || { echo "data/icon.png missing" >&2; exit 1; }
+ICON="$SRC/data/bedrock-on-linux.png"
+[[ -f "$ICON" ]] || { echo "$ICON missing" >&2; exit 1; }
 if (( NATIVE )); then
   echo "Building on macOS."
 else
@@ -51,7 +52,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp -r "$SRC/bol" "$APP/Contents/Resources/bol"
 install -m755 "$SRC/bedrock-on-linux" "$APP/Contents/Resources/bedrock-on-linux"
-cp "$SRC/data/icon.png" "$APP/Contents/Resources/icon.png"
+cp "$ICON" "$APP/Contents/Resources/icon.png"
 find "$APP/Contents/Resources" -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # The Qt toolkit, beside bol/ so it is on sys.path with nothing to install.
@@ -61,8 +62,8 @@ find "$APP/Contents/Resources" -name __pycache__ -type d -prune -exec rm -rf {} 
 # Off a Mac the wheels have to be asked for by tag. cp39-abi3 is not a guess:
 # every binary wheel here is abi3, which is also what lets the bundle run on
 # macOS's own Python 3.9 as well as on a newer Homebrew one. universal2 covers
-# Intel and Apple Silicon in one file, and --abi none admits the pure-Python
-# ones (packaging) that carry no ABI tag at all.
+# Intel and Apple Silicon in one file, and --abi none admits any pure-Python
+# wheel, which carries no ABI tag at all.
 PIP_ARGS=(--quiet --no-cache-dir --no-compile --no-deps --only-binary=:all:)
 if (( ! NATIVE )); then
   PIP_ARGS+=(
@@ -73,8 +74,7 @@ if (( ! NATIVE )); then
   )
 fi
 "$PYTHON" -m pip install "${PIP_ARGS[@]}" --target "$APP/Contents/Resources" \
-  "PySide6-Essentials==6.9.3" "shiboken6==6.9.3" "packaging==26.2" \
-  "cryptography==43.0.3"
+  "PySide6-Essentials==6.9.3" "shiboken6==6.9.3" "cryptography==43.0.3"
 
 # Prove they really are Mach-O. A silent fall back to the host's own wheels is
 # the one way this can produce a bundle that looks right and cannot start, and
@@ -106,16 +106,16 @@ if (( NATIVE )); then
   rm -rf "$ICONSET"
   mkdir -p "$ICONSET"
   for size in 16 32 64 128 256 512; do
-    sips -z "$size" "$size" "$SRC/data/icon.png" \
+    sips -z "$size" "$size" "$ICON" \
       --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
     double=$((size * 2))
-    sips -z "$double" "$double" "$SRC/data/icon.png" \
+    sips -z "$double" "$double" "$ICON" \
       --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
   done
   iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/icon.icns"
   rm -rf "$ICONSET"
 else
-  "$PYTHON" "$SRC/scripts/png2icns.py" "$SRC/data/icon.png" \
+  "$PYTHON" "$SRC/scripts/png2icns.py" "$ICON" \
     "$APP/Contents/Resources/icon.icns"
 fi
 

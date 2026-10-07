@@ -266,16 +266,44 @@ class StoreDownloaderTests(unittest.TestCase):
 
 
 class MacSetupTests(unittest.TestCase):
-    def test_setup_without_a_game_folder_names_the_setting_to_change(self):
+    def test_setup_without_a_game_folder_names_the_way_to_add_one(self):
         with mock.patch.object(gamesetup, "IS_MAC", True), \
                 mock.patch.object(gamesetup, "mkdirs"), \
+                mock.patch.object(gamesetup, "prune_legacy_game_archives"), \
                 mock.patch.object(gamesetup, "ensure_login_deps"), \
                 mock.patch.object(gamesetup, "load_settings",
                                   return_value={}), \
+                mock.patch.object(gamesetup, "installed_builds",
+                                  return_value=[]), \
                 mock.patch.object(gamesetup, "_game_root", return_value=None):
-            with self.assertRaises(gamesetup.BolError) as caught:
+            with self.assertRaises(gamesetup.NoGameFolder) as caught:
                 gamesetup._do_setup()
-        self.assertIn("Minecraft folder", str(caught.exception))
+        self.assertIn("Use a Minecraft folder", str(caught.exception))
+        self.assertIn("setup --game-dir", str(caught.exception))
+
+    def test_a_build_the_mac_cannot_download_falls_back_to_its_own(self):
+        """The picker lists every build Microsoft has; PLAY on a Mac starts
+        the one that is there instead of trying to download the one picked."""
+        with tempfile.TemporaryDirectory() as directory:
+            own = Path(directory) / "own"
+            own.mkdir()
+            settings = {"game_dir": str(own)}
+            with mock.patch.object(gamesetup, "load_settings",
+                                   return_value=settings), \
+                    mock.patch.object(gamesetup, "version_dir",
+                                      return_value=Path(directory) / "none"), \
+                    mock.patch.object(gamesetup, "_game_root",
+                                      side_effect=lambda p: p if Path(p) == own
+                                      else None), \
+                    mock.patch.object(gamesetup, "mc_version_str",
+                                      return_value="1.26.45.1"), \
+                    mock.patch.object(gamesetup, "info") as said, \
+                    mock.patch.object(gamesetup, "install_game") as download:
+                root = gamesetup._mac_build({"id": "release"}, "1.26.52.3")
+        self.assertEqual(root, own)
+        download.assert_not_called()
+        self.assertIn("1.26.52.3", said.call_args[0][0])
+        self.assertIn("1.26.45.1", said.call_args[0][0])
 
     def test_setup_prepares_the_native_wine_and_no_proton(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -482,6 +510,426 @@ class MacLaunchRefusalTests(unittest.TestCase):
                     launch._launch_once()
         self.assertIn("Microsoft Store package", str(caught.exception))
         self.assertIn("no macOS build", str(caught.exception))
+
+
+def _fake_crossover(root):
+    """A stand-in for CrossOver's bin/wine: a script that locates CX_ROOT."""
+    cx = Path(root) / "CrossOver.app/Contents/SharedSupport/CrossOver"
+    (cx / "bin").mkdir(parents=True)
+    (cx / "etc").mkdir()
+    wine = cx / "bin/wine"
+    wine.write_text("#!/usr/bin/perl\n# locate_cx_root: sets $ENV{CX_ROOT}\n")
+    wine.chmod(0o755)
+    (cx / "etc/CrossOver.conf").write_text(
+        '[CrossOver]\n"BuildTimestamp" = "20260715T103801Z"\n')
+    return wine
+
+
+class CrossOverBottleTests(unittest.TestCase):
+    """CrossOver's bin/wine runs bottles and overwrites WINEPREFIX. Without a
+    bottle named "default" it refused to start; with one, it initialised
+    that bottle while the launcher waited for its own prefix (wineboot
+    "finished without valid system.reg, user.reg, and system32 state")."""
+
+    def _command(self, directory, exe="wineboot", env=None):
+        wine = _fake_crossover(directory)
+        prefix = Path(directory) / "compatdata/pfx"
+        with mock.patch.object(winemac, "IS_MAC", True), \
+                mock.patch.object(winemac, "wine_bin", return_value=wine), \
+                mock.patch.object(winemac, "load_settings",
+                                  return_value={"wine_backend": "crossover"}), \
+                mock.patch.dict(os.environ, env or {}, clear=True):
+            argv, environ = winemac.wine_cmd(exe, prefix=prefix)
+        return wine, prefix, argv, environ
+
+    def test_the_prefix_is_handed_over_as_a_bottle_by_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wine, prefix, argv, env = self._command(directory)
+        # An absolute path is a bottle to CrossOver, used where it is.
+        self.assertEqual(argv, [str(wine), "--bottle", str(prefix), "--wait",
+                                "--", "wineboot"])
+        self.assertEqual(env["CX_BOTTLE"], str(prefix))
+
+    def test_the_prefix_is_described_as_a_win64_bottle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _wine, prefix, _argv, _env = self._command(directory)
+            conf = (prefix / "cxbottle.conf").read_text()
+        self.assertIn('"WineArch" = "win64"', conf)
+        # CrossOver's own timestamp: no upgrade pass on a bottle just made.
+        self.assertIn('"Timestamp" = "20260715T103801Z"', conf)
+        # Nothing published to the Mac's menus or file associations.
+        self.assertIn('"MenuMode" = "ignore"', conf)
+        self.assertIn('"AssocMode" = "ignore"', conf)
+
+    def test_an_existing_bottle_description_is_kept(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / "compatdata/pfx"
+            prefix.mkdir(parents=True)
+            (prefix / "cxbottle.conf").write_text("[Bottle]\nmine\n")
+            self._command(directory)
+            self.assertEqual((prefix / "cxbottle.conf").read_text(),
+                             "[Bottle]\nmine\n")
+
+    def test_an_inherited_crossover_session_does_not_skip_the_setup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _wine, _prefix, _argv, env = self._command(
+                directory, env={"CX_INITIALIZED": "501:default"})
+        self.assertNotIn("CX_INITIALIZED", env)
+
+    def test_the_dll_overrides_travel_on_the_command_line(self):
+        # The front end deletes WINEDLLOVERRIDES and takes --dll instead.
+        with tempfile.TemporaryDirectory() as directory:
+            wine, prefix, argv, env = self._command(directory, exe="x.exe")
+            env["WINEDLLOVERRIDES"] = "vrclient=;amd_ags_x64="
+            final, final_env = winemac.finalize_cmd(argv, env)
+        self.assertEqual(final, [str(wine), "--bottle", str(prefix), "--wait",
+                                 "--dll", "vrclient=;amd_ags_x64=", "--",
+                                 "x.exe"])
+        self.assertNotIn("WINEDLLOVERRIDES", final_env)
+
+    def test_a_plain_wine_keeps_its_overrides_in_the_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wine = Path(directory) / "wine64"
+            wine.write_bytes(b"\xcf\xfa\xed\xfe")
+            cmd, env = winemac.finalize_cmd(
+                [str(wine), "x.exe"], {"WINEDLLOVERRIDES": "a="})
+        self.assertEqual(cmd, [str(wine), "x.exe"])
+        self.assertEqual(env["WINEDLLOVERRIDES"], "a=")
+
+    def test_the_front_end_is_recognised_from_the_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wine = _fake_crossover(directory)
+            self.assertTrue(winemac.is_crossover_wrapper(wine))
+            other = Path(directory) / "wine64"
+            other.write_text("#!/bin/sh\nexec wine64-preloader \"$@\"\n")
+            self.assertFalse(winemac.is_crossover_wrapper(other))
+            self.assertFalse(winemac.is_crossover_wrapper(
+                Path(directory) / "missing"))
+
+    def test_apple_silicon_asks_crossover_for_d3dmetal(self):
+        # Minecraft is a Direct3D 12 game; "auto" or "dxmt" set by the player
+        # in the custom environment still win, since this is a default.
+        with mock.patch.object(winemac, "mac_arm", return_value=True):
+            self.assertEqual(winemac._backend_env("crossover")
+                             ["CX_GRAPHICS_BACKEND"], "d3dmetal")
+        with mock.patch.object(winemac, "mac_arm", return_value=False):
+            self.assertNotIn("CX_GRAPHICS_BACKEND",
+                             winemac._backend_env("crossover"))
+
+    def test_the_wrapper_reports_crossovers_own_version(self):
+        report = subprocess.CompletedProcess(
+            ["wine", "--version"], 0,
+            stdout="Product Name: CrossOver\nPublic Version: 26.3.0\n",
+            stderr="")
+        with mock.patch.object(winemac.subprocess, "run",
+                               return_value=report):
+            self.assertEqual(winemac._version_text("wine"), "CrossOver 26.3.0")
+
+
+class MacWineChoiceTests(unittest.TestCase):
+    def test_a_recorded_wine_is_not_read_back_as_an_override(self):
+        """Installing CrossOver after a plain Wine has to change something."""
+        with tempfile.TemporaryDirectory() as directory:
+            plain = Path(directory) / "wine"
+            plain.write_text("")
+            crossover = _fake_crossover(directory)
+            settings = {"wine": str(plain), "wine_backend": "wine"}
+            with mock.patch.object(winemac, "load_settings",
+                                   return_value=settings), \
+                    mock.patch.object(winemac, "_gptk_wine",
+                                      return_value=None), \
+                    mock.patch.object(winemac, "_CROSSOVER_WINE",
+                                      str(crossover)), \
+                    mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(winemac.detect_wine(),
+                                 ("crossover", crossover))
+
+    def test_a_plain_wine_gives_way_to_a_better_one_at_play(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plain = Path(directory) / "wine"
+            plain.write_text("")
+            crossover = _fake_crossover(directory)
+            settings = {"wine": str(plain), "wine_backend": "wine"}
+            saved = {}
+            with mock.patch.object(winemac, "IS_MAC", True), \
+                    mock.patch.object(winemac, "rosetta_problem",
+                                      return_value=None), \
+                    mock.patch.object(winemac, "load_settings",
+                                      side_effect=lambda: dict(settings)), \
+                    mock.patch.object(winemac, "save_settings",
+                                      side_effect=saved.update), \
+                    mock.patch.object(winemac, "detect_wine",
+                                      return_value=("crossover", crossover)), \
+                    mock.patch.object(winemac, "ok"), \
+                    mock.patch.object(winemac, "info"):
+                self.assertEqual(winemac.ensure_wine(), crossover)
+        self.assertEqual(saved["wine_backend"], "crossover")
+
+    def test_a_named_wine_is_classified_by_what_it_is(self):
+        with tempfile.TemporaryDirectory() as directory:
+            crossover = _fake_crossover(directory)
+            with mock.patch.object(winemac, "load_settings",
+                                   return_value={}), \
+                    mock.patch.dict(os.environ, {"BOL_WINE": str(crossover)},
+                                    clear=True):
+                self.assertEqual(winemac.detect_wine(),
+                                 ("crossover", crossover))
+
+
+class MacProcessScopeTests(unittest.TestCase):
+    """CrossOver, Whisky and GPTK are shared by every bottle on the Mac.
+    Matching their directory made "Force stop" and the clean-up after every
+    wineboot SIGKILL the player's other Windows programs."""
+
+    def test_only_the_launchers_own_processes_match(self):
+        listing = subprocess.CompletedProcess(["ps"], 0, stdout=(
+            "  10 /Apps/CrossOver/bin/wineloader C:\\\\windows\\\\explorer.exe\n"
+            "  11 /usr/bin/perl /Apps/CrossOver/bin/wine --bottle /pfx --wait "
+            "-- wineboot -u\n"
+            "  12 /Apps/CrossOver/bin/wineloader winewrapper.exe --run -- "
+            "/data/content/Minecraft.Windows.exe\n"
+            "  13 /Apps/CrossOver/bin/wineloader C:\\\\Program Files\\\\Steam"
+            "\\\\steam.exe\n"), stderr="")
+        with mock.patch.object(winemac.subprocess, "run",
+                               return_value=listing), \
+                mock.patch.object(winemac, "_game_paths",
+                                  return_value={"/data/content"}), \
+                mock.patch.object(winemac, "wine_bin",
+                                  return_value=Path("/Apps/CrossOver/bin/wine")):
+            self.assertEqual(winemac.prefix_processes(Path("/pfx")), [11, 12])
+
+
+class MacWineUserTests(unittest.TestCase):
+    """Proton's Windows user is steamuser; a macOS Wine's is not, and every
+    path to the game's data has to follow it."""
+
+    def _settings(self, backend):
+        return mock.patch.object(winemac, "load_settings",
+                                 return_value={"wine_backend": backend})
+
+    def test_crossover_names_its_user_crossover(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self._settings("crossover"), \
+                mock.patch.object(winemac, "wine_bin", return_value=None):
+            self.assertEqual(winemac.wine_user_name(directory), "crossover")
+
+    def test_a_plain_wine_uses_the_macs_login(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self._settings("wine"), \
+                mock.patch.object(winemac, "wine_bin", return_value=None), \
+                mock.patch.dict(os.environ, {"USER": "thedoc"}):
+            self.assertEqual(winemac.wine_user_name(directory), "thedoc")
+
+    def test_the_profile_holding_minecraft_wins(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self._settings("crossover"), \
+                mock.patch.object(winemac, "wine_bin", return_value=None):
+            users = Path(directory) / "drive_c/users"
+            (users / "crossover").mkdir(parents=True)
+            (users / "thedoc/AppData/Roaming/Minecraft Bedrock").mkdir(
+                parents=True)
+            (users / "Public").mkdir()
+            self.assertEqual(winemac.wine_user_name(directory), "thedoc")
+
+    def test_paths_follow_the_user_on_a_mac_only(self):
+        rel = "drive_c/users/steamuser/AppData/Roaming/Minecraft Bedrock"
+        with mock.patch.object(bolprefix, "IS_MAC", False):
+            self.assertEqual(bolprefix.in_wine_user(rel, "/pfx"), rel)
+        with mock.patch.object(bolprefix, "IS_MAC", True), \
+                mock.patch.object(winemac, "wine_user_name",
+                                  return_value="crossover"):
+            self.assertEqual(
+                bolprefix.in_wine_user(rel, "/pfx"),
+                "drive_c/users/crossover/AppData/Roaming/Minecraft Bedrock")
+
+
+class OpenPathTests(unittest.TestCase):
+    def test_a_folder_that_does_not_exist_is_reported_not_opened(self):
+        with mock.patch.object(bolplatform.subprocess, "Popen") as popen:
+            self.assertFalse(bolplatform.open_path("/no/such/folder"))
+        popen.assert_not_called()
+
+    def test_a_url_is_opened_without_looking_for_it_on_disk(self):
+        with mock.patch.object(bolplatform.subprocess, "Popen") as popen:
+            self.assertTrue(bolplatform.open_path("https://example.org"))
+        popen.assert_called_once()
+
+    def test_a_mac_opens_with_the_system_opener_by_path(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(bolplatform, "IS_MAC", True), \
+                mock.patch.object(bolplatform.subprocess, "Popen") as popen:
+            self.assertTrue(bolplatform.open_path(directory))
+        self.assertEqual(popen.call_args[0][0], ["/usr/bin/open", directory])
+
+
+class MacCurlTests(unittest.TestCase):
+    def test_no_zstd_archive_is_unpacked_on_a_mac(self):
+        """MSYS2's libcurl is a .pkg.tar.zst, and one DLL of a dozen."""
+        from bol import fixups
+
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(fixups, "IS_MAC", True), \
+                mock.patch.object(fixups, "_install_openssl_xcurl") as openssl, \
+                mock.patch.object(fixups, "run") as run, \
+                mock.patch.object(fixups, "download") as download, \
+                mock.patch.object(fixups, "info"):
+            game = Path(directory) / "game"
+            game.mkdir()
+            fixups.fix_curl_ssl(game)
+            self.assertFalse((Path(directory) / "etc").exists())
+        openssl.assert_called_once_with(game)
+        run.assert_not_called()
+        download.assert_not_called()
+
+
+class MacImportTests(unittest.TestCase):
+    """macOS cannot download Minecraft, so the player's own folder is copied
+    in -- and the original is never touched."""
+
+    def _game(self, root, encrypted=False):
+        game = Path(root) / "Minecraft for Windows" / "Content"
+        game.mkdir(parents=True)
+        (game / "Minecraft.Windows.exe").write_bytes(
+            b"\x00\x01ciphertext" if encrypted else b"MZ" + b"\0" * 64)
+        (game / "appxmanifest.xml").write_text(
+            '<Package><Identity Name="Microsoft.MinecraftUWP" '
+            'Version="1.26.4501.0" /></Package>')
+        return game
+
+    def _import(self, source, games):
+        from bol import games as bolgames
+
+        with mock.patch.object(bolgames, "GAMES", games), \
+                mock.patch.object(bolgames, "IS_MAC", True), \
+                mock.patch.object(bolgames, "info"), \
+                mock.patch.object(bolgames, "ok"):
+            return bolgames.import_game_folder(source)
+
+    def test_the_folder_is_copied_under_its_edition_and_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            game = self._game(directory)
+            games = Path(directory) / "data/games"
+            before = sorted(p.name for p in game.iterdir())
+            root = self._import(game.parent, games)
+            self.assertEqual(root, games / "release" / "1.26.45.1")
+            self.assertTrue((root / "Minecraft.Windows.exe").is_file())
+            self.assertEqual(sorted(p.name for p in game.iterdir()), before)
+            self.assertEqual(list(games.glob("release/.import-*")), [])
+
+    def test_an_encrypted_executable_is_refused_by_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            game = self._game(directory, encrypted=True)
+            with self.assertRaises(gamesetup.BolError) as caught:
+                self._import(game, Path(directory) / "games")
+        self.assertIn("encrypted", str(caught.exception))
+        self.assertFalse((Path(directory) / "games").exists())
+
+    def test_an_executable_without_its_manifest_is_explained(self):
+        with tempfile.TemporaryDirectory() as directory:
+            game = self._game(directory)
+            (game / "appxmanifest.xml").unlink()
+            with self.assertRaises(Exception) as caught:
+                self._import(game, Path(directory) / "games")
+        self.assertIn("appxmanifest.xml", str(caught.exception))
+
+    def test_a_folder_without_minecraft_says_so(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(Exception) as caught:
+                self._import(directory, Path(directory) / "games")
+        self.assertIn("no Minecraft.Windows.exe", str(caught.exception))
+
+    def test_the_command_line_can_import_too(self):
+        from bol import cli
+
+        with mock.patch.object(cli, "do_setup") as setup, \
+                mock.patch.object(cli, "ok"), \
+                mock.patch.object(sys, "argv",
+                                  ["bol", "setup", "--game-dir", "/x/y"]):
+            cli.main()
+        setup.assert_called_once_with(mc_edition=None, mc_version=None,
+                                      force=False, import_dir="/x/y")
+
+
+class MacSwapGuardTests(unittest.TestCase):
+    def test_no_systemd_scope_is_attempted_on_a_mac(self):
+        from bol import swapguard
+
+        which = mock.Mock(return_value="/usr/bin/systemd-run")
+        with mock.patch.object(swapguard, "IS_LINUX", False):
+            self.assertFalse(swapguard.swap_guard_available({}, which=which))
+        which.assert_not_called()
+
+
+class MacWindowTests(unittest.TestCase):
+    """The folder a Mac plays from has to be reachable from the window: there
+    was no way to choose one at all."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.guiharness import qt_app
+        qt_app()
+
+    def test_the_versions_tab_offers_a_folder_on_a_mac(self):
+        from bol import gui
+        from tests.guiharness import headless_window
+
+        with mock.patch.object(gui, "IS_MAC", True), \
+                headless_window() as window:
+            tab = window._build_versions_tab()
+            buttons = {b.text(): b for b in tab.findChildren(gui.QPushButton)}
+            self.assertIn("Use a Minecraft folder…", buttons)
+            # Clicked, not called: a click hands the slot `checked`, which
+            # must not arrive as the callback to run afterwards.
+            with mock.patch.object(gui.QFileDialog, "getExistingDirectory",
+                                   return_value="/a/folder"), \
+                    mock.patch.object(gui, "_mc_running", return_value=False), \
+                    mock.patch.object(gui, "Worker") as worker, \
+                    mock.patch.object(window, "_start_worker",
+                                      return_value=True):
+                buttons["Use a Minecraft folder…"].click()
+            worker.assert_called_once_with(gui.import_game, "/a/folder")
+            finished = worker.return_value.done.connect.call_args[0][0]
+            with mock.patch.object(window, "refresh_builds"), \
+                    mock.patch.object(window, "refresh_versions"):
+                finished("/a/folder")
+
+    def test_play_without_a_game_offers_the_folder_picker(self):
+        from bol import gui
+        from tests.guiharness import headless_window
+
+        with headless_window() as window, \
+                mock.patch.object(gui.QMessageBox, "exec"), \
+                mock.patch.object(gui.QMessageBox, "clickedButton",
+                                  return_value=None), \
+                mock.patch.object(window, "_import_game_folder") as choose:
+            window.ui_state["launch_active"] = True
+            window._game_folder_needed("no game")
+            self.assertFalse(window.ui_state["launch_active"])
+            self.assertFalse(window.ui_state["busy"])
+        choose.assert_called_once_with(then=window.do_play)
+
+    def test_the_worker_reports_a_missing_game_apart_from_a_failure(self):
+        from bol import gamesetup, gui
+
+        worker = gui.LaunchWorker({"edition": {"id": "release"}, "tag": "1.0"})
+        seen = {"failed": [], "folder": []}
+        worker.failed.connect(seen["failed"].append)
+        worker.needs_game_folder.connect(seen["folder"].append)
+        with mock.patch.object(gui, "do_setup",
+                               side_effect=gamesetup.NoGameFolder("none")):
+            worker.run()
+        self.assertEqual(seen, {"failed": [], "folder": ["none"]})
+
+    def test_opening_a_folder_minecraft_has_not_made_yet_says_so(self):
+        from bol import gui
+        from tests.guiharness import headless_window
+
+        with headless_window() as window, \
+                mock.patch.object(gui, "game_content_dir",
+                                  return_value=Path("/no/such/com.mojang")), \
+                mock.patch.object(window, "info_box") as told:
+            window._open_minecraft_folder()
+        self.assertIn("first time it starts", told.call_args[0][1])
 
 
 if __name__ == "__main__":

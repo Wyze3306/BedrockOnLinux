@@ -27,6 +27,7 @@ from .config import (
 )
 from .log import BolError, info, ok, warn
 from .pe import apply_patch
+from .platform import IS_MAC
 from .prefix import active_prefix
 from .util import asset_url, download, gh_releases, run
 
@@ -35,6 +36,9 @@ def fix_curl_ssl(game_dir: Path):
     GDK-Proton requires a CA bundle at etc/ssl/certs/ca-bundle.crt next to
     the game, else every TLS call (Xbox/online) fails and the server join
     hangs forever. Cert step runs every time (idempotent)."""
+    if IS_MAC:
+        _fix_curl_ssl_mac(game_dir)
+        return
     cacert = CACHE / "cacert.pem"
     if not cacert.exists():
         download(CACERT_URL, cacert, "SSL certificates")
@@ -75,6 +79,24 @@ def _sha256_matches(path: Path, expected: str) -> bool:
         return hashlib.sha256(path.read_bytes()).hexdigest() == expected
     except OSError:
         return False
+
+
+def _fix_curl_ssl_mac(game_dir: Path):
+    """fix_curl_ssl() for a macOS Wine.
+
+    The MinGW libcurl above comes as a .pkg.tar.zst, which a Mac cannot
+    unpack without installing zstd first -- and once unpacked it is one DLL
+    of a dozen: libcurl-4.dll needs MSYS2's OpenSSL, zlib, brotli, nghttp2
+    and the rest beside it, and an XCurl.dll that cannot load its imports is
+    worse than the one it replaced. The OpenSSL XCurl set is what the Linux
+    engine path installs instead: a .tar.gz, with every DLL it needs and its
+    own CA bundle. The etc/ssl bundle is GDK-Proton's, and nothing reads it
+    here, so it is not written into -- or beside -- the player's folder.
+    """
+    if (game_dir / "xcurl_real.dll").exists():
+        return
+    info("Installing libcurl + certificates …")
+    _install_openssl_xcurl(game_dir)
 
 
 def install_gdk_xbox_dlls(game_dir: Path):
