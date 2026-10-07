@@ -73,6 +73,15 @@
 
 ### Fixed
 
+- **The Xbox Live DLLs from a third party are checked before they go into
+  the game.** `libHttpClient.GDK.dll` and `XCurl.dll` come from a release
+  tagged `v0.0.0` in another project's repository. Files can be uploaded to
+  that tag again, and the launcher copied whatever it served into the game,
+  where it runs. They are now pinned to the SHA-256 of the files every
+  install has used since June, as is the MinGW libcurl package of the
+  GE-Proton path. A changed file is refused instead of installed, and copies
+  already in the cache that match keep being used.
+
 - **A build on disk starts whatever the build index says.** The list of
   Minecraft builds comes from a third party's index (GdkLinks), and PLAY read
   it even for a build already installed. A build the index stopped listing

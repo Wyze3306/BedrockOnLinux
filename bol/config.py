@@ -66,6 +66,8 @@ UMU_ARCHIVE_SHA256 = \
 UMU_RUN_SHA256 = \
     "577181dbff2eccdaa78b411c0fd1aa7fde574028449c3e0e99f508536a76870e"
 MINGW_CURL = "https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-curl-8.17.0-1-any.pkg.tar.zst"
+# Its libcurl-4.dll becomes the game's XCurl.dll on the GE-Proton path.
+MINGW_CURL_SHA256 = "928d63a65f2b47c313b2b8b5f34fe5bb5be2f388a00c1d32088d1b05cdb9c564"
 CACERT_URL = "https://curl.se/ca/cacert.pem"
 
 # WineGDK reads the refresh token from this registry key and requires its
@@ -80,6 +82,13 @@ WINEGDK_REG = r"Software\Wine\WineGDK"
 WINEGDK_SOURCE_COMMIT = "75637b674e1f191e65753663c4c0c32bea05ba6e"
 GDK_DEPS_URL = "https://github.com/minecraft-linux/mcpelauncher-gdk-dependencies/releases/download/v0.0.0"
 GDK_DEPS_DLLS = ("libHttpClient.GDK.dll", "XCurl.dll")
+# A third party's release under a tag that can be uploaded to again, and the
+# DLLs run inside the game: only the reviewed bytes are installed. These are
+# the ones every install since June 2026 has used (assets dated 2026-05-03).
+GDK_DEPS_SHA256 = {
+    "libHttpClient.GDK.dll": "718f0c6842c8e35d7cac5c18ec025404c83be03ec035f0d3904e70d6508b9e24",
+    "XCurl.dll": "28443194e9860733f24294219bcb45226677636f9721d4bf145094d977f7161f",
+}
 # This OpenSSL XCurl payload avoids Wine secur32 failures against Azure and is
 # built reproducibly by scripts/build-openssl-xcurl.sh.
 OPENSSL_XCURL_SET = DATA / "xodus-xcurl" / "openssl-set"

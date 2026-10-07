@@ -16,8 +16,10 @@ from .config import (
     CACERT_URL,
     CACHE,
     GDK_DEPS_DLLS,
+    GDK_DEPS_SHA256,
     GDK_DEPS_URL,
     MINGW_CURL,
+    MINGW_CURL_SHA256,
     OPENSSL_XCURL_ARCHIVE_SHA256,
     OPENSSL_XCURL_REV,
     OPENSSL_XCURL_SET,
@@ -35,7 +37,7 @@ def fix_curl_ssl(game_dir: Path):
     hangs forever. Cert step runs every time (idempotent)."""
     cacert = CACHE / "cacert.pem"
     if not cacert.exists():
-        download(CACERT_URL, cacert, "certificats SSL")
+        download(CACERT_URL, cacert, "SSL certificates")
     for base in (game_dir, game_dir.parent):
         crt = base / "etc" / "ssl" / "certs" / "ca-bundle.crt"
         crt.parent.mkdir(parents=True, exist_ok=True)
@@ -44,8 +46,15 @@ def fix_curl_ssl(game_dir: Path):
         return
     info("Installing libcurl + certificates …")
     pkg = CACHE / "mingw-curl.pkg.tar.zst"
-    if not pkg.exists():
+    if not _sha256_matches(pkg, MINGW_CURL_SHA256):
+        pkg.unlink(missing_ok=True)
         download(MINGW_CURL, pkg, "libcurl")
+        if not _sha256_matches(pkg, MINGW_CURL_SHA256):
+            pkg.unlink(missing_ok=True)
+            raise BolError(
+                "The downloaded MinGW libcurl package is not the reviewed "
+                "build the launcher installs, so it was not put into the "
+                "game. Try again later, and report it if it persists.")
     ex = CACHE / "mingw-curl"
     ex.mkdir(exist_ok=True)
     try:
@@ -61,6 +70,13 @@ def fix_curl_ssl(game_dir: Path):
     ok("libcurl ready")
 
 
+def _sha256_matches(path: Path, expected: str) -> bool:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest() == expected
+    except OSError:
+        return False
+
+
 def install_gdk_xbox_dlls(game_dir: Path):
     """Drop the OSS GDK Xbox-Live DLLs into the game folder
     (libHttpClient.GDK.dll, XCurl.dll), backing up originals. The XCurl
@@ -72,8 +88,15 @@ def install_gdk_xbox_dlls(game_dir: Path):
         if bak.exists():
             continue
         cached = CACHE / ("gdkdeps-" + nm)
-        if not cached.exists():
+        if not _sha256_matches(cached, GDK_DEPS_SHA256[nm]):
+            cached.unlink(missing_ok=True)
             download(f"{GDK_DEPS_URL}/{nm}", cached, nm)
+            if not _sha256_matches(cached, GDK_DEPS_SHA256[nm]):
+                cached.unlink(missing_ok=True)
+                raise BolError(
+                    f"The downloaded {nm} is not the reviewed build the "
+                    "launcher installs, so it was not put into the game. "
+                    "Try again later, and report it if it persists.")
         if dst.exists():
             shutil.copy2(dst, bak)
         shutil.copy2(cached, dst)
@@ -434,7 +457,7 @@ def _install_openssl_xcurl(game_dir: Path):
     cacert = CACHE / "cacert.pem"
     if not cacert.exists():
         try:
-            download(CACERT_URL, cacert, "certificats SSL")
+            download(CACERT_URL, cacert, "SSL certificates")
         except Exception as e:
             warn(f"cacert download failed: {e}")
     if cacert.exists():
