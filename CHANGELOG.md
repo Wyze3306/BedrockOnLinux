@@ -41,6 +41,15 @@
   applies from 6 GiB of RAM, twice what Minecraft settles at with a world
   loaded; below that, the game swaps as it did before 2.2.8.
 
+- **The update notice gives a Flatpak install the command that updates it**
+  ([#315](https://github.com/Wyze3306/BedrockOnLinux/issues/315)). The
+  README installs the Flatpak with `--user`. A new bundle installed without
+  it became a second, system-wide copy, and the menu kept starting the
+  per-user one, still at the old version. *Update now* now names the bundle
+  and the exact command, `flatpak install --user` or `--system` according to
+  where the running copy is installed. The README says how to remove a copy
+  installed the other way.
+
 ### Packaging
 
 - **A `pyproject.toml`, for distributions to build the launcher with their

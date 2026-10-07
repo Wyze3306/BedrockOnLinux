@@ -10,6 +10,7 @@ from pathlib import Path
 from .config import SELF_REPO, VERSION
 from .log import BolError
 from .util import asset_url, download, gh_latest
+from .xdg_migration import is_flatpak
 
 def _ver_tuple(s):
     """Parse 'v1.2.3' / '1.2.3' into a comparable tuple; non-numeric parts → 0."""
@@ -48,6 +49,48 @@ def _self_path():
     return Path(os.path.realpath(sys.argv[0] or __file__))
 
 
+def flatpak_installation(info_path=Path("/.flatpak-info")):
+    """'user' or 'system': the Flatpak installation this sandbox runs from.
+
+    None outside Flatpak, and for a custom installation, whose name cannot be
+    told from inside. Read from the app-path Flatpak records for the running
+    instance, which is where it deployed the app.
+    """
+    try:
+        text = Path(info_path).read_text(errors="replace")
+    except OSError:
+        return None
+    match = re.search(r"^app-path=(.+)$", text, re.MULTILINE)
+    if not match:
+        return None
+    path = match.group(1).strip()
+    if path.startswith("/var/lib/flatpak/"):
+        return "system"
+    if "/.local/share/flatpak/" in path:
+        return "user"
+    return None
+
+
+def _flatpak_update_message(rel, installation):
+    """How to install release `rel` over the Flatpak that is running.
+
+    A bundle is installed with the same flag as the copy it replaces. Without
+    --user, flatpak installs a second, system-wide copy beside a per-user
+    one, and every launch keeps starting the per-user one: it comes first
+    (#315).
+    """
+    _url, name, _size = asset_url(rel,
+                                  lambda n: n.lower().endswith(".flatpak"))
+    bundle = name or f"BedrockOnLinux-{rel['version']}-x86_64.flatpak"
+    flag = {"user": "--user ", "system": "--system "}.get(installation, "")
+    msg = (f"Installed as a Flatpak — download {bundle} from {rel['url']} "
+           f"and install it with: flatpak install {flag}./{bundle}")
+    if installation == "user":
+        msg += (" (keep --user: without it Flatpak adds a second, system-wide"
+                " copy, and this one keeps starting instead)")
+    return msg
+
+
 def update_kind():
     """How the launcher is installed — decides how (and whether) it can
     replace itself: 'appimage' | 'git' | 'system' | 'file'."""
@@ -80,6 +123,9 @@ def self_update(rel, progress=None):
         if kind == "git":
             return ("git", "This is a git checkout — run `git pull` to update.")
         if kind == "system":
+            if is_flatpak():
+                return ("system", _flatpak_update_message(
+                    rel, flatpak_installation()))
             return ("system",
                     f"Installed from a package — update with your package "
                     f"manager, or download v{rel['version']} from {rel['url']}")
