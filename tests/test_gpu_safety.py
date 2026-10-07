@@ -453,6 +453,26 @@ class GraphicsSafetyTests(unittest.TestCase):
                  "RIP: e1000e_network_path\n")
         self.assertFalse(gpu_safety._gpu_fault_in_text(text))
 
+    def test_a_program_that_crashed_is_not_a_gpu_fault(self):
+        # The kernel reports a userspace crash with the same words as one of
+        # its own; Wine and games produce them beside routine driver lines.
+        text = (
+            "kernel: [drm] Initialized amdgpu 3.61.0 for 0000:03:00.0\n"
+            "kernel: traps: wineserver[4242] general protection fault "
+            "ip:5f4a1c sp:7ffd2c0 error:0 in wineserver[400000+64000]\n"
+            "kernel: traps: Minecraft.Windo[5150] general protection fault "
+            "ip:7f1e sp:7f2 error:0 in libc.so.6[7f1e+165000]\n"
+            "kernel: amdgpu 0000:03:00.0: amdgpu: SMU is resumed\n")
+        self.assertFalse(gpu_safety._gpu_fault_in_text(text))
+
+    def test_a_kernel_general_protection_fault_in_the_gpu_driver_is(self):
+        text = (
+            "kernel: Oops: general protection fault, probably for "
+            "non-canonical address 0xdead000000000122: 0000 [#1] PREEMPT SMP\n"
+            "kernel: CPU: 5 PID: 911 Comm: kworker/5:2\n"
+            "kernel: RIP: 0010:amdgpu_vm_bo_update+0x1a2/0x8d0 [amdgpu]\n")
+        self.assertTrue(gpu_safety._gpu_fault_in_text(text))
+
     def test_acknowledgement_hides_only_previous_not_current_fault(self):
         self.ack.write_text(json.dumps({
             "version": gpu_safety._STATE_VERSION,

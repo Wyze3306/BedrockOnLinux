@@ -836,9 +836,15 @@ def _gpu_fault_in_text(text: str) -> bool:
         r"watchdog.*(?:hard|soft)\s+lockup|"
         r"kernel panic|general protection fault"
     )
+    # "traps: wineserver[4242] general protection fault ip:… in libc.so.6"
+    # is the kernel reporting a *program* that crashed, not a fault of its
+    # own. Wine and games produce them; next to ordinary amdgpu or i915
+    # chatter, one used to read as a GPU failure and refuse PLAY until a
+    # reboot.
+    user_trap = re.compile(r"\btraps:\s+\S.*\[\d+\]\s+general protection fault")
     vendor = re.compile(r"\[nvidia\]|\bnvrm:|\bamdgpu\b|\bi915\b|\bxe\b")
     for index, line in enumerate(lines):
-        if not generic.search(line):
+        if not generic.search(line) or user_trap.search(line):
             continue
         lo, hi = max(0, index - 40), min(len(lines), index + 41)
         if any(vendor.search(candidate) for candidate in lines[lo:hi]):

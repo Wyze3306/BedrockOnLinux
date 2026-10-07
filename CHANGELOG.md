@@ -83,6 +83,12 @@
   saved in the fresh folder is kept as a backup that says so. The test that
   reproduces it lost the world on the old code.
 
+- **A program that crashed no longer reads as a GPU fault.** The kernel
+  reports a crashed program as "traps: wineserver[4242] general protection
+  fault …", in the same words as one of its own faults. Within 40 lines of
+  ordinary amdgpu or i915 messages, one of those blocked PLAY as a GPU
+  failure until a reboot. Only the kernel's own faults count now.
+
 - **On an ARM computer, the launcher says what x86-64 programs need**
   ([#250](https://github.com/Wyze3306/BedrockOnLinux/issues/250)). The
   launcher is Python and starts anywhere, but the game, the Wine engine,
