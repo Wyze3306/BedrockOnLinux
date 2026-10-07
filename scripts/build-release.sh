@@ -167,13 +167,8 @@ install -m644 "$SRC/LICENSE" "$STAGE/LICENSE"
 install -Dm644 "$SRC/data/icon.png" "$STAGE/data/icon.png"
 find "$STAGE/bol" -name __pycache__ -type d -exec rm -rf {} +
 cat > "$STAGE/__main__.py" <<'PYEOF'
-import sys
-from bol.cli import main
-try:
-    main()
-except KeyboardInterrupt:
-    print()
-    sys.exit(130)
+from bol.__main__ import main
+main()
 PYEOF
 # zipapp uses the freshly copied/generated mtimes, so two otherwise identical
 # builds receive different central-directory timestamps. Write the same
