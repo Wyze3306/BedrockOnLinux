@@ -173,7 +173,7 @@ def ray_tracing_summary(logs_dir=None):
             return "off (dropped by the payload on a Steam Deck)"
         if _config_disables_dxr(caps["config"]):
             return "off (VKD3D_CONFIG=nodxr)"
-        return "MANQUANT (the driver exposed no ray tracing)"
+        return "MISSING (the driver exposed no ray tracing)"
     detail = "DXR " + caps["tier"]
     if caps["ultimate"]:
         detail += ", DirectX 12 Ultimate"

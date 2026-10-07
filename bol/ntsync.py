@@ -147,7 +147,7 @@ def inproc_sync_summary(engine_root, device=None, environ=None):
     if engine_ok is None:
         return "unknown (engine not installed)"
     if not engine_ok:
-        return "MANQUANT (engine built without ntsync)"
+        return "MISSING (engine built without ntsync)"
     if not kernel_exposes_ntsync(device):
-        return "MANQUANT (no %s)" % NTSYNC_DEVICE
+        return "MISSING (no %s)" % NTSYNC_DEVICE
     return "OK (ntsync)"

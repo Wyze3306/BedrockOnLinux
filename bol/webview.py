@@ -140,6 +140,72 @@ _TLS_PROBE_KEYS = ("LD_LIBRARY_PATH", "GIO_MODULE_DIR", "GIO_EXTRA_MODULES",
                    "GIO_USE_TLS")
 _TLS_CACHE = {}
 
+# WebKitGTK draws every page through EGL, with or without a GPU: the web
+# process opens a surfaceless EGL display when the EGL library offers that
+# platform, the default display otherwise, and aborts when the one it picked
+# cannot be initialized ("Could not create default EGL display:
+# EGL_BAD_PARAMETER. Aborting..."). The window it was drawing for stays open
+# and stays blank, with nothing on screen to say why (issue #273). That
+# happens where libEGL.so.1 has nothing behind it: libglvnd without an EGL
+# vendor, a Mesa built without EGL. A missing GPU is not it -- Mesa's
+# software renderer serves both platforms. The probe asks the host's EGL the
+# same two questions, in the same order, before the window is opened.
+#
+# Only for the bundled runtime, whose WebKitGTK (2.52) is the one measured to
+# abort. A host's own may not: 2.54 drew the same page here with no EGL vendor
+# at all. Whichever library it is, the line it prints when it does give up is
+# recognised as it arrives (EGL_ABORT).
+_EGL_PROBE = (
+    "import ctypes, sys\n"
+    "try:\n"
+    "    egl = ctypes.CDLL('libEGL.so.1')\n"
+    "except OSError as exc:\n"
+    "    print(exc)\n"
+    "    sys.exit(5)\n"
+    "egl.eglQueryString.restype = ctypes.c_char_p\n"
+    "egl.eglQueryString.argtypes = [ctypes.c_void_p, ctypes.c_int]\n"
+    "egl.eglGetProcAddress.restype = ctypes.c_void_p\n"
+    "egl.eglGetProcAddress.argtypes = [ctypes.c_char_p]\n"
+    "egl.eglGetDisplay.restype = ctypes.c_void_p\n"
+    "egl.eglGetDisplay.argtypes = [ctypes.c_void_p]\n"
+    "egl.eglInitialize.argtypes = [ctypes.c_void_p] * 3\n"
+    "egl.eglTerminate.argtypes = [ctypes.c_void_p]\n"
+    "client = (egl.eglQueryString(None, 0x3055) or b'').split()\n"
+    "base = next((name for ext, name in (\n"
+    "    (b'EGL_EXT_platform_base', b'eglGetPlatformDisplayEXT'),\n"
+    "    (b'EGL_KHR_platform_base', b'eglGetPlatformDisplay'))\n"
+    "    if ext in client), None)\n"
+    "if b'EGL_MESA_platform_surfaceless' in client and base:\n"
+    "    platform = 'surfaceless'\n"
+    "    get = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_uint,\n"
+    "                           ctypes.c_void_p, ctypes.c_void_p)(\n"
+    "        egl.eglGetProcAddress(base))\n"
+    "    display = get(0x31DD, None, None)\n"
+    "else:\n"
+    "    platform = 'default'\n"
+    "    display = egl.eglGetDisplay(None)\n"
+    "if display and egl.eglInitialize(display, None, None):\n"
+    "    egl.eglTerminate(display)\n"
+    "    sys.exit(0)\n"
+    "print(platform, egl.eglGetError())\n"
+    "sys.exit(4)\n"
+)
+_EGL_NO_DISPLAY = 4
+_EGL_NO_LIBRARY = 5
+_EGL_PROBE_KEYS = ("LD_LIBRARY_PATH", "__EGL_VENDOR_LIBRARY_FILENAMES",
+                   "__EGL_VENDOR_LIBRARY_DIRS", "EGL_PLATFORM",
+                   "LIBGL_ALWAYS_SOFTWARE", "DISPLAY", "WAYLAND_DISPLAY")
+_EGL_CACHE = {}
+_EGL_ERRORS = {
+    0x3001: "EGL_NOT_INITIALIZED", 0x3002: "EGL_BAD_ACCESS",
+    0x3003: "EGL_BAD_ALLOC", 0x3008: "EGL_BAD_DISPLAY",
+    0x3009: "EGL_BAD_MATCH", 0x300C: "EGL_BAD_PARAMETER",
+}
+# What the web process prints when it gives up, for a host the probe could not
+# tell about.
+EGL_ABORT = re.compile(
+    r"Could not create (?:(\w+) )?EGL display: ([^.]+)\. Aborting")
+
 
 def host_package_name():
     """What the host's package manager calls the WebKitGTK runtime."""
@@ -217,6 +283,72 @@ def host_tls_available(env=None):
         except (OSError, subprocess.SubprocessError):
             _TLS_CACHE[key] = True
     return _TLS_CACHE[key]
+
+
+def egl_failure(env=None):
+    """Why WebKitGTK cannot draw on this host, or None when it can.
+
+    None as well when the probe could not run at all: as with TLS, a sign-in
+    that might work is not refused on a guess.
+    """
+    source = os.environ if env is None else env
+    key = tuple(source.get(name) for name in _EGL_PROBE_KEYS)
+    if key not in _EGL_CACHE:
+        try:
+            proc = subprocess.run([sys.executable, "-c", _EGL_PROBE],
+                                  env=dict(source), stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, text=True,
+                                  errors="replace", timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            proc = None
+        _EGL_CACHE[key] = _egl_answer(proc)
+    return _EGL_CACHE[key]
+
+
+def _egl_answer(proc):
+    if proc is None:
+        return None
+    said = (proc.stdout or "").strip()
+    if proc.returncode == _EGL_NO_LIBRARY:
+        return f"libEGL.so.1 could not be loaded ({said or 'not found'})"
+    if proc.returncode != _EGL_NO_DISPLAY:
+        return None
+    platform, _, code = said.partition(" ")
+    try:
+        error = _EGL_ERRORS.get(int(code), hex(int(code)))
+    except ValueError:
+        error = "no error code"
+    return f"the {platform or 'default'} EGL display did not open ({error})"
+
+
+def bundled(env):
+    """Whether ``env`` runs xodus-cli against the bundled runtime."""
+    libraries = str(XODUS_WEBVIEW_DIR / "lib")
+    return libraries in (env.get("LD_LIBRARY_PATH") or "").split(os.pathsep)
+
+
+def blank_sign_in(env=None):
+    """Why the sign-in window would open blank, or None.
+
+    With ``env``, as xodus-cli is about to be run with it; without, for
+    `doctor`, as the next sign-in would run on this host.
+    """
+    if env is None:
+        uses_bundle = not host_has_webkitgtk() or not host_tls_available()
+    else:
+        uses_bundle = bundled(env)
+    return egl_failure(env) if uses_bundle else None
+
+
+def egl_message(detail):
+    """What to tell someone whose EGL cannot give WebKitGTK a display."""
+    return (
+        "The Microsoft sign-in window would stay blank on this system: "
+        "WebKitGTK draws every page through EGL, and " + detail + ". "
+        "Install Mesa with EGL enabled (it also draws without a GPU), or the "
+        "EGL vendor file of your graphics driver if libEGL comes from "
+        "libglvnd, then sign in again. The Flatpak build carries its own "
+        "graphics libraries.")
 
 
 def _host_failure(binary):
@@ -440,12 +572,35 @@ def _point_helpers_at(root, target):
         with mmap.mmap(handle.fileno(), 0) as image:
             if image.find(replacement) >= 0:
                 return
-            offset = image.find(original)
-            if offset < 0:
+            offset = _helper_literal(image, len(original))
+            if offset is None:
                 raise BolError(
                     "The bundled WebKitGTK does not carry the expected helper "
                     "path, so its helper processes cannot be relocated.")
             image[offset:offset + len(replacement)] = replacement
+
+
+# A literal this launcher already rewrote: helper_dir() ends in one of these
+# names, and the rest of the original literal is NUL padding.
+_REWRITTEN = re.compile(rb"(?<=\x00)/[^\x00]*/bol-webkit(?:-\d+)?\x00")
+
+
+def _helper_literal(image, length):
+    """Where the helper directory literal is, pristine or rewritten before.
+
+    The rewrite stays in the unpacked library, so the next launch finds the
+    directory an earlier one chose, not the compiled-in path. That directory
+    changes with the session: XDG_RUNTIME_DIR is set in one and not in the
+    next, which falls back to /tmp, or names another place. Each launch has to
+    be able to move it again.
+    """
+    offset = image.find(XODUS_WEBVIEW_EXEC_DIR.encode() + b"\x00")
+    if offset >= 0:
+        return offset
+    found = [match.start() for match in _REWRITTEN.finditer(image)
+             if match.end() - match.start() <= length
+             and not image[match.end():match.start() + length].strip(b"\x00")]
+    return found[0] if len(found) == 1 else None
 
 
 def _link_helpers(root, target):
@@ -625,4 +780,4 @@ def status():
         return "OK (bundled runtime)", None
     if XODUS_WEBVIEW_SHA256.strip():
         return "bundled runtime, downloaded on first use", None
-    return "MANQUANT (store sign-in)", host_package_name()
+    return "MISSING (store sign-in)", host_package_name()

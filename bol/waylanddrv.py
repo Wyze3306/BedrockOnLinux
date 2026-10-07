@@ -124,5 +124,5 @@ def wayland_driver_summary(engine_root):
     if problem is None:
         return "OK (BOL_INPUT=wayland available)"
     if not (modules / _DRIVER[0]).exists():
-        return "MANQUANT (engine built without winewayland)"
-    return "MANQUANT (winewayland is from another Wine build)"
+        return "MISSING (engine built without winewayland)"
+    return "MISSING (winewayland is from another Wine build)"

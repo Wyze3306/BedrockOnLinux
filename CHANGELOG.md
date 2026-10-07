@@ -61,6 +61,30 @@
 
 ### Fixed
 
+- **A Microsoft sign-in window that could only stay blank is explained
+  instead** ([#273](https://github.com/Wyze3306/BedrockOnLinux/issues/273)).
+  WebKitGTK draws every page through EGL, with or without a GPU, and the
+  bundled runtime's WebKitGTK 2.52 aborts its page process when the system's
+  EGL cannot open a display: libglvnd with no EGL vendor installed, or a Mesa
+  built without EGL. The window stayed open and blank, and nothing said why.
+  Before opening the window with the bundled runtime, the launcher now asks
+  the system's EGL the same two questions WebKitGTK does, and says what to
+  install when there is no answer. With any WebKitGTK, the line its page
+  process prints when it gives up now closes the window and shows the same
+  explanation. `doctor` adds a `sign-in gl` line when the check fails.
+  Reproduced on a virtual display by hiding the EGL vendors. A missing GPU is
+  not a cause: Mesa's software renderer serves both platforms, and the sign-in
+  drew with `/dev/dri` hidden.
+
+- **The bundled WebKitGTK runtime follows a session to another runtime
+  directory.** The launcher points the runtime's helper processes at a
+  directory under `XDG_RUNTIME_DIR`, or under `/tmp` when that variable is
+  unset, by rewriting a path inside the library. The rewrite stayed in the
+  library, and the next launch looked only for the original path. A session
+  with another runtime directory, or none, then failed with "the bundled
+  WebKitGTK does not carry the expected helper path". The launcher now
+  recognises its own earlier rewrite and moves it again.
+
 - **The XCurl request log lands in the logs folder.** With *Advanced
   diagnostics* on, the XCurl shim records one line per HTTP request the game
   makes: curl's result, the HTTP status and the URL, plus the answers of the

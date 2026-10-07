@@ -627,6 +627,10 @@ def login(on_line=None):
     binary = ensure_cli()
     reset_webview_state()
     env = _env(binary)
+    blank = webview.blank_sign_in(env)
+    if blank:
+        _record_login_output([], f"not opened: {blank}")
+        raise XodusError(webview.egl_message(blank))
     info("Sign in to the Microsoft account that owns Minecraft …")
     _announce_device_registration(env)
     with _LOGIN_LOCK:
@@ -645,6 +649,7 @@ def login(on_line=None):
     with _LOGIN_LOCK:
         _LOGIN["proc"] = proc
     tail = []
+    blank = None
     try:
         for raw in proc.stdout:
             line = _ANSI.sub("", raw).rstrip()
@@ -654,6 +659,14 @@ def login(on_line=None):
             del tail[:-40]
             if on_line:
                 on_line(line)
+            drew_nothing = webview.EGL_ABORT.search(line)
+            if drew_nothing:
+                # The page process is gone and the window will stay blank
+                # until someone closes it; nothing comes after this.
+                blank = (f"the {drew_nothing.group(1) or 'default'} EGL "
+                         f"display did not open ({drew_nothing.group(2)})")
+                _end_process_group(proc, 5)
+                break
         code = proc.wait()
     except BaseException:
         # Ctrl-C at a terminal, most of all. The sign-in runs in a session of
@@ -676,6 +689,9 @@ def login(on_line=None):
     if cancelled:
         _record_login_output(tail, "cancelled from the launcher")
         raise LoginCancelled(LOGIN_CANCELLED_MESSAGE)
+    if blank:
+        _record_login_output(tail, f"blank window: {blank}")
+        raise XodusError(webview.egl_message(blank))
     if code == 0 and signed_in():
         _record_login_output(tail, "linked")
         ok("Microsoft account linked for the Minecraft download.")

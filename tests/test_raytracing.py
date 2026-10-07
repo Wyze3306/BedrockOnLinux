@@ -101,7 +101,7 @@ class RayTracingReportTest(unittest.TestCase):
         caps = raytracing.graphics_capabilities(self.logs)
         self.assertTrue(caps["observed"])
         self.assertIsNone(caps["tier"])
-        self.assertIn("MANQUANT", raytracing.ray_tracing_summary(self.logs))
+        self.assertIn("MISSING", raytracing.ray_tracing_summary(self.logs))
         problem = raytracing.ray_tracing_problem(self.logs)
         self.assertIn("RX 6000", problem)
         self.assertIn("RTX 20", problem)
@@ -111,7 +111,7 @@ class RayTracingReportTest(unittest.TestCase):
                                      "force_raw_va_cbv,nodxr") + DEVICE)
         summary = raytracing.ray_tracing_summary(self.logs)
         self.assertIn("nodxr", summary)
-        self.assertNotIn("MANQUANT", summary)
+        self.assertNotIn("MISSING", summary)
         self.assertIn("Ray tracing switch",
                       raytracing.ray_tracing_problem(self.logs))
 

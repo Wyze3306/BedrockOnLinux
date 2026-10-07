@@ -108,7 +108,7 @@ def doctor(acknowledge_gpu_crash=False):
     print(f"  {'python3':12} : {sys.version.split()[0]}")
     for tool, pkg in (("tar", "tar"), ("curl", "curl"), ("unzstd", "zstd")):
         have = shutil.which(tool)
-        print(f"  {tool:12} : {'OK' if have else 'MANQUANT'}")
+        print(f"  {tool:12} : {'OK' if have else 'MISSING'}")
         if not have and not (tool == "curl" and shutil.which("wget")):
             miss.append(pkg)
     # The GUI toolkit is PySide6 (Qt), not Tk/customtkinter anymore. It is not
@@ -122,7 +122,7 @@ def doctor(acknowledge_gpu_crash=False):
     print(f"  {'PySide6':12} : {gui_toolkit_summary()}")
     cr_ok = deps.have("cryptography")
     print(f"  {'cryptography':12} : "
-          f"{'OK (login)' if cr_ok else 'MANQUANT (login)'}")
+          f"{'OK (login)' if cr_ok else 'MISSING (login)'}")
     if not cr_ok:
         miss.append("python3-cryptography")
     # Minecraft is downloaded from the Microsoft Store, and xodus-cli opens
@@ -134,6 +134,13 @@ def doctor(acknowledge_gpu_crash=False):
     print(f"  {'webkit2gtk':12} : {webkit_summary}")
     if webkit_package:
         miss.append(webkit_package)
+    # Loading the bundled library is not drawing with it: its WebKitGTK needs
+    # an EGL display for every page, which the host provides, and without one
+    # the sign-in window opens blank (#273).
+    egl_problem = webview.blank_sign_in()
+    if egl_problem:
+        print(f"  {'sign-in gl':12} : BLANK ({egl_problem})")
+        warn(webview.egl_message(egl_problem))
     # Whether that sign-in is on file, and where. Never a missing dependency:
     # it is linked from the launcher, not installed. It is printed with its
     # path because losing it is expensive -- each fresh sign-in claims one of

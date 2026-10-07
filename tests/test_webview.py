@@ -240,6 +240,20 @@ class HelperRelocationTests(unittest.TestCase):
         webview._point_helpers_at(self.root, target)
         self.assertEqual(self.library.read_bytes(), first)
 
+    def test_a_later_session_can_move_it_again(self):
+        """XDG_RUNTIME_DIR set in one session and not in the next (#273)."""
+        webview._point_helpers_at(self.root, Path("/run/user/1000/bol-webkit"))
+        webview._point_helpers_at(self.root, Path("/tmp/bol-webkit-1000"))
+
+        data = self.library.read_bytes()
+        self.assertEqual(len(data), len(_library()))
+        self.assertIn(b"\x00/tmp/bol-webkit-1000\x00", data)
+        self.assertNotIn(b"/run/user/1000/bol-webkit", data)
+
+        webview._point_helpers_at(self.root, Path("/run/user/1000/bol-webkit"))
+        self.assertIn(b"\x00/run/user/1000/bol-webkit\x00", self.library.read_bytes())
+        self.assertNotIn(b"/tmp/bol-webkit-1000", self.library.read_bytes())
+
     def test_a_path_that_does_not_fit_is_refused(self):
         with self.assertRaises(webview.BolError) as raised:
             webview._point_helpers_at(self.root, Path("/run/user/" + "x" * 80))
@@ -548,7 +562,7 @@ class DoctorStatusTests(unittest.TestCase):
                 mock.patch.object(webview, "installed", lambda: False), \
                 mock.patch.object(webview, "XODUS_WEBVIEW_SHA256", ""):
             summary, package = webview.status()
-            self.assertIn("MANQUANT", summary)
+            self.assertIn("MISSING", summary)
             self.assertEqual(package, webview.host_package_name())
 
 
@@ -709,6 +723,95 @@ class TlsBackendTests(unittest.TestCase):
             summary, package = webview.status()
         self.assertIn("no TLS support", summary)
         self.assertIsNone(package)
+
+
+class EglDisplayTests(unittest.TestCase):
+    """WebKitGTK cannot draw a page without an EGL display (#273)."""
+
+    def setUp(self):
+        webview._EGL_CACHE.clear()
+        self.addCleanup(webview._EGL_CACHE.clear)
+
+    def _probe(self, returncode=None, stdout="", raises=None):
+        def run(argv, **kwargs):
+            self.argv, self.kwargs = argv, kwargs
+            if raises is not None:
+                raise raises
+            return mock.Mock(returncode=returncode, stdout=stdout)
+        with mock.patch.object(webview.subprocess, "run", side_effect=run):
+            return webview.egl_failure({"DISPLAY": ":0"})
+
+    def test_a_display_that_does_not_open_is_reported_with_its_error(self):
+        # 0x300C, what libglvnd answers when no EGL vendor is installed.
+        failure = self._probe(returncode=webview._EGL_NO_DISPLAY,
+                              stdout="default 12300\n")
+        self.assertEqual(failure, "the default EGL display did not open "
+                                  "(EGL_BAD_PARAMETER)")
+        # The same two questions as WebKitGTK's web process, in its order.
+        self.assertIn("EGL_MESA_platform_surfaceless", self.argv[-1])
+        self.assertIn("eglGetDisplay", self.argv[-1])
+        self.assertEqual(self.kwargs["env"], {"DISPLAY": ":0"})
+
+    def test_a_missing_library_is_reported(self):
+        failure = self._probe(returncode=webview._EGL_NO_LIBRARY,
+                              stdout="libEGL.so.1: cannot open shared object "
+                                     "file: No such file or directory\n")
+        self.assertIn("libEGL.so.1 could not be loaded", failure)
+
+    def test_a_working_display_is_no_failure(self):
+        self.assertIsNone(self._probe(returncode=0))
+
+    def test_a_probe_that_cannot_tell_refuses_nothing(self):
+        self.assertIsNone(self._probe(returncode=1, stdout="Traceback"))
+        webview._EGL_CACHE.clear()
+        self.assertIsNone(self._probe(raises=OSError("no python")))
+
+    def test_the_answer_is_kept_for_the_same_environment(self):
+        self._probe(returncode=webview._EGL_NO_DISPLAY, stdout="default 12288")
+        with mock.patch.object(webview.subprocess, "run",
+                               side_effect=AssertionError("probed twice")):
+            self.assertIn("default EGL display",
+                          webview.egl_failure({"DISPLAY": ":0"}))
+
+    def test_what_the_page_process_prints_when_it_gives_up_is_recognised(self):
+        for line, platform in (
+                ("Could not create default EGL display: EGL_BAD_PARAMETER. "
+                 "Aborting...", "default"),
+                ("Could not create surfaceless EGL display: EGL_NOT_INITIALIZED."
+                 " Aborting...", "surfaceless")):
+            match = webview.EGL_ABORT.search(line)
+            self.assertIsNotNone(match, line)
+            self.assertEqual(match.group(1), platform)
+
+    def test_only_the_bundled_runtime_is_asked_before_the_window(self):
+        # Its WebKitGTK (2.52) aborts without a display; a host's 2.54 drew
+        # the same page with no EGL vendor at all, so it is not refused on
+        # the probe's word.
+        bundle = {"LD_LIBRARY_PATH": f"{webview.XODUS_WEBVIEW_DIR / 'lib'}:/x"}
+        with mock.patch.object(webview, "egl_failure",
+                               return_value="no display") as probed:
+            self.assertEqual(webview.blank_sign_in(bundle), "no display")
+            self.assertIsNone(webview.blank_sign_in({"LD_LIBRARY_PATH": "/x"}))
+            self.assertIsNone(webview.blank_sign_in({}))
+        probed.assert_called_once_with(bundle)
+
+    def test_doctor_asks_when_the_host_library_would_not_be_used(self):
+        with mock.patch.object(webview, "egl_failure",
+                               return_value="no display"), \
+                mock.patch.object(webview, "host_tls_available",
+                                  lambda env=None: True):
+            with mock.patch.object(webview, "host_has_webkitgtk", lambda: True):
+                self.assertIsNone(webview.blank_sign_in())
+            with mock.patch.object(webview, "host_has_webkitgtk",
+                                   lambda: False):
+                self.assertEqual(webview.blank_sign_in(), "no display")
+
+    def test_the_message_says_what_to_install(self):
+        message = webview.egl_message("the default EGL display did not open "
+                                      "(EGL_BAD_PARAMETER)")
+        self.assertIn("blank", message)
+        self.assertIn("Mesa", message)
+        self.assertIn("EGL_BAD_PARAMETER", message)
 
 
 if __name__ == "__main__":
