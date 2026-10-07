@@ -245,5 +245,70 @@ class PackageUpdateTests(unittest.TestCase):
                          ["pkexec", "dnf", "install", "-y"])
 
 
+class AppImageUpdateTests(unittest.TestCase):
+    """The AppImage replaces itself only with the bytes the release lists."""
+
+    def setUp(self):
+        import hashlib
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.dir = Path(holder.name)
+        self.app = self.dir / "BedrockOnLinux-2.2.8-x86_64.AppImage"
+        self.app.write_bytes(b"old launcher")
+        self.new = b"\x7fELF new launcher"
+        self.release = {
+            "version": "2.2.9", "url": "https://example.invalid/v2.2.9",
+            "assets": [
+                {"name": "BedrockOnLinux-2.2.9-x86_64.AppImage",
+                 "browser_download_url": "https://example.invalid/app"},
+                {"name": "BedrockOnLinux-2.2.9-SHA256SUMS",
+                 "browser_download_url": "https://example.invalid/sums"}]}
+        self.sums = "%s  BedrockOnLinux-2.2.9-x86_64.AppImage\n" % (
+            hashlib.sha256(self.new).hexdigest())
+
+    def _update(self, served):
+        seen = []
+
+        def fetch(url, dest, label=None, progress=None):
+            seen.append(dest)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if url.endswith("sums"):
+                dest.write_text(self.sums)
+            else:
+                dest.write_bytes(served)
+
+        with mock.patch.object(update, "CACHE", self.dir / "cache"), \
+                mock.patch.object(update, "update_kind",
+                                  return_value="appimage"), \
+                mock.patch.dict(update.os.environ,
+                                {"APPIMAGE": str(self.app)}), \
+                mock.patch.object(update, "download", side_effect=fetch):
+            return update.self_update(self.release), seen
+
+    def test_the_listed_appimage_replaces_the_running_one(self):
+        (state, _msg), seen = self._update(self.new)
+        self.assertEqual(state, "ok")
+        self.assertEqual(self.app.read_bytes(), self.new)
+        # Downloaded under a name only this release uses.
+        self.assertIn("2.2.9", seen[-1].name)
+
+    def test_bytes_the_release_does_not_list_change_nothing(self):
+        (state, msg), _seen = self._update(b"half of one, half of another")
+        self.assertEqual(state, "error")
+        self.assertIn("checksum", msg)
+        self.assertEqual(self.app.read_bytes(), b"old launcher")
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()
+                                if p.name != "cache"), [self.app.name])
+
+    def test_a_partial_download_of_another_release_is_never_resumed(self):
+        old_part = self.dir / f".{self.app.name}.2.2.85.new.part"
+        legacy = self.dir / f"{self.app.name}.new.part"
+        for leftover in (old_part, legacy):
+            leftover.write_bytes(b"older release")
+        self._update(self.new)
+        self.assertFalse(old_part.exists())
+        self.assertFalse(legacy.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

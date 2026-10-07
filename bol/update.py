@@ -1,6 +1,7 @@
 """bol.update — self-update of the launcher."""
 # SPDX-License-Identifier: MIT
 
+import glob
 import hashlib
 import os
 import re
@@ -172,6 +173,52 @@ def _expected_sha256(rel, name, progress=None):
     return None
 
 
+def _fetch_checked(rel, url, name, target, progress=None):
+    """Download release asset `name` to `target`; an error message, or None.
+
+    Checked against the release's SHA-256 list when it has one, which every
+    release since 2.2.8 does. The file is downloaded under a name carrying
+    the version, so an interrupted download is only ever resumed with the
+    bytes of the same release: resumed with another's, the result was half
+    of each, and nothing checked an AppImage before it replaced the running
+    one.
+    """
+    listed = asset_url(rel, lambda n: n.endswith("-SHA256SUMS"))[0]
+    expected = _expected_sha256(rel, name, progress) if listed else None
+    if listed and not expected:
+        return (f"Release v{rel['version']} lists no checksum for {name}, so "
+                f"it was not installed — download it from {rel['url']}")
+    target.unlink(missing_ok=True)
+    download(url, target, label=name, progress=progress)
+    if expected:
+        digest = hashlib.sha256()
+        with open(target, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected:
+            target.unlink(missing_ok=True)
+            return (f"The downloaded {name} does not match the release's "
+                    "checksum, so it was not installed.")
+    return None
+
+
+def _staging(dest, rel):
+    """Where the update to `dest` is downloaded: hidden, and per version.
+
+    What earlier updates of `dest` left half-downloaded goes: a later
+    release replaces them, and the unversioned name of older launchers is
+    the one a resume could have mixed.
+    """
+    staged = dest.with_name(f".{dest.name}.{rel['version']}.new")
+    leftovers = [dest.with_name(f"{dest.name}.new"),
+                 dest.with_name(f"{dest.name}.new.part")]
+    leftovers += dest.parent.glob(f".{glob.escape(dest.name)}.*.new.part")
+    for leftover in leftovers:
+        if leftover != staged.with_name(staged.name + ".part"):
+            leftover.unlink(missing_ok=True)
+    return staged
+
+
 def _installer(kind, package):
     """The command that installs `package` as root, or None."""
     if not shutil.which("pkexec"):
@@ -206,23 +253,17 @@ def _package_update(rel, kind, progress=None):
     if not url:
         return ("error", f"No {suffix} in release v{rel['version']} to update "
                          f"from — download it from {rel['url']}")
-    expected = _expected_sha256(rel, name, progress)
-    if not expected:
-        return ("error", f"Release v{rel['version']} lists no checksum for "
-                         f"{name}, so it was not installed — download it "
-                         f"from {rel['url']}")
+    if not asset_url(rel, lambda n: n.endswith("-SHA256SUMS"))[0]:
+        # apt and dnf install what they are given, as root: never an
+        # unchecked file.
+        return ("error", f"Release v{rel['version']} has no checksum list, "
+                         f"so {name} was not installed — download it from "
+                         f"{rel['url']}")
     package = CACHE / "updates" / name
-    if package.is_file():
-        package.unlink()
-    download(url, package, label=name, progress=progress)
-    digest = hashlib.sha256()
-    with open(package, "rb") as stream:
-        for chunk in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(chunk)
-    if digest.hexdigest() != expected:
-        package.unlink(missing_ok=True)
-        return ("error", f"The downloaded {name} does not match the "
-                         "release's checksum, so it was not installed.")
+    package.parent.mkdir(parents=True, exist_ok=True)
+    problem = _fetch_checked(rel, url, name, package, progress)
+    if problem:
+        return ("error", problem)
     argv = _installer(kind, package)
     if argv is None:
         return ("system", f"Downloaded v{rel['version']} to {package}. "
@@ -273,8 +314,10 @@ def self_update(rel, progress=None):
                                      lambda n: n.lower().endswith(".appimage"))
             if not url:
                 return ("error", "No AppImage in the release to update from.")
-            tmp = dest.with_name(dest.name + ".new")
-            download(url, tmp, label=name, progress=progress)
+            tmp = _staging(dest, rel)
+            problem = _fetch_checked(rel, url, name, tmp, progress)
+            if problem:
+                return ("error", problem)
             os.chmod(tmp, 0o755)
             tmp.replace(dest)
             return ("ok", f"Updated to v{rel['version']} — restart to use it.")
@@ -286,8 +329,10 @@ def self_update(rel, progress=None):
             return ("error",
                     f"No .pyz in release v{rel['version']} to update from — "
                     f"download it from {rel['url']}")
-        tmp = target.with_name(target.name + ".new")
-        download(url, tmp, label=name, progress=progress)
+        tmp = _staging(target, rel)
+        problem = _fetch_checked(rel, url, name, tmp, progress)
+        if problem:
+            return ("error", problem)
         if not zipfile.is_zipfile(tmp):       # a .pyz is a shebang + zip
             tmp.unlink(missing_ok=True)
             return ("error",

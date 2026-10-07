@@ -96,6 +96,13 @@
   move now knows whether its copy completed, and undoes itself accordingly.
   The world backups also move with the rest of the data now.
 
+- **Launcher updates are checked against the release before they are
+  installed.** The AppImage and the `.pyz` resumed an interrupted download
+  under a name that did not carry the version. An update to another release
+  could therefore finish with half of each, and nothing checked the result
+  before it replaced the running launcher. Each download is now named for
+  its release and checked against the release's SHA-256 list.
+
 - **On an ARM computer, the launcher says what x86-64 programs need**
   ([#250](https://github.com/Wyze3306/BedrockOnLinux/issues/250)). The
   launcher is Python and starts anywhere, but the game, the Wine engine,
