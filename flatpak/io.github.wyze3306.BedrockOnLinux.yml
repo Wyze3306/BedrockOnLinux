@@ -98,15 +98,14 @@ modules:
         sha256: 5c8462af5790baf43a321a1559dbe0db06d1be4300fb85fb53c40060668e548a
 
   # Python dependencies, installed offline by pip. cffi builds from source
-  # (setuptools is only its build backend); pycparser, packaging, python-xlib
-  # and six are pure-Python wheels; cryptography (Rust) and PySide6/shiboken6
+  # (setuptools is only its build backend); pycparser, python-xlib and six
+  # are pure-Python wheels; cryptography (Rust) and PySide6/shiboken6
   # (Qt) are the upstream manylinux wheels. Keep the versions in step with
   # third_party/requirements-appimage.txt and requirements-deb.txt.
   #   - cryptography signs the Xbox Live device/request tokens; without it the
   #     Microsoft sign-in fails with a connection reset (0x80072746).
   #   - PySide6-Essentials only, not the PySide6 meta-package, which also pulls
   #     PySide6-Addons (~167 MB of Qt modules this app never uses).
-  #   - packaging parses versions for the update and version pickers.
   #   - python-xlib reads monitor geometry from RandR (bol.x11); optional.
   - name: python3-dependencies
     buildsystem: simple
@@ -115,8 +114,8 @@ modules:
         --prefix=${FLATPAK_DEST} setuptools
       - /app/bin/python3 -m pip install --verbose --no-index --find-links="file://${PWD}"
         --prefix=${FLATPAK_DEST} --no-build-isolation cryptography PySide6-Essentials
-        packaging python-xlib
-      - /app/bin/python3 -c "import cryptography, PySide6.QtWidgets, packaging, Xlib"
+        python-xlib
+      - /app/bin/python3 -c "import cryptography, PySide6.QtWidgets, Xlib"
     cleanup:
       - /lib/python3.12/site-packages/_distutils_hack
       - /lib/python3.12/site-packages/distutils-precedence.pth
@@ -141,9 +140,6 @@ modules:
       - type: file
         url: https://files.pythonhosted.org/packages/85/e8/9396cf11a60f80175bb3c5c1d498d84e87b7af653ab4ea001acf821a3981/pyside6_essentials-6.9.3-cp39-abi3-manylinux_2_28_x86_64.whl
         sha256: c70d5544e892b201a677b615156fab6a0fef865e7fc287f55a0eae00a682e83f
-      - type: file
-        url: https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl
-        sha256: 5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e
       - type: file
         url: https://files.pythonhosted.org/packages/fc/b8/ff33610932e0ee81ae7f1269c890f697d56ff74b9f5b2ee5d9b7fa2c5355/python_xlib-0.33-py2.py3-none-any.whl
         sha256: c3534038d42e0df2f1392a1b30a15a4ff5fdc2b86cfa94f072bf11b10a164398

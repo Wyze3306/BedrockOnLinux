@@ -72,6 +72,14 @@
   PySide6 6.11; the test suite passes on Python 3.14. Contributed by
   [@silverhadch](https://github.com/silverhadch).
 
+- **`packaging` is no longer a dependency.** The CustomTkinter window
+  needed it, and nothing has imported it since the move to PySide6 in
+  2.2.2. It was still on the list of modules the launcher checks on
+  start, so on a host without it the launcher pip-installed its pinned
+  GUI toolkit on top of the one already installed. The AppImage, .deb,
+  .rpm and Flatpak no longer bundle it, and the flake and
+  `pyproject.toml` no longer ask for it.
+
 ## 2.2.8 — 2026-10-04
 
 ### Added

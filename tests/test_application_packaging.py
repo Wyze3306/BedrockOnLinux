@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import unittest
 from pathlib import Path
@@ -37,7 +38,7 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
         for requirement in (
                 "cryptography==43.0.3", "cffi==2.0.0", "pycparser==3.0",
                 "shiboken6==6.9.3", "pyside6-essentials==6.9.3",
-                "packaging==26.2", "python-xlib==0.33"):
+                "python-xlib==0.33"):
             self.assertIn(requirement, reqs)
         self.assertIn("--hash=sha256:", reqs)
 
@@ -114,7 +115,7 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
             encoding="utf-8")
         for requirement in (
                 "shiboken6==6.9.3", "pyside6-essentials==6.9.3",
-                "packaging==26.2", "python-xlib==0.33"):
+                "python-xlib==0.33"):
             self.assertIn(requirement, reqs)
         self.assertIn("--hash=sha256:", reqs)
         self.assertNotIn('*.dist-info', script)
@@ -153,7 +154,6 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
         deb = (ROOT / "scripts/build-deb.sh").read_text(encoding="utf-8")
         for metadata in ("shiboken6-6.9.3.dist-info",
                          "pyside6_essentials-6.9.3.dist-info",
-                         "packaging-26.2.dist-info",
                          "python_xlib-0.33.dist-info",
                          "six-1.17.0.dist-info"):
             self.assertIn(metadata, deb)
@@ -184,10 +184,27 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
             deps.GUI_INSTALL_REQUIREMENTS,
             (
                 "PySide6-Essentials==6.9.3",
-                "packaging==26.2",
                 "python-xlib==0.33",
             ),
         )
+
+    def test_every_module_bol_deps_installs_is_one_bol_imports(self):
+        # A missing GUI_DEPS module makes ensure_gui_deps() pip-install the
+        # whole pinned stack, so an entry nothing imports any more costs a
+        # pip run on hosts that lack it. `packaging` did from 2.2.2 to
+        # 2.2.8: CustomTkinter needed it, and nothing did after PySide6.
+        imported = set()
+        for source in (ROOT / "bol").rglob("*.py"):
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imported.update(a.name.split(".")[0] for a in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                    imported.add(node.module.split(".")[0])
+        for module in {**deps.GUI_DEPS, **deps.LOGIN_DEPS}:
+            with self.subTest(module=module):
+                self.assertIn(module, imported,
+                              f"nothing under bol/ imports {module}")
 
     def test_flatpak_installs_project_license(self):
         manifest = (ROOT / "flatpak/io.github.wyze3306.BedrockOnLinux.yml").read_text(
@@ -208,7 +225,6 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
         for wheel in (
                 "shiboken6-6.9.3-cp39-abi3-manylinux_2_28_x86_64.whl",
                 "pyside6_essentials-6.9.3-cp39-abi3-manylinux_2_28_x86_64.whl",
-                "packaging-26.2-py3-none-any.whl",
                 "python_xlib-0.33-py2.py3-none-any.whl",
                 "six-1.17.0-py2.py3-none-any.whl"):
             self.assertIn(wheel, manifest)

@@ -16,7 +16,6 @@ dynamic = ["version"]
 dependencies = [
   "PySide6",
   "cryptography",
-  "packaging",
   "python-xlib",
 ]
 classifiers = [

@@ -11,8 +11,6 @@ shiboken6==6.9.3 \
     --hash=sha256:f3f5337a3a8fc660ba1462265bd9a2bdda9588f8d90fbc3d5ac4ce3134c11e59
 pyside6-essentials==6.9.3 \
     --hash=sha256:c70d5544e892b201a677b615156fab6a0fef865e7fc287f55a0eae00a682e83f
-packaging==26.2 \
-    --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e
 python-xlib==0.33 \
     --hash=sha256:c3534038d42e0df2f1392a1b30a15a4ff5fdc2b86cfa94f072bf11b10a164398
 six==1.17.0 \

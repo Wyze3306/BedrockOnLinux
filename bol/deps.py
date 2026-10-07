@@ -129,7 +129,6 @@ def ensure_login_deps(install=True):
 # cryptography==43.0.3 pin above exists to protect.
 GUI_DEPS = {
     "PySide6": "PySide6-Essentials==6.9.3",
-    "packaging": "packaging==26.2",
     "Xlib": "python-xlib==0.33",
 }
 GUI_INSTALL_REQUIREMENTS = tuple(GUI_DEPS.values())

@@ -14,7 +14,6 @@
       bolPython = pkgs.python3.withPackages (ps: with ps; [
         pyside6
         cryptography
-        packaging
         python-xlib
         certifi
       ]);

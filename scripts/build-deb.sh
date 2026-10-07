@@ -26,11 +26,11 @@ mkdir -p "$OUT" \
 
 install -m755 "$SRC/bedrock-on-linux" "$PKG/usr/lib/bedrock-on-linux/bedrock-on-linux"
 cp -r "$SRC/bol"                       "$PKG/usr/lib/bedrock-on-linux/bol"
-# Bundle the GUI toolkit (PySide6-Essentials + shiboken6, packaging, and
-# python-xlib — none of these are apt dependencies) next to bol/ so it's on
-# sys.path. cryptography stays an apt dep. python-xlib (+ six) provides
-# structured RandR monitor geometry; bol.x11 falls back to the xrandr CLI
-# when it is unavailable.
+# Bundle the GUI toolkit (PySide6-Essentials + shiboken6, and python-xlib —
+# none of these are apt dependencies) next to bol/ so it's on sys.path.
+# cryptography stays an apt dep. python-xlib (+ six) provides structured
+# RandR monitor geometry; bol.x11 falls back to the xrandr CLI when it is
+# unavailable.
 # Hash-pinned, wheels only, no sdist builds: closure + SHA-256s live in
 # third_party/requirements-deb.txt (--require-hashes rejects any mismatch).
 python3 -m pip install --quiet --no-cache-dir --no-compile --no-deps \
@@ -42,7 +42,6 @@ find "$PKG/usr/lib/bedrock-on-linux" -name __pycache__ -type d -exec rm -rf {} +
 for metadata in \
   "$PKG/usr/lib/bedrock-on-linux/shiboken6-6.9.3.dist-info" \
   "$PKG/usr/lib/bedrock-on-linux/pyside6_essentials-6.9.3.dist-info" \
-  "$PKG/usr/lib/bedrock-on-linux/packaging-26.2.dist-info" \
   "$PKG/usr/lib/bedrock-on-linux/python_xlib-0.33.dist-info" \
   "$PKG/usr/lib/bedrock-on-linux/six-1.17.0.dist-info"; do
   [[ -d "$metadata" ]] || {

@@ -26,7 +26,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PROVIDED_BY = {
     "PySide6": {"pyside6", "pyside6-essentials"},
     "cryptography": {"cryptography"},
-    "packaging": {"packaging"},
     "Xlib": {"python-xlib"},
 }
 

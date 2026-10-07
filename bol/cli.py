@@ -166,8 +166,8 @@ def _open_gui():
     """
     from . import deps
     # Only the toolkit itself is worth stopping for, and only when it really
-    # is absent: bol.gui bootstraps the rest (packaging, python-xlib) once it
-    # is imported, and works without them.
+    # is absent: bol.gui bootstraps the rest (python-xlib) once it is
+    # imported, and works without it.
     if not deps.have("PySide6") and "PySide6" in deps.ensure_gui_deps():
         die("The launcher window needs the Qt toolkit (PySide6), which is "
             "not installed here and could not be installed automatically. "

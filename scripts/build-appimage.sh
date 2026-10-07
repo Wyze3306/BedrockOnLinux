@@ -410,7 +410,6 @@ expected = {
     "pycparser": "3.0",
     "shiboken6": "6.9.3",
     "pyside6_essentials": "6.9.3",
-    "packaging": "26.2",
     "python-xlib": "0.33",
     "six": "1.17.0",
 }
