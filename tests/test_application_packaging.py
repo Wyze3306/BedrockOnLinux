@@ -42,6 +42,23 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
             self.assertIn(requirement, reqs)
         self.assertIn("--hash=sha256:", reqs)
 
+    def test_appimage_tools_come_from_tagged_releases(self):
+        # appimagetool and type2-runtime rebuild their "continuous" release in
+        # place, which swaps the bytes under the pinned SHA-256 and stops the
+        # release build: the runtime's did on 2026-09-29, appimagetool's on
+        # 2026-10-05. Each tool has to come from a release that keeps its
+        # bytes, and through the hash-checked download.
+        script = (ROOT / "scripts/build-appimage.sh").read_text(
+            encoding="utf-8")
+        pinned = dict(re.findall(
+            r'download_verified \\\n\s+'
+            r'"https://github\.com/AppImage/([\w.-]+)/releases/download/'
+            r'([^/"]+)/[^"]+" \\\n\s+"\$\w+" \\\n\s+"[0-9a-f]{64}" \\\n',
+            script))
+        self.assertEqual(
+            pinned, {"appimagetool": "1.9.1", "type2-runtime": "20251108"})
+        self.assertNotIn("/releases/download/continuous/", script)
+
     def test_appimage_bundle_verification_checks_pyside6_not_tk(self):
         script = (ROOT / "scripts/build-appimage.sh").read_text(
             encoding="utf-8")

@@ -502,11 +502,19 @@ print("  AppImage staging paths are relocatable")
 PY
 
 TOOL="$CACHE/appimagetool"
+# The 1.9.1 release, not "continuous": upstream rebuilds that tag on every push
+# to its main branch, which swapped the bytes behind the URL on 2026-10-04 and
+# took the release build down the next day, as the runtime's did below. 1.9.1
+# is commit 8c8c91f, the same source as the continuous build 295 pinned before
+# it, bundling the same mksquashfs 4.6.1, zsyncmake 0.6.2 and
+# desktop-file-validate 0.28. Upstream publishes no checksums or attestations;
+# this is the digest GitHub recorded when the 1.9.1 tag's own build (run
+# 19938734639) uploaded the asset.
 download_verified \
-  "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" \
+  "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage" \
   "$TOOL" \
-  "a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0" \
-  "appimagetool build 295"
+  "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0" \
+  "appimagetool 1.9.1"
 chmod 755 "$TOOL"
 RUNTIME="$CACHE/runtime-x86_64"
 # A dated release, not "continuous": upstream republishes that tag whenever
