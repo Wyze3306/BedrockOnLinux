@@ -35,6 +35,7 @@ from .profiles import (
     write_profile_shortcut,
 )
 from .update import check_for_update, self_update, update_kind
+from . import supervision
 
 
 def _run_network_diagnostics(host_ip=None):
@@ -309,6 +310,9 @@ def main():
                 warn("Not signed in for online play: no Realms, no servers, "
                      "no friends and no Marketplace.")
                 info(f"Sign in with:  {APP} login")
+            # A poweroff or a stopped scope with the game running lets the
+            # session finish its teardown before the launcher goes.
+            supervision.install()
             launch()
         elif a.cmd == "shortcut":
             require_shortcuts_supported()

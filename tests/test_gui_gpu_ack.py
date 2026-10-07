@@ -14,6 +14,7 @@ from unittest import mock
 
 from bol import gui
 from bol.gpu_safety import GpuSafetyAcknowledgementStatus
+from tests.guiharness import headless_window, qt_app
 
 
 def _status(previous_boot_fault=False, message="an interrupted launch"):
@@ -99,6 +100,66 @@ class AcknowledgementOfferTests(unittest.TestCase):
     def test_the_default_title_is_kept_for_the_settings_entry(self):
         _, box, _ = self._offer()
         self.assertEqual(box.asked[0][0], "Acknowledge previous GPU incident")
+
+    def test_play_carries_on_instead_of_a_note_saying_it_could(self):
+        resumed = []
+        result, box, ack = self._offer(then=lambda: resumed.append(True))
+        self.assertTrue(result)
+        self.assertEqual(resumed, [True])
+        self.assertEqual(box.info, [])
+
+    def test_nothing_carries_on_after_no_or_a_refusal(self):
+        resumed = []
+        self._offer(answer=False, then=lambda: resumed.append(True))
+        self._offer(acknowledged=False, then=lambda: resumed.append(True))
+        self.assertEqual(resumed, [])
+
+
+class PlayFailureResumeTests(unittest.TestCase):
+    """Yes in the "Minecraft could not start" dialog starts Minecraft.
+
+    It used to end on a note that PLAY would run its checks again, with the
+    player left to press PLAY a second time after every reboot that found
+    the game had been open at shutdown.
+    """
+
+    def setUp(self):
+        qt_app()
+
+    def _fail(self, window, offer):
+        with mock.patch.object(gui, "gpu_crash_acknowledgement_status",
+                               return_value=_status()), \
+                mock.patch.object(window, "_offer_gpu_ack",
+                                  side_effect=offer) as offered, \
+                mock.patch.object(window, "error_box") as error_box:
+            window._play_failed("Unsafe graphics session: …")
+        return offered, error_box
+
+    def test_yes_resumes_play_once(self):
+        def yes(_status, prefix="", title="", then=None):
+            then()
+            return True
+
+        with headless_window() as window, \
+                mock.patch.object(window, "do_play") as do_play:
+            offered, error_box = self._fail(window, yes)
+            self.assertEqual(do_play.call_count, 1)
+            self.assertEqual(offered.call_args.kwargs["title"],
+                             "Minecraft could not start")
+            error_box.assert_not_called()
+            # Refused again on the resumed attempt: shown as it is, rather
+            # than the same question in a loop.
+            offered, error_box = self._fail(window, yes)
+            offered.assert_not_called()
+            error_box.assert_called_once()
+            self.assertEqual(do_play.call_count, 1)
+
+    def test_no_leaves_play_alone(self):
+        with headless_window() as window, \
+                mock.patch.object(window, "do_play") as do_play:
+            self._fail(window, lambda *_a, **_kw: False)
+            do_play.assert_not_called()
+            self.assertNotIn("gpu_ack_resumed", window.ui_state)
 
 
 class SafetyInstructionTests(unittest.TestCase):

@@ -21,7 +21,7 @@ from .auth import (
     xbl_preauth_diagnostic,
     xbl_preauth_error_message,
 )
-from . import discord, presence as xbl_presence, xodus
+from . import discord, presence as xbl_presence, supervision, xodus
 from .config import CONTENT, DATA, HOME, LOGS, WINEGDK_BUILD_REV
 from .deps import ensure_login_deps
 from .dgc import dgc_warning_message, intel_dgpus_on_legacy_driver
@@ -900,9 +900,18 @@ def _launch_once(lock_fds=(), on_started=None):
     presence = discord.Session()
     xbl = xbl_presence.Session()
     try:
+        # From here until the teardown below has dealt with the marker, a
+        # SIGTERM or SIGHUP waits for the game instead of killing the
+        # launcher on the spot. Powering off with Minecraft open did that:
+        # the game closed two seconds later, but nothing was left to clear
+        # its marker, and the next boot refused PLAY (bol/supervision.py).
+        supervision.begin_session()
         # A hard reboot leaves this marker so the next launch fails closed.
         gpu_marker_token = arm_gpu_launch()
         try:
+            if supervision.stop_requested_for() is not None:
+                raise BolError("The launcher was asked to stop before "
+                               "Minecraft started.")
             popen_options = {
                 "env": env,
                 "cwd": str(CONTENT),
@@ -959,12 +968,32 @@ def _launch_once(lock_fds=(), on_started=None):
         # adding a thread of its own.
         tag_game_window = None if use_gamescope else \
             _steam_game_window_tagger(env, exe)
+        stop_announced = False
         while True:
             try:
                 rc = proc.wait(timeout=1)
                 game_returned = True
                 break
             except subprocess.TimeoutExpired:
+                waited = supervision.stop_requested_for()
+                if waited is not None:
+                    # Asked to stop. Whatever asked usually stopped the game
+                    # too, so it is about to return; see it do so, so its
+                    # marker can be cleared below.
+                    if not stop_announced:
+                        stop_announced = True
+                        warn("The launcher was asked to stop while Minecraft "
+                             "runs. Waiting up to "
+                             f"{supervision.STOP_GRACE_S} s for the game to "
+                             "close, so its GPU safety record can be "
+                             "cleared.")
+                    if waited >= supervision.STOP_GRACE_S:
+                        warn("Minecraft did not close within "
+                             f"{supervision.STOP_GRACE_S} s of the stop "
+                             "request. Its GPU safety record stays, as for "
+                             "any session that did not return.")
+                        break
+                    continue
                 if tag_game_window is not None and tag_game_window():
                     tag_game_window = None
                 if not announced and time.time() - started > 8:
@@ -972,10 +1001,18 @@ def _launch_once(lock_fds=(), on_started=None):
                     ok("Minecraft is running — close the game window to come "
                        "back here.")
     finally:
+        stopping = supervision.stop_requested_for() is not None
         # First: the teardown below can take a while, and nobody should be
-        # left showing as in-game through it.
-        presence.stop()
-        xbl.stop()
+        # left showing as in-game through it. When the launcher was asked to
+        # stop, it has a shutdown's time budget and the network may already
+        # be down: neither waits, and the record that matters is the GPU
+        # marker below. Both are daemon threads.
+        if stopping:
+            presence.stop(timeout=0)
+            xbl.stop(timeout=0)
+        else:
+            presence.stop()
+            xbl.stop()
         prefix_idle = None
         if game_returned and gpu_marker_token:
             try:
@@ -1002,6 +1039,10 @@ def _launch_once(lock_fds=(), on_started=None):
         glog.close()
         # All three rewrite the file Minecraft keeps its settings in, so none
         # may run while the game could still be saving to it (#175).
+        if prefix_idle is None and stopping and not game_returned:
+            # The game outlived the stop grace: it is still running, and
+            # ten more seconds of scanning would only say so.
+            prefix_idle = False
         if prefix_idle is None:
             prefix_idle = _prefix_stably_idle_after_wrapper()
         restore_truncated_game_options(prefix_idle=prefix_idle)
@@ -1056,8 +1097,13 @@ def launch(on_started=None):
     it. A launcher window uses it to get out of the game's way in a session
     that shows one window at a time.
     """
-    with launch_lock() as lock_fds:
-        return _launch_once(lock_fds, on_started=on_started)
+    try:
+        with launch_lock() as lock_fds:
+            return _launch_once(lock_fds, on_started=on_started)
+    finally:
+        # The session's teardown is over and its locks are released: a stop
+        # signal it held for the game ends the process now.
+        supervision.end_session()
 
 
 def direct_launch_readiness():

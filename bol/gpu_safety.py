@@ -23,7 +23,7 @@ from typing import Mapping, Optional
 
 from .config import GAMES, WINEGDK_BUILD_REV
 from .log import BolError, die, warn
-from .util import env_flag, launcher_command
+from .util import env_flag, launcher_command, steam_app_id
 
 
 try:
@@ -61,11 +61,11 @@ def unsafe_gpu_override_command(
     """A command line that starts this installation with the override set.
 
     The variable has to reach the launcher's own process. The Advanced
-    custom-environment setting only reaches the game, and ``flatpak run``
-    passes nothing from the calling shell into the sandbox, so the bare
-    "BOL_ALLOW_UNSAFE_GPU=1" this message used to end on did nothing for a
-    Flatpak, nor for a launcher opened from the application menu (#301).
-    ``env`` rather than a shell assignment: it means the same in every shell.
+    custom-environment setting only reaches the game, and the bare
+    "BOL_ALLOW_UNSAFE_GPU=1" this message used to end on is a shell
+    assignment that reached no program at all (#301). ``env`` rather than a
+    shell assignment: it means the same in every shell. ``flatpak run``
+    passes the caller's environment on, but ``--env`` says it explicitly.
     """
     command = launcher_command(environ=environ)
     flatpak = "flatpak run "
@@ -73,6 +73,31 @@ def unsafe_gpu_override_command(
         return (flatpak + "--env=BOL_ALLOW_UNSAFE_GPU=1 "
                 + command[len(flatpak):])
     return "env BOL_ALLOW_UNSAFE_GPU=1 " + command
+
+
+def _steam_shortcut_override_hint(env: Mapping[str, str]) -> str:
+    """Where the override goes when Steam starts the launcher.
+
+    Steam takes a shortcut's Target as one program path: a Target of
+    "env BOL_ALLOW_UNSAFE_GPU=1 <launcher>" names a file that does not
+    exist, and nothing starts. The variable belongs in the launch options,
+    in front of %command%. Only said when Steam started this launcher.
+    """
+    if not steam_app_id(env):
+        return ""
+    return (" In a Steam shortcut, keep Target as the program alone and "
+            "start its launch options with 'BOL_ALLOW_UNSAFE_GPU=1 "
+            "%command%' (for example 'BOL_ALLOW_UNSAFE_GPU=1 %command% "
+            "play'); take it out again after that start.")
+
+
+class InterruptedLaunchProblem(str):
+    """A refusal that comes from the interrupted-launch marker.
+
+    It reads as the plain message everywhere. require_safe_graphics_session
+    tells it apart from a driver or display fault, whose advice (repair the
+    driver, reboot) does not fit a game that was open at shutdown.
+    """
 
 
 def _x11_session(env: Mapping[str, str]) -> bool:
@@ -411,9 +436,12 @@ def interrupted_launch_problem(path: Optional[Path] = None) -> Optional[str]:
         )
     state = _read_state(marker)
     if not state:
+        # The acknowledgement cannot vouch for a record it cannot read, so
+        # it is not the way out here (#299).
         return (
             "an interrupted Minecraft launch marker exists but is unreadable; "
-            f"after repairing the graphics driver and rebooting, run '{command}'"
+            "once the graphics driver works, remove "
+            f"'{marker}', or start once with BOL_ALLOW_UNSAFE_GPU=1"
         )
     if state.get("version") == _LEGACY_MARKER_VERSION:
         # Schema 1 predates the durable wrapper-return phase. It cannot prove
@@ -437,7 +465,8 @@ def interrupted_launch_problem(path: Optional[Path] = None) -> Optional[str]:
     if state.get("version") != _STATE_VERSION:
         return (
             "an interrupted Minecraft launch marker has an unsupported format; "
-            f"after repairing the graphics driver and rebooting, run '{command}'"
+            "once the graphics driver works, remove "
+            f"'{marker}', or start once with BOL_ALLOW_UNSAFE_GPU=1"
         )
     same_boot = bool(_boot_id() and state.get("boot_id") == _boot_id())
     if same_boot and _launcher_alive(state):
@@ -454,18 +483,65 @@ def interrupted_launch_problem(path: Optional[Path] = None) -> Optional[str]:
             "next PLAY clears this record by itself — reboot first if the "
             "screen froze or the graphics misbehaved"
         )
+    # This is already a new boot: "reboot before retrying" was no advice.
     return (
         "the previous Minecraft GPU session did not return cleanly before the "
-        "last reboot/power loss; inspect why the session or machine stopped "
-        f"and reboot before retrying; if no current graphics fault remains, run "
-        f"'{command}' to acknowledge the interrupted launch"
+        "last reboot/power loss, as when the computer is shut down with "
+        "Minecraft still open; if the screen froze or the computer had to be "
+        "forced off, repair the graphics driver first; otherwise run "
+        f"'{command}' once to acknowledge the interrupted launch"
     )
 
 
-def arm_gpu_launch(path: Optional[Path] = None) -> str:
-    """Durably mark a GPU launch immediately before spawning its process."""
+def _replace_marker_under_override(marker: Path) -> None:
+    """Remove the marker an overridden launch would otherwise stop at.
+
+    BOL_ALLOW_UNSAFE_GPU=1 let require_safe_graphics_session through, and
+    then arming this launch's own marker met the old one and refused anyway:
+    the documented override could never get past an interrupted launch,
+    which is what it was being used for ("even the env does not work").
+    It is replaced here, at the moment this launch records its own, so a
+    launch that fails before the game starts leaves the incident as it was.
+    The caller holds the launch lock and proved the prefix idle, so no
+    session can still own it.
+    """
+    try:
+        info = marker.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise BolError(
+            f"The GPU safety marker '{marker}' cannot be inspected ({exc})."
+        ) from exc
+    if stat.S_ISDIR(info.st_mode):
+        raise BolError(
+            f"The GPU safety marker '{marker}' is a directory; remove it by "
+            "hand.")
+    state = _read_state(marker) or {}
+    if not state:
+        what = "an unreadable record"
+    else:
+        boot = _boot_id()
+        when = ("this boot" if boot and state.get("boot_id") == boot
+                else "an earlier boot")
+        what = f"a record from {when} (phase {state.get('phase', 'unknown')})"
+    marker.unlink()
+    _sync_parent(marker)
+    warn("BOL_ALLOW_UNSAFE_GPU=1: replaced the interrupted Minecraft launch "
+         f"marker ({what}) with this launch's own. This start is at your "
+         "own risk.")
+
+
+def arm_gpu_launch(path: Optional[Path] = None,
+                   environ: Optional[Mapping[str, str]] = None) -> str:
+    """Durably mark a GPU launch immediately before spawning its process.
+
+    Without the override, an existing marker refuses the launch. With
+    BOL_ALLOW_UNSAFE_GPU=1, it is replaced by this launch's own.
+    """
 
     marker = Path(path) if path is not None else GPU_LAUNCH_MARKER
+    env = os.environ if environ is None else environ
     marker.parent.mkdir(parents=True, exist_ok=True)
     token = secrets.token_hex(16)
     payload = {
@@ -480,6 +556,8 @@ def arm_gpu_launch(path: Optional[Path] = None) -> str:
     }
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
     try:
+        if env_flag(env.get("BOL_ALLOW_UNSAFE_GPU")):
+            _replace_marker_under_override(marker)
         fd = os.open(marker, flags, 0o600)
     except FileExistsError as exc:
         raise BolError(
@@ -920,17 +998,21 @@ def graphics_safety_problem(
         journal_runner=None,
         atom_probe=None,
         provider_probe=None,
-        notes=None) -> Optional[str]:
+        notes=None,
+        include_interrupted=True) -> Optional[str]:
     """Return an actionable reason to refuse launch, or ``None``.
 
     No Vulkan, OpenGL, ``nvidia-smi`` or DRM ioctl is performed here.
     Advisories that do not refuse the launch go on ``notes`` when given.
+    ``include_interrupted=False`` skips the interrupted-launch marker, to
+    find what else a refusal for it was hiding.
     """
 
     env = os.environ if environ is None else environ
-    interrupted = interrupted_launch_problem()
-    if interrupted:
-        return interrupted
+    if include_interrupted:
+        interrupted = interrupted_launch_problem()
+        if interrupted:
+            return InterruptedLaunchProblem(interrupted)
     fault_scope = _kernel_driver_fault_scope(journal_runner, notes)
     if fault_scope == "current":
         return (
@@ -992,14 +1074,26 @@ def require_safe_graphics_session(
         for note in notes:
             warn(note)
         return
+    marker_problem = isinstance(problem, InterruptedLaunchProblem)
     if env_flag(env.get("BOL_ALLOW_UNSAFE_GPU")):
+        bypassed = [problem]
+        if marker_problem:
+            # The marker is checked first and hides every check after it;
+            # the override skips those too, so say what they found.
+            hidden = graphics_safety_problem(
+                env, notes=notes, include_interrupted=False)
+            if hidden:
+                bypassed.append(hidden)
         warn("BOL_ALLOW_UNSAFE_GPU=1 bypasses the graphics safety block: "
-             + problem + ".")
+             + "; and ".join(bypassed) + ".")
         return
+    advice = "" if marker_problem else (
+        " Repair/reinstall the host GPU driver, ensure the desktop uses the "
+        "hardware DRM provider, then reboot.")
     die("Unsafe graphics session: " + problem + ". BedrockOnLinux did not "
-        "start Wine, Vulkan, or Minecraft. Repair/reinstall the host GPU "
-        "driver, ensure the desktop uses the hardware DRM provider, then "
-        "reboot. Advanced override (at your own risk): start the launcher "
-        f"itself with BOL_ALLOW_UNSAFE_GPU=1, as in "
+        "start Wine, Vulkan, or Minecraft." + advice + " Advanced override "
+        "(at your own risk): start the launcher itself with "
+        "BOL_ALLOW_UNSAFE_GPU=1, as in "
         f"'{unsafe_gpu_override_command(env)}' — the custom environment "
-        "variables in Settings only reach the game.")
+        "variables in Settings only reach the game."
+        + _steam_shortcut_override_hint(env))
