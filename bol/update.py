@@ -37,6 +37,11 @@ def check_for_update():
             "assets": rel.get("assets", [])}
 
 
+def _package_dir():
+    """Where the running bol package is (a path inside the .pyz for one)."""
+    return Path(__file__).resolve().parent
+
+
 def _self_path():
     """Real path of the running launcher file (resolves the ~/.local/bin
     symlink that install.sh creates)."""
@@ -49,8 +54,18 @@ def update_kind():
     if os.environ.get("APPIMAGE"):
         return "appimage"
     p = _self_path()
-    if (p.parent / ".git").is_dir():       # dev checkout — leave updates to git
+    package = _package_dir()
+    # A dev checkout — leave updates to git. `python3 -m bol` runs
+    # bol/__main__.py, so argv[0] is inside the package, not beside .git.
+    if (p.parent / ".git").is_dir() or (package.parent / ".git").is_dir():
         return "git"
+    # pip, or a distribution's build of the wheel (#306): argv[0] is the
+    # console script, writable in a venv or ~/.local/bin, and swapping a .pyz
+    # in for it would leave the installed package behind, still the old one.
+    # Under `python3 -m bol` it is the package's own __main__.py.
+    if (package.parent.name in ("site-packages", "dist-packages")
+            or p.parent == package):
+        return "system"
     if str(p).startswith(("/usr/", "/app/", "/bin/")) or not os.access(p, os.W_OK):
         return "system"                    # packaged / read-only install
     return "file"                          # a plain user-writable script
