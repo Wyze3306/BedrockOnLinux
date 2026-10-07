@@ -4,6 +4,7 @@
 import re
 from pathlib import Path
 
+from . import hostarch
 from .auth import msa_signed_in
 from .config import LOGS
 from .deps import ensure_login_deps
@@ -40,6 +41,11 @@ def do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
 
 def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
               force=False, progress=None):
+    # Everything setup downloads is x86-64; say so before the first of them
+    # fails to start with "Exec format error" (#250).
+    arch_problem = hostarch.problem()
+    if arch_problem:
+        raise BolError(arch_problem)
     mkdirs()
     prune_legacy_game_archives()
     s = load_settings()

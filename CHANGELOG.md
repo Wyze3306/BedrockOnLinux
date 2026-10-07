@@ -73,6 +73,17 @@
 
 ### Fixed
 
+- **On an ARM computer, the launcher says what x86-64 programs need**
+  ([#250](https://github.com/Wyze3306/BedrockOnLinux/issues/250)). The
+  launcher is Python and starts anywhere, but the game, the Wine engine,
+  xodus-cli and the WebKitGTK runtime are x86-64. On ARM they run only through
+  an x86-64 emulator the kernel hands them to (FEX-Emu, Box64 or qemu-user,
+  registered with binfmt_misc). Without one, the first of them failed with
+  "Exec format error", which reached the player as a missing WebKitGTK or an
+  engine that would not start. Setup now stops first and says to install
+  FEX-Emu or Box64. `doctor` has a `cpu` line, which names the emulator when
+  there is one. Running through an emulator remains untested.
+
 - **Minimizing Minecraft with *Keep the mouse inside the window* on clears
   the screen** ([#189](https://github.com/Wyze3306/BedrockOnLinux/issues/189)).
   That setting runs the game in a Wine virtual desktop as large as the

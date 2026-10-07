@@ -5,7 +5,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import deps, discord, fixups, gamepad, presence, webview
+from . import deps, discord, fixups, gamepad, hostarch, presence, webview
 from .config import DATA, PRETTY, VERSION
 from .gpu_safety import (
     GpuSafetyAcknowledgementStatus,
@@ -103,9 +103,14 @@ def doctor(acknowledge_gpu_crash=False):
     hint = next((h for pm, h in (
         ("apt-get", "sudo apt install {}"), ("dnf", "sudo dnf install {}"),
         ("pacman", "sudo pacman -S {}"), ("zypper", "sudo zypper in {}"))
-        if shutil.which(pm)), "installe : {}")
+        if shutil.which(pm)), "install: {}")
     miss = []
     print(f"  {'python3':12} : {sys.version.split()[0]}")
+    # The game, the engine and xodus-cli are x86-64 programs (#250).
+    print(f"  {'cpu':12} : {hostarch.summary()}")
+    arch_problem = hostarch.problem()
+    if arch_problem:
+        warn(arch_problem)
     for tool, pkg in (("tar", "tar"), ("curl", "curl"), ("unzstd", "zstd")):
         have = shutil.which(tool)
         print(f"  {tool:12} : {'OK' if have else 'MISSING'}")
@@ -243,7 +248,7 @@ def doctor(acknowledge_gpu_crash=False):
     if miss:
         warn("To install: " + hint.format(" ".join(sorted(set(miss)))))
         return False
-    if gpu_problem:
+    if gpu_problem or arch_problem:
         return False
     ok("System ready.")
     return True
