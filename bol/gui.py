@@ -8,6 +8,7 @@ import inspect
 import os
 import re
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -18,7 +19,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import (
-    QObject, QPoint, QPointF, Qt, QThread, QTimer, Signal, Slot,
+    QObject, QPoint, QPointF, QSocketNotifier, Qt, QThread, QTimer, Signal,
+    Slot,
 )
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
@@ -42,7 +44,7 @@ from .gamesetup import do_setup
 from .inject import run_injector
 from .launch import direct_launch_readiness, launch, single_window_session
 from .navigation import ControllerNav
-from . import log
+from . import log, supervision
 from .log import BolError, _LEVELS, desktop_notify, warn
 from .prefix import _mc_running, kill_wine, prefix_operation_lock, reset_prefix
 from .profiles import (
@@ -2351,7 +2353,12 @@ class MainWindow(QMainWindow):
         w.step_aside.connect(self._step_aside_for_game)
         w.come_back.connect(self._come_back_from_game)
         self.ui_state["launch_active"] = True
-        self._start_worker("play", w)
+        if not self._start_worker("play", w):
+            # The previous launch thread is still on its way out. Leaving the
+            # window busy would leave PLAY a KILL button with nothing to kill.
+            self.ui_state["launch_active"] = False
+            self.end_progress()
+            self._set_busy(False)
 
     def _close_for_game(self):
         """The player asked for this in Settings ▸ General: the window goes
@@ -2383,6 +2390,7 @@ class MainWindow(QMainWindow):
     def _play_finished(self, _result):
         self.ui_state["launch_active"] = False
         self.ui_state.pop("store_signin_offered", None)
+        self.ui_state.pop("gpu_ack_resumed", None)
         if self.ui_state.get("window_gone"):
             QApplication.instance().quit()
             return
@@ -2401,15 +2409,35 @@ class MainWindow(QMainWindow):
         self.set_status("Minecraft could not start.", self.theme.red)
         self.end_progress()
         self._set_busy(False)
+        # PLAY resumes by itself after an acknowledgement, once: should that
+        # attempt be refused again, the refusal is shown as it is.
+        resumed = self.ui_state.pop("gpu_ack_resumed", False)
         try:
             ack = gpu_crash_acknowledgement_status()
         except Exception:
             ack = None
-        if ack and ack.can_acknowledge:
+        if ack and ack.can_acknowledge and not resumed:
             self._offer_gpu_ack(ack, prefix=message[:2000] + "\n\n",
-                                 title="Minecraft could not start")
+                                 title="Minecraft could not start",
+                                 then=self._play_again_after_ack)
         else:
             self.error_box("Minecraft could not start", message[:2000])
+
+    def _play_again_after_ack(self):
+        """The player pressed PLAY and answered Yes: carry on with PLAY.
+
+        Acknowledging used to end on a note saying PLAY would run its checks
+        again, and nothing else; the player had to press PLAY a second time.
+        Every check still runs on this attempt.
+        """
+        previous = self._workers.get("play")
+        if previous is not None and previous.isRunning():
+            # It emitted failed() as it returned, and the dialog in between
+            # was modal: this is a matter of milliseconds.
+            previous.wait(5000)
+        self.ui_state["gpu_ack_resumed"] = True
+        self.set_status("Acknowledged — starting Minecraft…")
+        self.do_play()
 
     def _store_signin_needed(self, message):
         """PLAY got as far as the download and found no account for it.
@@ -2454,10 +2482,11 @@ class MainWindow(QMainWindow):
         self.play_btn.style().unpolish(self.play_btn)
         self.play_btn.style().polish(self.play_btn)
 
-    def _offer_gpu_ack(self, ack_status, prefix="", title="Acknowledge previous GPU incident"):
+    def _offer_gpu_ack(self, ack_status, prefix="", title="Acknowledge previous GPU incident",
+                       then=None):
         return _offer_gpu_incident_acknowledgement(
             _MainWindowMessageBoxAdapter(self), self, ack_status,
-            prefix=prefix, title=title)
+            prefix=prefix, title=title, then=then)
 
     # ------------------------------------------------------------ settings / changelog toggles
     def toggle_settings(self):
@@ -3845,18 +3874,23 @@ def _gpu_incident_safety_instruction(status):
 
 def _offer_gpu_incident_acknowledgement(
         box, parent, status, prefix="",
-        title="Acknowledge previous GPU incident"):
+        title="Acknowledge previous GPU incident", then=None):
     """Confirm + acknowledge a GPU safety incident marker. `box` is duck-typed
     on askyesno/showinfo/showerror(title, message, parent=None), so this
     needs no real dialog widget to run or to test. The eligibility decision
     itself is never made here: acknowledge_gpu_crash() re-checks it under the
     launch lock, and a refusal is reported from its live status rather than
-    the one passed in, in case it changed in the meantime."""
+    the one passed in, in case it changed in the meantime. `then`, when
+    given, is what the player was doing (PLAY), carried on once the
+    acknowledgement is written instead of a note saying it was."""
     instruction = _gpu_incident_safety_instruction(status)
     message = prefix + status.message + "\n\n" + instruction + " Acknowledge now?"
     if not box.askyesno(title, message, parent=parent):
         return False
     if acknowledge_gpu_crash():
+        if then is not None:
+            then()
+            return True
         box.showinfo(
             "GPU safety",
             "The previous-boot incident was acknowledged. "
@@ -3891,6 +3925,42 @@ class _MainWindowMessageBoxAdapter:
 # Entry point
 # ======================================================================
 
+# Keeps the stop-signal notifier and its pipe alive with the application.
+_STOP_SIGNAL_WATCH = []
+
+
+def _watch_stop_signals(app, fds=None):
+    """Let a stop signal reach the launch thread while Qt idles in C++.
+
+    Python runs a signal handler only when the main thread next runs Python,
+    and Qt's event loop can wait in C++ for as long as nothing happens on
+    screen: a SIGTERM was measured waiting 3.5 s. The C-level handler writes
+    to a wakeup pipe, and this notifier wakes the loop, which runs the
+    handler and then holds the main thread until the launch thread has
+    finished its teardown (supervision.hold_until_session_ends). ``fds`` is
+    a (non-blocking read, write) pair to use instead of a new pipe, for
+    tests.
+    """
+    if fds is None:
+        read_fd, write_fd = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+        signal.set_wakeup_fd(write_fd, warn_on_full_buffer=False)
+    else:
+        read_fd, write_fd = fds
+    notifier = QSocketNotifier(read_fd, QSocketNotifier.Type.Read, app)
+
+    def woken():
+        try:
+            while os.read(read_fd, 512):
+                pass
+        except OSError:
+            pass
+        supervision.hold_until_session_ends()
+
+    notifier.activated.connect(woken)
+    _STOP_SIGNAL_WATCH[:] = [notifier, read_fd, write_fd]
+    return notifier
+
+
 def gui():
     """Launch the PySide6 GUI."""
     from .deps import ensure_gui_deps
@@ -3904,6 +3974,10 @@ def gui():
     # launch thread is still supervising the game; the process itself exits
     # once that thread finishes (see MainWindow._close_for_game).
     app.setQuitOnLastWindowClosed(False)
+    # A poweroff, or a stopped scope, with the game running: the launch
+    # thread finishes its teardown before the process goes (bol/supervision.py).
+    if supervision.install():
+        _watch_stop_signals(app)
 
     try:
         window = MainWindow()

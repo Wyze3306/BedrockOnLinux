@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import os
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -128,7 +129,8 @@ class ReadyLaunchHarness:
                 name: getattr(launch, name)
                 for name in ("warn", "wine_reg_set_refresh_token",
                              "ensure_login_deps", "xbl_preauth",
-                             "hide_signin_button")
+                             "hide_signin_button",
+                             "_prefix_stably_idle_after_wrapper")
             }
             return launch._launch_once(lock_fds=lock_fds,
                                        on_started=on_started)
@@ -1464,3 +1466,121 @@ class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
     def test_the_game_starts_unwrapped_when_there_is_none(self):
         self.assertEqual(self._play(swap_guard=False), 0)
         self.assertEqual(self.commands, [["fake-umu"]])
+
+
+class StopRequestLaunchTests(ReadyLaunchHarness, unittest.TestCase):
+    """A SIGTERM or SIGHUP during the session waits for the game.
+
+    Powering off with Minecraft open stopped the launcher before its
+    teardown: the game closed two seconds later, but its GPU marker stayed
+    and the next boot refused PLAY. The signal is now only recorded
+    (bol/supervision.py), and these tests drive the wait loop with it.
+    """
+
+    def setUp(self):
+        self.addCleanup(self._reset)
+        self._reset()
+
+    @staticmethod
+    def _reset():
+        launch.supervision._state.update(
+            active=False, signum=None, since=None)
+        launch.supervision._session_over.set()
+
+    def _play(self, ticks, prefix_idle=True):
+        calls = []
+
+        def popen(*_a, **_kw):
+            proc = mock.Mock()
+
+            def wait(timeout=None):
+                tick = ticks.pop(0)
+                if callable(tick):
+                    tick = tick()
+                if isinstance(tick, BaseException):
+                    raise tick
+                return tick
+
+            proc.wait.side_effect = wait
+            calls.append("popen")
+            return proc
+
+        def arm():
+            calls.append("arm")
+            return "owned-token"
+
+        def mark(token):
+            calls.append("mark")
+            return True
+
+        def disarm(token):
+            calls.append("disarm")
+            return True
+
+        with tempfile.TemporaryDirectory() as td:
+            self._exercise_ready_launch(
+                Path(td), popen, arm=arm, disarm=disarm, mark=mark,
+                prefix_idle=prefix_idle, preauth=False)
+        return calls
+
+    @staticmethod
+    def _signal(signum, age=0.0):
+        def tick():
+            launch.supervision._on_signal(signum, None)
+            if age:
+                launch.supervision._state["since"] -= age
+            return subprocess.TimeoutExpired("umu", 1)
+        return tick
+
+    def test_the_game_closing_inside_the_grace_clears_its_marker(self):
+        calls = self._play([
+            self._signal(signal.SIGTERM),
+            self._signal(signal.SIGHUP),   # a session scope sends both
+            0,
+        ])
+        self.assertEqual(calls, ["arm", "popen", "mark", "disarm"])
+        # Held for launch() to deliver once the session is over.
+        self.assertEqual(launch.supervision._state["signum"], signal.SIGTERM)
+        self.presence.stop.assert_called_once_with(timeout=0)
+        self.assertTrue(any("asked to stop" in w for w in self._warnings()))
+
+    def test_a_game_that_outlives_the_grace_keeps_its_marker(self):
+        grace = launch.supervision.STOP_GRACE_S
+        calls = self._play(
+            [self._signal(signal.SIGTERM, age=grace + 1)]
+            + [subprocess.TimeoutExpired("umu", 1)] * 5)
+        self.assertEqual(calls, ["arm", "popen"])
+        # The game is still running: scanning for an idle prefix would only
+        # spend ten seconds of the shutdown saying so.
+        self.launch_mocks["_prefix_stably_idle_after_wrapper"] \
+            .assert_not_called()
+        self.assertTrue(any("did not close within" in w
+                            for w in self._warnings()))
+
+    def test_a_stop_before_the_game_starts_starts_no_game(self):
+        calls = []
+
+        def arm():
+            calls.append("arm")
+            launch.supervision._on_signal(signal.SIGTERM, None)
+            return "owned-token"
+
+        def disarm(token):
+            calls.append("disarm")
+            return True
+
+        def popen(*_a, **_kw):
+            calls.append("popen")
+            raise AssertionError("the game must not start")
+
+        with tempfile.TemporaryDirectory() as td, \
+                self.assertRaisesRegex(launch.BolError, "asked to stop"):
+            self._exercise_ready_launch(
+                Path(td), popen, arm=arm, disarm=disarm, preauth=False)
+        self.assertEqual(calls, ["arm", "disarm"])
+
+    def test_an_ordinary_session_is_untouched(self):
+        calls = self._play([subprocess.TimeoutExpired("umu", 1), 0])
+        self.assertEqual(calls, ["arm", "popen", "mark", "disarm"])
+        self.presence.stop.assert_called_once_with()
+        self.assertIsNone(launch.supervision._state["signum"])

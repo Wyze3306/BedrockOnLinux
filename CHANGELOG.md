@@ -33,6 +33,38 @@
   where the running copy is installed. The README says how to remove a copy
   installed the other way.
 
+- **Shutting down with Minecraft open no longer blocks the next PLAY.**
+  Every first launch after such a reboot was refused as an "Unsafe graphics
+  session" until the GPU incident was acknowledged. The launcher records each
+  game session so that a hard lock leaves a trace, and clears the record once
+  the game has closed. At poweroff, systemd stopped the launcher a moment
+  before the game, and the record outlived a game that had closed normally
+  two seconds later. A SIGTERM or SIGHUP received while Minecraft runs now
+  waits up to 20 seconds for the game to close, so the record is cleared,
+  and the launcher then stops with the signal it was sent. A session that
+  does not close within that time keeps its record, as before. Steam's
+  *Exit game* sends SIGINT and then SIGKILL four seconds later, and that is
+  unchanged: a record left that way is still cleared by the next PLAY in the
+  same boot. On a Wayland session the launcher window can still be closed
+  with its compositor before the game has closed.
+
+- **`BOL_ALLOW_UNSAFE_GPU=1` gets past an interrupted launch.** The override
+  let the safety check through, and then the launch stopped at the old
+  record anyway with "still marked interrupted", so the documented way
+  around the block never worked for it. The record is now replaced with a
+  warning that the start is at the player's own risk. The warning also names
+  any driver fault the record was hiding from the check. When Steam starts
+  the launcher, the refusal says where the variable goes in a shortcut:
+  `BOL_ALLOW_UNSAFE_GPU=1 %command%` at the start of its launch options. In
+  the Target field, Steam takes `env BOL_ALLOW_UNSAFE_GPU=1 …` as the name of
+  a program that does not exist, and the shortcut starts nothing.
+
+- **Answering Yes to "Minecraft could not start" starts Minecraft.** After
+  the acknowledgement, PLAY carries on by itself and runs every safety check
+  again. Before, the player had to press PLAY a second time. The refusal for
+  an interrupted launch no longer tells the player to reboot when they
+  already have, or to repair a driver nothing says is broken.
+
 ## 2.2.8 — 2026-10-04
 
 ### Added

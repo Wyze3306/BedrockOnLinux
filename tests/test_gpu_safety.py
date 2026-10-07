@@ -1035,8 +1035,8 @@ class OverrideGuidanceTests(unittest.TestCase):
     """The override has to reach the launcher, not only be named (#301).
 
     "BOL_ALLOW_UNSAFE_GPU=1" alone was tried as written and changed nothing:
-    `flatpak run` passes no variable from the calling shell into the sandbox,
-    and the custom-environment setting only reaches the game.
+    a bare shell assignment reaches no program, and the custom-environment
+    setting only reaches the game.
     """
 
     def test_a_flatpak_is_given_the_variable_through_flatpak_run(self):
@@ -1066,6 +1066,128 @@ class OverrideGuidanceTests(unittest.TestCase):
         self.assertIn("'env BOL_ALLOW_UNSAFE_GPU=1 bedrock-on-linux'",
                       message)
         self.assertIn("only reach the game", message)
+
+
+    def test_a_steam_shortcut_is_told_where_the_variable_goes(self):
+        # Steam takes the whole Target as one program path: a Target of
+        # "env BOL_ALLOW_UNSAFE_GPU=1 <AppImage>" starts nothing at all.
+        with mock.patch.object(gpu_safety, "graphics_safety_problem",
+                               return_value="injected unsafe state"), \
+                mock.patch.object(gpu_safety, "launcher_command",
+                                  lambda environ=None: "bedrock-on-linux"):
+            with self.assertRaises(gpu_safety.BolError) as raised:
+                gpu_safety.require_safe_graphics_session(
+                    {"SteamAppId": "2716672805"})
+            with self.assertRaises(gpu_safety.BolError) as outside:
+                gpu_safety.require_safe_graphics_session({"SteamAppId": "0"})
+        self.assertIn("'BOL_ALLOW_UNSAFE_GPU=1 %command% play'",
+                      str(raised.exception))
+        self.assertIn("Target as the program alone", str(raised.exception))
+        self.assertNotIn("%command%", str(outside.exception))
+
+
+class OverrideReplacesTheMarkerTests(unittest.TestCase):
+    """BOL_ALLOW_UNSAFE_GPU=1 gets past an interrupted launch for real.
+
+    It let require_safe_graphics_session through, and then arming the new
+    launch met the old marker and refused anyway: "even the env does not
+    work". Without the variable, nothing about the refusal changes.
+    """
+
+    OVERRIDE = {"BOL_ALLOW_UNSAFE_GPU": "1"}
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.marker = Path(self.tempdir.name) / "gpu-launch.json"
+        for patcher in (
+                mock.patch.object(gpu_safety, "GPU_LAUNCH_MARKER", self.marker),
+                mock.patch.object(gpu_safety, "_boot_id",
+                                  return_value="boot-now")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        warn = mock.patch.object(gpu_safety, "warn")
+        self.warn = warn.start()
+        self.addCleanup(warn.stop)
+
+    def _previous_boot_marker(self, phase="running"):
+        self.marker.write_text(json.dumps({
+            "version": 2, "engine_rev": "rev", "phase": phase,
+            "token": "a" * 32, "boot_id": "boot-old",
+            "launcher_pid": 4242, "launcher_start": 1, "created": 1,
+        }))
+
+    def test_without_the_override_the_old_marker_still_refuses(self):
+        self._previous_boot_marker()
+        with self.assertRaisesRegex(gpu_safety.BolError,
+                                    "still marked interrupted"):
+            gpu_safety.arm_gpu_launch(environ={})
+        self.assertEqual(json.loads(self.marker.read_text())["boot_id"],
+                         "boot-old")
+
+    def test_the_override_replaces_a_previous_boot_marker(self):
+        self._previous_boot_marker()
+        token = gpu_safety.arm_gpu_launch(environ=self.OVERRIDE)
+        state = json.loads(self.marker.read_text())
+        self.assertEqual(state["token"], token)
+        self.assertEqual(state["boot_id"], "boot-now")
+        self.assertEqual(state["phase"], "running")
+        message = self.warn.call_args[0][0]
+        self.assertIn("an earlier boot", message)
+        self.assertIn("own risk", message)
+
+    def test_the_replacement_can_still_be_retired_like_any_marker(self):
+        # The new marker must carry exactly the usual fields, or the
+        # same-boot recovery (#299) would refuse it later.
+        self._previous_boot_marker(phase="wrapper_returned")
+        token = gpu_safety.arm_gpu_launch(environ=self.OVERRIDE)
+        self.assertTrue(gpu_safety.mark_gpu_wrapper_returned(token))
+        self.assertTrue(gpu_safety.retire_idle_current_boot_marker())
+        self.assertFalse(self.marker.exists())
+
+    def test_an_unreadable_marker_is_replaced_too(self):
+        # The acknowledgement cannot vouch for one, so this is the way out.
+        self.marker.write_text("{torn")
+        gpu_safety.arm_gpu_launch(environ=self.OVERRIDE)
+        self.assertEqual(json.loads(self.marker.read_text())["boot_id"],
+                         "boot-now")
+        self.assertIn("unreadable", self.warn.call_args[0][0])
+
+    def test_a_directory_in_its_place_is_never_removed(self):
+        self.marker.mkdir()
+        with self.assertRaisesRegex(gpu_safety.BolError, "directory"):
+            gpu_safety.arm_gpu_launch(environ=self.OVERRIDE)
+        self.assertTrue(self.marker.is_dir())
+
+    def test_no_marker_needs_no_replacement(self):
+        gpu_safety.arm_gpu_launch(environ=self.OVERRIDE)
+        self.assertTrue(self.marker.exists())
+        self.warn.assert_not_called()
+
+    def test_the_override_names_what_the_marker_was_hiding(self):
+        self._previous_boot_marker()
+        with mock.patch.object(gpu_safety, "_kernel_driver_fault_scope",
+                               return_value="current"):
+            gpu_safety.require_safe_graphics_session(
+                {"BOL_ALLOW_UNSAFE_GPU": "1",
+                 "XDG_SESSION_TYPE": "wayland"})
+        message = self.warn.call_args[0][0]
+        self.assertIn("did not return cleanly", message)
+        self.assertIn("fatal kernel fault during this boot", message)
+
+    def test_a_marker_refusal_gives_no_driver_repair_advice(self):
+        # The game was open at shutdown: nothing says the driver is broken.
+        self._previous_boot_marker()
+        with mock.patch.object(gpu_safety, "_kernel_driver_fault_scope",
+                               return_value=None):
+            with self.assertRaises(gpu_safety.BolError) as raised:
+                gpu_safety.require_safe_graphics_session(
+                    {"XDG_SESSION_TYPE": "wayland"})
+        message = str(raised.exception)
+        self.assertIn("shut down with Minecraft still open", message)
+        self.assertNotIn("Repair/reinstall", message)
+        self.assertNotIn("reboot before retrying", message)
+        self.assertIn("BOL_ALLOW_UNSAFE_GPU=1", message)
 
 
 if __name__ == "__main__":
