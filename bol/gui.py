@@ -199,11 +199,19 @@ def icon_candidates(module_file=None):
     the hero screen with no icon at all on the Flathub build.
     """
     here = Path(module_file or __file__).resolve().parent
+    # A wheel puts bol/ in <prefix>/lib/pythonX.Y/site-packages and the icon
+    # in that prefix's share/: a venv, ~/.local, a /gnu/store item (#306).
+    wheel = ()
+    if len(here.parents) > 3 and here.parent.name in ("site-packages",
+                                                       "dist-packages"):
+        wheel = (here.parents[3] /
+                 "share/icons/hicolor/256x256/apps/bedrock-on-linux.png",)
     return (
         # source checkout, AppImage (usr/bin/data), .deb and .rpm
         # (/usr/lib/bedrock-on-linux/data)
         here.parent / "data/icon.png",
         here / "data/icon.png",
+        *wheel,
         # Flatpak: the manifest installs the icon under the app-id name only
         Path("/app/share/icons/hicolor/256x256/apps/"
              "io.github.wyze3306.BedrockOnLinux.png"),

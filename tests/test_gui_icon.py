@@ -35,6 +35,29 @@ class IconCandidateTests(unittest.TestCase):
         self.assertIn(Path("/usr/lib/bedrock-on-linux/data/icon.png"),
                       candidates)
 
+    def test_a_wheel_install_finds_the_icon_under_its_own_prefix(self):
+        # pip into a venv or ~/.local, a /gnu/store item, a distribution's
+        # build of the wheel: data-files land in <prefix>/share (#306).
+        for prefix, site in (("/no-such-venv", "python3.14/site-packages"),
+                             ("/no-such-usr", "python3/dist-packages")):
+            with self.subTest(site=site):
+                candidates = icon_candidates(
+                    f"{prefix}/lib/{site}/bol/gui.py")
+                self.assertIn(
+                    Path(prefix) / "share/icons/hicolor/256x256/apps/"
+                    "bedrock-on-linux.png", candidates)
+
+    def test_a_checkout_looks_under_no_prefix_of_its_own(self):
+        root = Path(__file__).resolve().parents[1]
+        themed = [path for path in icon_candidates(root / "bol/gui.py")
+                  if "icons/hicolor" in str(path)]
+        self.assertEqual(
+            themed,
+            [Path("/app/share/icons/hicolor/256x256/apps/"
+                  "io.github.wyze3306.BedrockOnLinux.png"),
+             Path("/usr/share/icons/hicolor/256x256/apps/"
+                  "bedrock-on-linux.png")])
+
     def test_the_repository_checkout_is_found(self):
         root = Path(__file__).resolve().parents[1]
         self.assertIn(root / "data/icon.png",
