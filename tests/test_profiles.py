@@ -517,3 +517,31 @@ def test_open_profile_window_with_default_profile(tmp_path):
         assert kwargs.get("stderr") == subprocess.DEVNULL
         assert kwargs.get("stdin") == subprocess.DEVNULL
 
+
+
+def _script(path, first_line):
+    path.write_text(first_line + "\nexec true\n")
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_a_shell_wrapper_named_like_the_launcher_runs_itself(tmp_path):
+    # The flake's makeWrapper and Guix's wrap-program put one on PATH; given
+    # to Python, it stopped at a SyntaxError and no window opened.
+    wrapper = _script(tmp_path / "bedrock-on-linux",
+                      "#! /nix/store/abc-bash-5.3/bin/bash -e")
+    with mock.patch("subprocess.Popen") as popen, \
+            mock.patch("bol.profiles.launcher_executable",
+                       return_value=wrapper):
+        open_profile_window(tmp_path / "profile")
+    assert popen.call_args[0][0] == [wrapper, "gui"]
+
+
+def test_the_python_launcher_script_runs_under_this_interpreter(tmp_path):
+    for shebang in ("#!/usr/bin/env python3", "#!/opt/venv/bin/python3.14"):
+        script = _script(tmp_path / "bedrock-on-linux", shebang)
+        with mock.patch("subprocess.Popen") as popen, \
+                mock.patch("bol.profiles.launcher_executable",
+                           return_value=script):
+            open_profile_window(tmp_path / "profile")
+        assert popen.call_args[0][0] == [sys.executable, script, "gui"]

@@ -399,6 +399,25 @@ def launcher_executable(explicit=None):
     return str(Path(sys.argv[0]).expanduser().resolve())
 
 
+def _gui_command(exe):
+    """Run the launcher at `exe` in GUI mode, under this interpreter if it is
+    a Python script. The Nix flake's makeWrapper and Guix's wrap-program put
+    a shell script by that name on PATH, and Python cannot read one."""
+    if exe.endswith(".py") or (Path(exe).name == APP
+                               and _is_python_script(exe)):
+        return [sys.executable, exe, "gui"]
+    return [exe, "gui"]
+
+
+def _is_python_script(path):
+    try:
+        with open(path, "rb") as script:
+            first = script.readline(256)
+    except OSError:
+        return True
+    return not first.startswith(b"#!") or b"python" in first
+
+
 def _desktop_command(argument, profile_dir=None, executable=None):
     """Exec field running one launcher command, optionally profile-scoped."""
     prefix = ("env BOL_HOME=" + _desktop_quote(profile_dir) + " "
@@ -537,11 +556,7 @@ def relaunch_with_profile(profile_path=None, base_data=None, executable=None):
         else:
             env.pop("BOL_HOME", None)
 
-    exe = launcher_executable(explicit=executable)
-    if exe.endswith(".py") or Path(exe).name == APP:
-        args = [sys.executable, exe, "gui"]
-    else:
-        args = [exe, "gui"]
+    args = _gui_command(launcher_executable(explicit=executable))
 
     os.environ.clear()
     os.environ.update(env)
@@ -568,11 +583,7 @@ def open_profile_window(profile_path=None, base_data=None, executable=None):
         else:
             env.pop("BOL_HOME", None)
 
-    exe = launcher_executable(explicit=executable)
-    if exe.endswith(".py") or Path(exe).name == APP:
-        args = [sys.executable, exe, "gui"]
-    else:
-        args = [exe, "gui"]
+    args = _gui_command(launcher_executable(explicit=executable))
 
     return subprocess.Popen(
         args,
