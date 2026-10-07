@@ -1222,6 +1222,22 @@ class WrapEncryptedLaunchTests(unittest.TestCase):
         self.assertIn("PLAY", message)
         self.assertNotIn("Install / Update", message)
 
+    def test_the_wrapper_runs_on_the_launchers_own_python(self):
+        # The AppImage puts no python3 on PATH: "#!/usr/bin/env python3"
+        # needed one from the host.
+        with tempfile.TemporaryDirectory() as tmp, _own_home(tmp):
+            cmd = self._wrap(tmp, [sys.executable, self.EXE])
+            first = Path(cmd[-1]).read_text().splitlines()[0]
+        self.assertEqual(first, "#!" + sys.executable)
+
+    def test_an_interpreter_path_a_shebang_cannot_hold_falls_back(self):
+        self.assertEqual(xodus._wrapper_interpreter("/opt/My Apps/python3"),
+                         "/usr/bin/env python3")
+        self.assertEqual(xodus._wrapper_interpreter("/x" * 80),
+                         "/usr/bin/env python3")
+        self.assertEqual(xodus._wrapper_interpreter(""),
+                         "/usr/bin/env python3")
+
     def test_xodus_reads_the_licence_from_the_launchers_home(self):
         with tempfile.TemporaryDirectory() as tmp, _own_home(tmp) as home:
             env = {"HOME": "/home/player"}

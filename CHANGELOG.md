@@ -73,6 +73,14 @@
 
 ### Fixed
 
+- **The AppImage starts Store builds without a Python on the system.** Every
+  Minecraft from the Store starts through a small script between xodus-cli
+  and Wine. It began with `#!/usr/bin/env python3`, which looks for the
+  system's Python. The AppImage carries its own and puts nothing on `PATH`,
+  so on a system without Python the game could not start. The script now
+  names the launcher's own interpreter. It falls back to `env python3` only
+  when that path cannot be written in a `#!` line.
+
 - **The Xbox Live DLLs from a third party are checked before they go into
   the game.** `libHttpClient.GDK.dll` and `XCurl.dll` come from a release
   tagged `v0.0.0` in another project's repository. Files can be uploaded to
