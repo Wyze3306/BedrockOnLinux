@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bedrock-on-linux"
+description = "GNU/Linux Installer for Minecraft Bedrock"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+dynamic = ["version"]
+dependencies = [
+  "PySide6",
+  "cryptography"
+]
+classifiers = [
+  "Programming Language :: Python"
+]
+
+[tool.setuptools]
+packages = ["bol"]
+
+[project.urls]
+Homepage = "https://wyze3306.github.io/BedrockOnLinux/"
+Repository = "https://github.com/Wyze3306/BedrockOnLinux"
+"Bug Tracker" = "https://github.com/Wyze3306/BedrockOnLinux/issues"
+Changelog = "https://github.com/Wyze3306/BedrockOnLinux/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = {attr = "bol.config.VERSION"}
+
+[project.scripts]
+bedrock-on-linux = "bol.cli:main"
+
+[tool.setuptools.data-files]
+"share/applications" = ["data/bedrock-on-linux.desktop"]
+"share/icons/hicolor/256x256/apps" = ["data/bedrock-on-linux.png"]
