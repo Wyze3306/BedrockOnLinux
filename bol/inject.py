@@ -171,6 +171,20 @@ _AUTO_INJECT_WINDOW_CEILING = 30.0
 _AUTO_INJECT_PROCESS_CEILING = 30.0
 _AUTO_INJECT_POLL = 0.25
 
+# The window is up long before the game is: it opens on the loading screen,
+# and the main menu follows 13 s later on a warm start and over a minute on a
+# cold one. Injected at the window, a client lands mid-startup, which a manual
+# injection -- done from the menu -- never does, and that is where Flarial's
+# automatic injection lost the mouse while its manual one did not (#281). The
+# game says when its menu is up by writing the feature flags it fetches right
+# after drawing it: measured on 1.26.52 at 0 to 8 s after the menu appeared,
+# never before. A session that never writes them is injected anyway, this
+# long after its window.
+_MENU_MARKERS = ("Flighting/currentTreatments",
+                 "bootstrapStorage/bootstrap_settings.json")
+_GAME_DATA_DIRS = ("Minecraft Bedrock", "Minecraft Bedrock Preview")
+_AUTO_INJECT_MENU_CEILING = 150.0
+
 
 def _auto_inject_log(message):
     LOGS.mkdir(parents=True, exist_ok=True)
@@ -243,16 +257,38 @@ def _game_window_present():
         return False
 
 
-def _await_injection_moment(delay):
+def _menu_reached(since, prefix=None):
+    """Whether the game wrote what it writes once its main menu is up."""
+    try:
+        users = Path(prefix or active_prefix()) / "drive_c" / "users"
+        homes = [home for home in users.iterdir() if home.is_dir()]
+    except OSError:
+        return False
+    for home in homes:
+        for data in _GAME_DATA_DIRS:
+            for marker in _MENU_MARKERS:
+                try:
+                    path = home / "AppData" / "Roaming" / data / marker
+                    if path.stat().st_mtime >= since:
+                        return True
+                except OSError:
+                    continue
+    return False
+
+
+def _await_injection_moment(delay, since=None):
     """Hold until the game is ready to be injected into; False if it exited.
 
-    Two conditions have to hold. The configured delay has to have run out —
+    Three conditions have to hold. The configured delay has to have run out —
     it is the only control the player has over a client that loads too early,
-    so a detected window never cuts it short. And the game has to have opened
-    a window, because a DLL loaded into a game that has not drawn anything yet
+    so nothing detected ever cuts it short. The game has to have opened a
+    window, because a DLL loaded into a game that has not drawn anything yet
     lands mid-startup; that wait is capped, since a Wayland session has no X
-    window to find and the delay alone decides there.
+    window to find. And the game has to have reached its main menu, where a
+    player injects by hand; that wait is capped too, after the window, for a
+    session that never says so.
     """
+    since = time.time() if since is None else since
     started = time.monotonic()
     window_seen_at = None
     while True:
@@ -262,10 +298,17 @@ def _await_injection_moment(delay):
         if window_seen_at is None and _game_window_present():
             window_seen_at = now
         waited = now - started >= delay
+        menu = _menu_reached(since)
         if window_seen_at is not None:
-            if waited and now - window_seen_at >= _AUTO_INJECT_WINDOW_SETTLE:
+            settled = now - window_seen_at >= _AUTO_INJECT_WINDOW_SETTLE
+            if waited and settled and menu:
                 return True
-        elif waited and now - started >= _AUTO_INJECT_WINDOW_CEILING:
+            if waited and now - window_seen_at >= _AUTO_INJECT_MENU_CEILING:
+                _auto_inject_log("The game never said its menu was up; "
+                                 "injecting anyway.")
+                return True
+        elif waited and now - started >= _AUTO_INJECT_WINDOW_CEILING and (
+                menu or now - started >= _AUTO_INJECT_MENU_CEILING):
             return True
         time.sleep(_AUTO_INJECT_POLL)
 
@@ -276,9 +319,13 @@ def perform_auto_inject(settings):
     dll_path = _auto_inject_dll(settings)
     if dll_path is None:
         return
+    # Everything the launcher writes is written before the game starts, so
+    # a marker newer than this is the game's.
+    since = time.time()
     if not _await_game_process():
         return
-    if not _await_injection_moment(float(settings.get("injector_delay", 5))):
+    if not _await_injection_moment(float(settings.get("injector_delay", 5)),
+                                   since):
         return
     try:
         name = run_injector(dll_path)

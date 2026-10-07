@@ -61,6 +61,19 @@
 
 ### Fixed
 
+- **Automatic DLL injection waits for the main menu**
+  ([#281](https://github.com/Wyze3306/BedrockOnLinux/issues/281)). It waited
+  for the game's window and the configured delay, but the window opens on the
+  loading screen, 13 seconds before the menu on a warm start and over a minute
+  before it on a cold one. A client was loaded mid-startup, which a manual
+  injection never does, and that is where Flarial's automatic injection lost
+  the mouse while its manual one did not. The game writes the feature flags
+  it fetches right after drawing its menu, and the injection now waits for
+  that too. Measured with a DLL that records when it is loaded: the window
+  appeared at 21:18:15, the injection used to come at about 21:18:21, and it
+  now came at 21:18:28, with the menu on screen at 21:18:29. A game that never
+  writes them is injected anyway, 150 seconds after its window.
+
 - **Starting Minecraft without a network says why it cannot**
   ([#308](https://github.com/Wyze3306/BedrockOnLinux/issues/308)). A game
   downloaded from the Microsoft Store stays encrypted on disk, and xodus-cli

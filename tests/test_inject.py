@@ -1,6 +1,7 @@
 """External client DLL injection regressions."""
 # SPDX-License-Identifier: MIT
 
+import os
 import subprocess
 import time
 from contextlib import contextmanager
@@ -281,7 +282,7 @@ def test_injector_reports_asynchronous_client_crash(tmp_path):
 
 @contextmanager
 def _auto_inject_env(tmp_path, window=True, delay=0.0, settle=0.0,
-                     ceiling=30.0):
+                     ceiling=30.0, menu=True, menu_ceiling=150.0):
     """Drive the auto-injection watcher without a game, a window or a wait."""
     logs = tmp_path / "logs"
     with mock.patch.object(inject, "LOGS", logs), \
@@ -293,9 +294,14 @@ def _auto_inject_env(tmp_path, window=True, delay=0.0, settle=0.0,
                               return_value="client.dll") as run_inj, \
             mock.patch.object(inject, "_AUTO_INJECT_POLL", 0.01), \
             mock.patch.object(inject, "_AUTO_INJECT_WINDOW_SETTLE", settle), \
-            mock.patch.object(inject, "_AUTO_INJECT_WINDOW_CEILING", ceiling):
+            mock.patch.object(inject, "_AUTO_INJECT_WINDOW_CEILING", ceiling), \
+            mock.patch.object(inject, "_AUTO_INJECT_MENU_CEILING",
+                              menu_ceiling), \
+            mock.patch.object(inject, "_menu_reached",
+                              return_value=menu) as menu_reached:
         yield SimpleNamespace(notify=notify, run_injector=run_inj,
-                              window=present, delay=delay, logs=logs)
+                              window=present, delay=delay, logs=logs,
+                              menu=menu_reached)
 
 
 def test_perform_auto_inject_local_success(tmp_path):
@@ -381,6 +387,54 @@ def test_a_session_that_never_shows_an_x_window_still_injects(tmp_path):
     with _auto_inject_env(tmp_path, window=False, ceiling=0.2) as env:
         inject.perform_auto_inject(settings)
     env.run_injector.assert_called_once()
+
+
+def test_injection_waits_for_the_main_menu_past_the_window(tmp_path):
+    """Injected on the loading screen, Flarial lost the mouse (#281)."""
+    dll = tmp_path / "client.dll"
+    dll.write_bytes(b"MZ")
+    settings = {"injector_dll_type": "file", "injector_dll_path": str(dll),
+                "injector_delay": 0}
+    with _auto_inject_env(tmp_path, window=True) as env:
+        env.menu.side_effect = [False, False, False, True]
+        inject.perform_auto_inject(settings)
+    assert env.menu.call_count == 4
+    env.run_injector.assert_called_once()
+
+
+def test_a_menu_that_never_says_so_is_injected_after_a_while(tmp_path):
+    dll = tmp_path / "client.dll"
+    dll.write_bytes(b"MZ")
+    settings = {"injector_dll_type": "file", "injector_dll_path": str(dll),
+                "injector_delay": 0}
+    with _auto_inject_env(tmp_path, window=True, menu=False,
+                          menu_ceiling=0.2) as env:
+        inject.perform_auto_inject(settings)
+    env.run_injector.assert_called_once()
+    assert "never said its menu was up" in (
+        env.logs / "injector.log").read_text()
+
+
+def test_the_menu_is_told_by_what_the_game_writes_after_it(tmp_path):
+    flags = (tmp_path / "drive_c/users/steamuser/AppData/Roaming/"
+             "Minecraft Bedrock/Flighting/currentTreatments")
+    flags.parent.mkdir(parents=True)
+    flags.write_text("{}")
+    os.utime(flags, (1000, 1000))
+    # Left by an earlier session: not this one's menu.
+    assert not inject._menu_reached(2000, prefix=tmp_path)
+    os.utime(flags, (3000, 3000))
+    assert inject._menu_reached(2000, prefix=tmp_path)
+    assert not inject._menu_reached(2000, prefix=tmp_path / "missing")
+
+
+def test_preview_writes_its_flags_in_its_own_folder(tmp_path):
+    marker = (tmp_path / "drive_c/users/steamuser/AppData/Roaming/"
+              "Minecraft Bedrock Preview/bootstrapStorage/"
+              "bootstrap_settings.json")
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{}")
+    assert inject._menu_reached(0, prefix=tmp_path)
 
 
 def test_auto_inject_stops_when_the_game_exits_before_it_is_ready(tmp_path):
