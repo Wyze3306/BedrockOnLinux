@@ -386,6 +386,25 @@ class LauncherStartTests(unittest.TestCase):
         launched.assert_called_once_with(editor=False)
         window.assert_not_called()
 
+    def test_betterrtx_commands_reach_the_manager(self):
+        for argv, expected in (
+                (["betterrtx", "list"], ("list", None)),
+                (["betterrtx", "install", "default"], ("install", "default")),
+                (["betterrtx", "restore"], ("restore", None))):
+            with self.subTest(argv=argv), \
+                    mock.patch.object(sys, "argv", ["bedrock-on-linux"] + argv), \
+                    mock.patch("bol.betterrtx.cli") as manager:
+                cli.main()
+            manager.assert_called_once_with(*expected)
+
+    def test_betterrtx_install_needs_something_to_install(self):
+        with mock.patch.object(sys, "argv",
+                               ["bedrock-on-linux", "betterrtx", "install"]), \
+                mock.patch("bol.betterrtx.cli") as manager, \
+                self.assertRaises(SystemExit):
+            cli.main()
+        manager.assert_not_called()
+
     def test_play_editor_opens_bedrock_editor(self):
         launched, window = self._run(
             ["bedrock-on-linux", "play", "--editor"], True)

@@ -133,6 +133,22 @@ Mojang's **Bedrock Editor** is part of the game: open it from **Settings ▸
 Tools ▸ Open Bedrock Editor**, the *Open Bedrock Editor* action of the app menu
 entry, or `bedrock-on-linux play --editor`.
 
+### BetterRTX
+
+[BetterRTX](https://bedrock.graphics) presets install from **Settings ▸ Tools ▸
+BetterRTX**, or from a terminal:
+
+```bash
+bedrock-on-linux betterrtx list
+bedrock-on-linux betterrtx install default
+bedrock-on-linux betterrtx restore
+```
+
+A preset only works with the Minecraft version it was built for, so the
+launcher installs one only when its shaders match the selected version, and
+keeps the game's own shaders so **restore** can put them back. `install` also
+takes a `.rtpack` file.
+
 ### Experimental OptiScaler / frame generation
 
 The launcher can install a tested OptiScaler v10 setup for Minecraft RTX under

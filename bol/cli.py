@@ -284,6 +284,13 @@ def main():
 
     sub.add_parser("changelog", help="display the launcher's release changelog history")
 
+    brtx = sub.add_parser(
+        "betterrtx", help="install or remove a BetterRTX shader preset")
+    brtx.add_argument("action", choices=("list", "install", "restore", "status"))
+    brtx.add_argument("target", nargs="?",
+                      help="for install: a preset name from `list`, or a "
+                           ".rtpack file")
+
     a = p.parse_args()
     try:
         # Before anything is read or written: as root, it would be root's.
@@ -404,6 +411,11 @@ def main():
             cmd_import(a.files)
         elif a.cmd == "repair":
             reset_prefix()
+        elif a.cmd == "betterrtx":
+            from .betterrtx import cli as betterrtx_cli
+            if a.action == "install" and not a.target:
+                p.error("betterrtx install needs a preset name or a .rtpack")
+            betterrtx_cli(a.action, a.target)
         elif a.cmd == "changelog":
             try:
                 from .util import gh_latest

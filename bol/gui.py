@@ -42,7 +42,7 @@ from .content import game_content_dir, import_content
 from .doctor import acknowledge_gpu_crash, gpu_crash_acknowledgement_status
 from .games import installed_builds, list_editions, list_versions, remove_build
 from .gamesetup import do_setup
-from . import gpus
+from . import betterrtx, gpus
 from .inject import run_injector
 from .launch import direct_launch_readiness, launch, single_window_session
 from . import saves
@@ -3455,6 +3455,23 @@ class MainWindow(QMainWindow):
                                   tip="Start the selected Minecraft version in "
                                       "Editor mode instead of the game."))
 
+        brtx = card_section(
+            v, "BetterRTX",
+            "Community ray tracing shaders, installed into the selected "
+            "Minecraft version. Only presets made for that version are "
+            "installed; the original shaders are kept and can be restored.")
+        brtx.addWidget(tool_row("Install a BetterRTX preset…",
+                                self._do_betterrtx_install,
+                                tip="Pick a preset published on "
+                                    "bedrock.graphics."))
+        brtx.addWidget(tool_row("Install a .rtpack file…",
+                                self._do_betterrtx_rtpack,
+                                tip="Install a BetterRTX pack you downloaded."))
+        brtx.addWidget(tool_row("Restore Minecraft's own ray tracing shaders",
+                                self._do_betterrtx_restore,
+                                tip="Remove BetterRTX from the selected "
+                                    "Minecraft version."))
+
         shortcuts = card_section(v, "Shortcuts")
         shortcuts.addWidget(tool_row("Create direct launch shortcut (skips this window)…",
                                  self._do_play_shortcut,
@@ -3500,6 +3517,78 @@ class MainWindow(QMainWindow):
         if self.stack.currentWidget() is self.settings_page:
             self.toggle_settings()
         self.do_play(editor=True)
+
+    def _betterrtx_job(self, name, work, finished):
+        """Run one BetterRTX step off the UI thread, errors in a dialog."""
+        self.tools_status_label.setText("BetterRTX…")
+
+        def done(result):
+            self.tools_status_label.setText("")
+            finished(result)
+
+        def failed(message):
+            self.tools_status_label.setText("")
+            self.error_box("BetterRTX", message[:2000])
+
+        w = Worker(work)
+        w.done.connect(done)
+        w.failed.connect(failed)
+        self._start_worker(name, w)
+
+    def _do_betterrtx_install(self):
+        def listed():
+            return (betterrtx.list_presets(),
+                    betterrtx.game_material_version(), betterrtx.status())
+
+        self._betterrtx_job("betterrtx-list", listed, self._pick_betterrtx)
+
+    def _pick_betterrtx(self, result):
+        presets, version, current = result
+        # A preset that names another format is left out; one that names
+        # none is checked against the downloaded files instead.
+        usable = [p for p in presets
+                  if p["material_version"] in (None, version)]
+        if not usable:
+            self.info_box(
+                "BetterRTX",
+                "No BetterRTX preset is made for this Minecraft version yet "
+                f"(its shaders are format {version}; the newest presets are "
+                "made for an older version). Try again after BetterRTX "
+                "updates, or play a Minecraft version a preset was made for.")
+            return
+        labels = [p["name"] + ("" if p["material_version"] is not None
+                               else "  (older preset)") for p in usable]
+        header = (f"Installed now: {current['installed']}\n\n"
+                  if current.get("installed") else "")
+        label, chosen = QInputDialog.getItem(
+            self, "BetterRTX", header + "Preset to install:", labels, 0, False)
+        if not chosen:
+            return
+        preset = usable[labels.index(label)]
+        self._betterrtx_job(
+            "betterrtx-install", lambda: betterrtx.install_preset(preset),
+            lambda _game: self.info_box(
+                "BetterRTX", f"{preset['name']} is installed. Use the Ray "
+                "Traced graphics mode in a ray tracing world to see it."))
+
+    def _do_betterrtx_rtpack(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Install a BetterRTX pack", "",
+            "BetterRTX pack (*.rtpack *.zip);;All files (*.*)")
+        if not path:
+            return
+        self._betterrtx_job(
+            "betterrtx-install", lambda: betterrtx.install_rtpack(path),
+            lambda _game: self.info_box(
+                "BetterRTX", f"{Path(path).stem} is installed."))
+
+    def _do_betterrtx_restore(self):
+        self._betterrtx_job(
+            "betterrtx-restore", betterrtx.restore,
+            lambda changed: self.info_box(
+                "BetterRTX",
+                "Minecraft's own ray tracing shaders are back." if changed
+                else "BetterRTX is not installed in this Minecraft version."))
 
     def _do_import(self):
         files, _ = QFileDialog.getOpenFileNames(

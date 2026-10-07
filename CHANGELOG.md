@@ -4,6 +4,18 @@
 
 ### Added
 
+- **A BetterRTX preset manager**
+  ([#166](https://github.com/Wyze3306/BedrockOnLinux/issues/166)).
+  **Settings ▸ Tools ▸ BetterRTX** and `bedrock-on-linux betterrtx` list the
+  presets published on bedrock.graphics, install one or a `.rtpack` into the
+  selected Minecraft version, and restore the game's own ray tracing
+  shaders. A preset replaces three compiled materials, and the game loads
+  only materials of its own format. The launcher reads that format from the
+  game's files and from the preset's before writing anything, and refuses a
+  preset made for another version: today's presets are format 25, made for
+  1.26.40, and 1.26.52 loads format 26. The originals are kept beside the
+  build, and nothing is written while the game runs.
+
 - **Settings ▸ Advanced ▸ Graphics card picks the GPU Minecraft renders on**
   ([#275](https://github.com/Wyze3306/BedrockOnLinux/issues/275)). A laptop
   starts every program on its integrated GPU unless told otherwise, so the
