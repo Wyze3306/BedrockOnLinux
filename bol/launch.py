@@ -161,6 +161,27 @@ def _configure_ray_tracing(env, settings):
          "mode stays unavailable this launch.")
 
 
+# Renderer setting values that hand Direct3D to WineD3D.
+_WINED3D_RENDERERS = {"opengl", "wined3d", "legacy"}
+
+
+def _renders_through_wined3d(settings):
+    """Whether this launch hands Direct3D, D3D12 included, to WineD3D.
+
+    Proton then leaves vkd3d-proton out of the prefix altogether. The
+    custom-environment field has the last word over the Renderer setting, as
+    it does at launch, and is read the way Proton reads it: any value but
+    empty or "0" turns it on. An inherited variable does not count, since
+    _configure_runtime_compat drops it.
+    """
+    settings = settings or {}
+    custom = custom_env_map(settings.get("custom_env") or "")
+    if "PROTON_USE_WINED3D" in custom:
+        return custom["PROTON_USE_WINED3D"] not in ("", "0")
+    renderer = str(settings.get("renderer", "auto")).strip().lower()
+    return renderer in _WINED3D_RENDERERS
+
+
 def _requested_frame_rate(environ=None):
     """What ``BOL_FRAME_RATE`` asks for: a rate, 0 for uncapped, or None.
 
@@ -222,10 +243,21 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
     and silently does nothing, so a 143.85 Hz display has to be asked for as
     144 — and rounding up rather than down is what keeps the cap from landing
     just under the rate the display is actually driving.
+
+    None of this applies to the Legacy compatibility renderer: Proton leaves
+    vkd3d-proton out of the prefix for it, so nothing would read the limit,
+    and setting the game's own limiter aside would leave the session with no
+    limit at all (#314). The game paces itself there, as it always did.
     """
     source = os.environ if environ is None else environ
     requested = _requested_frame_rate(source)
     if requested == 0.0:
+        return None
+    if _renders_through_wined3d(settings):
+        if requested:
+            warn("BOL_FRAME_RATE has no effect with the Legacy "
+                 "compatibility renderer, which runs without vkd3d-proton. "
+                 "Set Max Framerate in Minecraft's video settings instead.")
         return None
     if (env.get("VKD3D_FRAME_RATE", "").strip()
             or str(source.get("VKD3D_FRAME_RATE", "")).strip()):
@@ -534,7 +566,7 @@ def _configure_runtime_compat(env, settings, backend, host_wayland,
         env["PROTON_NO_WM_DECORATION"] = "1"
 
     renderer = str(settings.get("renderer", "auto")).strip().lower()
-    if renderer in {"opengl", "wined3d", "legacy"}:
+    if renderer in _WINED3D_RENDERERS:
         # Fallback for GPUs below modern DXVK's Vulkan requirement.
         env["PROTON_USE_WINED3D"] = "1"
 
@@ -837,7 +869,8 @@ def _launch_once(lock_fds=(), on_started=None):
     _clear_previous_proton_logs()
     # Repair a settings file a previous crash cut off before the game reads
     # it, hand its frame limit to the launcher's limiter when that one paces
-    # the session, then keep a copy of what the game is about to start
+    # the session — or put back one an interrupted session set aside when
+    # nothing does — then keep a copy of what the game is about to start
     # rewriting (#175). Safe to declare idle: _prepare_launch_engine()
     # refused to get this far with a live prefix and the game has not been
     # started yet, so nothing that writes options.txt can be running,
@@ -845,6 +878,11 @@ def _launch_once(lock_fds=(), on_started=None):
     restore_truncated_game_options(prefix_idle=True)
     if frame_limit:
         _set_aside_game_frame_limit()
+    else:
+        # A Max Framerate an interrupted session set aside goes back now:
+        # nothing holds it this session, and the game would otherwise start
+        # with no limit at all (#314).
+        restore_game_frame_limits(prefix_idle=True)
     snapshot_game_options()
     # The Servers tab is read from disk at startup, so the servers this
     # launcher ships with have to be in the list before the game opens it.

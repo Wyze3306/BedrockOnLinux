@@ -543,6 +543,57 @@ class FrameRateLimitTests(unittest.TestCase):
         self.assertEqual(applied, 60)
         self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
 
+    def test_the_legacy_renderer_leaves_the_game_its_own_limit(self):
+        # Proton leaves vkd3d-proton out of the prefix for WineD3D, so a
+        # VKD3D_FRAME_RATE holds nothing there: setting the game's limiter
+        # aside left the session with no limit at all (#314).
+        for vsync, framerate in (("0", "60"), ("1", "60"), ("0", "0")):
+            env = {}
+            applied, warned = self._apply(
+                env=env, settings={"renderer": "opengl"},
+                gfx_vsync=vsync, gfx_max_framerate=framerate)
+            self.assertIsNone(applied, (vsync, framerate))
+            self.assertNotIn("VKD3D_FRAME_RATE", env)
+            self.assertFalse(warned.called)
+
+    def test_the_legacy_renderer_set_by_hand_counts_too(self):
+        env = {}
+        applied, _ = self._apply(
+            env=env, settings={"custom_env": "PROTON_USE_WINED3D=1"},
+            gfx_vsync="0", gfx_max_framerate="60")
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
+    def test_the_legacy_renderer_turned_off_by_hand_is_not_it(self):
+        # Read the way Proton reads it: "0" turns it off, and the field has
+        # the last word over the Renderer setting.
+        env = {}
+        applied, _ = self._apply(
+            env=env, settings={"renderer": "opengl",
+                               "custom_env": "PROTON_USE_WINED3D=0"},
+            gfx_vsync="0", gfx_max_framerate="60")
+        self.assertEqual(applied, 60)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+
+    def test_an_inherited_legacy_switch_is_not_the_launchs(self):
+        # The launch drops an inherited PROTON_USE_WINED3D before Proton
+        # sees it; only the Renderer setting and the field decide.
+        env = {}
+        applied, _ = self._apply(
+            env=env, environ={"PROTON_USE_WINED3D": "1"},
+            gfx_vsync="0", gfx_max_framerate="60")
+        self.assertEqual(applied, 60)
+
+    def test_an_explicit_rate_is_named_as_ignored_by_the_legacy_renderer(self):
+        env = {}
+        applied, warned = self._apply(
+            env=env, settings={"renderer": "opengl"},
+            environ={"BOL_FRAME_RATE": "90"})
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+        self.assertIn("Legacy compatibility renderer",
+                      warned.call_args.args[0])
+
     def test_a_display_probe_that_raises_never_fails_a_launch(self):
         env = {}
         with tempfile.TemporaryDirectory() as td:
