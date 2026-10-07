@@ -35,6 +35,11 @@ class ReadyLaunchHarness:
         # a stand-in, and the presence tests below assert on what it was told.
         self.presence = mock.MagicMock()
         self.presence_calls = []
+        # So does Xbox Live presence, for a better reason: the real one reads
+        # the pre-auth payload of whoever runs the tests and spends the run
+        # posting "active" and "inactive" with their account.
+        self.xbl = mock.MagicMock()
+        self.xbl_calls = []
         # What touched the settings file, and in which order: the game must
         # start from a file that has been repaired and set up, and nothing
         # may rewrite it before the game is gone again (#175).
@@ -116,6 +121,8 @@ class ReadyLaunchHarness:
             mock.patch.object(launch.subprocess, "Popen", side_effect=popen),
             mock.patch.object(launch.discord, "start_session",
                               side_effect=self._announce_presence),
+            mock.patch.object(launch.xbl_presence, "start_session",
+                              side_effect=self._announce_xbl_presence),
             mock.patch.object(launch, "info"),
             mock.patch.object(launch, "ok"),
             mock.patch.object(launch, "warn"),
@@ -138,6 +145,10 @@ class ReadyLaunchHarness:
     def _announce_presence(self, *args, **kwargs):
         self.presence_calls.append((args, kwargs))
         return self.presence
+
+    def _announce_xbl_presence(self, *args, **kwargs):
+        self.xbl_calls.append((args, kwargs))
+        return self.xbl
 
     def _warnings(self):
         return [str(call.args[0])
@@ -1401,6 +1412,34 @@ class DiscordPresenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
     def test_hide_signin_button_invoked_on_launch(self):
         self.assertEqual(self._run(), 0)
         self.launch_mocks["hide_signin_button"].assert_called_once()
+
+
+class XboxPresenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
+    """A signed-in session is published on Xbox Live while the game runs."""
+
+    class _Process:
+        @staticmethod
+        def wait(timeout):
+            return 0
+
+    def _run(self, **kwargs):
+        with tempfile.TemporaryDirectory() as td:
+            return self._exercise_ready_launch(
+                Path(td), lambda *a, **k: self._Process(),
+                lambda: "token", lambda _token: True, **kwargs)
+
+    def test_a_signed_in_session_is_published_then_taken_down(self):
+        self.assertEqual(self._run(extra_settings={"mc_version": "1.26.40.1"}),
+                         0)
+        self.assertEqual(len(self.xbl_calls), 1)
+        (settings,), _kwargs = self.xbl_calls[0]
+        self.assertEqual(settings["mc_version"], "1.26.40.1")
+        self.xbl.stop.assert_called_once_with()
+
+    def test_an_offline_session_tells_xbox_live_nothing(self):
+        # No pre-auth, no token to publish with (#160).
+        self.assertEqual(self._run(preauth=False), 0)
+        self.assertEqual(self.xbl_calls, [])
 
 
 
