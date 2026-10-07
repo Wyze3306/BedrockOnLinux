@@ -9,9 +9,15 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 dynamic = ["version"]
+# What bol.deps installs with pip on first start when it is missing
+# (GUI_DEPS, LOGIN_DEPS). With any of it missing, the launcher pip-installs
+# its own pinned GUI stack over what this installed. PySide6 rather than
+# PySide6-Essentials: that is the name distributions package it under.
 dependencies = [
   "PySide6",
-  "cryptography"
+  "cryptography",
+  "packaging",
+  "python-xlib",
 ]
 classifiers = [
   "Programming Language :: Python"
@@ -19,6 +25,11 @@ classifiers = [
 
 [tool.setuptools]
 packages = ["bol"]
+
+# DLL injection extracts injector.exe from the package (bol/inject.py);
+# setuptools leaves out every non-Python file it is not told about.
+[tool.setuptools.package-data]
+bol = ["injector.exe"]
 
 [project.urls]
 Homepage = "https://wyze3306.github.io/BedrockOnLinux/"
@@ -30,7 +41,9 @@ Changelog = "https://github.com/Wyze3306/BedrockOnLinux/blob/main/CHANGELOG.md"
 version = {attr = "bol.config.VERSION"}
 
 [project.scripts]
-bedrock-on-linux = "bol.cli:main"
+# The one entry point of every packaging: `optiscaler` is not a bol.cli
+# subcommand, and its bootstrap runs first.
+bedrock-on-linux = "bol.__main__:main"
 
 [tool.setuptools.data-files]
 "share/applications" = ["data/bedrock-on-linux.desktop"]
