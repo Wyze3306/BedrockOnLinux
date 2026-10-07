@@ -32,6 +32,15 @@
   killed launcher, now goes back before the next game starts. Going back to
   an older launcher did not restore it: those do not know where it was kept.
 
+- **The game may use swap again on machines with less than 6 GiB of RAM**
+  ([#314](https://github.com/Wyze3306/BedrockOnLinux/issues/314)). 2.2.8
+  keeps Minecraft's memory out of swap while it runs. Where the game and the
+  desktop do not fit in RAM together, that left the kernel nothing to reclaim
+  but program code and the page cache, the game's and the desktop's, and the
+  whole machine could freeze where the game used to slow down. The guard now
+  applies from 6 GiB of RAM, twice what Minecraft settles at with a world
+  loaded; below that, the game swaps as it did before 2.2.8.
+
 ### Packaging
 
 - **A `pyproject.toml`, for distributions to build the launcher with their

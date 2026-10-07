@@ -86,6 +86,12 @@ class MemoryPressureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             self.assertEqual(perfcheck.swap_used_mib(_meminfo(td, 8000)), 0)
 
+    def test_total_memory_is_the_machines_not_what_is_left(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(
+                perfcheck.total_memory_mib(_meminfo(td, 900)), 16 * 1024)
+        self.assertIsNone(perfcheck.total_memory_mib("/nonexistent/mem"))
+
 
 class DiskSpaceTests(unittest.TestCase):
     def _usage(self, free_mib, total_mib=246 * 1024):

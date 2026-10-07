@@ -27,16 +27,30 @@ own limit back as 0, through the same environment the game will be started
 with. A Flatpak sandbox, a host without systemd, a session with no user bus
 and a controller that is not delegated all fail that probe, and the game then
 starts exactly as it always has. ``BOL_ALLOW_GAME_SWAP=1`` turns it off.
+
+It only makes sense where the game fits in RAM with the rest of the desktop
+beside it. Where it does not, the kernel can no longer page the game out, so
+it reclaims the only pages left — program code and the page cache, the
+game's own and the desktop's — and the whole machine stalls instead of the
+game: a freeze that takes a hard reset, not a slow frame (#314). Below
+``MIN_GUARDED_MEMORY_MIB`` the game is left to swap as it always was.
 """
 # SPDX-License-Identifier: MIT
 
 import shutil
 import subprocess
 
+from .perfcheck import LOW_MEMORY_MIB, total_memory_mib
 from .util import env_flag
 from .xdg_migration import is_flatpak
 
 SYSTEMD_RUN = "systemd-run"
+
+# Twice what Minecraft and its prefix settle at once a world is loaded
+# (bol.perfcheck.LOW_MEMORY_MIB): half for the game, half for the kernel, the
+# display server, the desktop and the launcher. A 4 GiB machine reports about
+# 3.7 GiB of MemTotal and an 8 GiB one about 7.5, so this splits the two.
+MIN_GUARDED_MEMORY_MIB = 2 * LOW_MEMORY_MIB
 
 # The one property this is about. Nothing else is changed for the game.
 SCOPE_PROPERTY = "MemorySwapMax=0"
@@ -69,6 +83,10 @@ def swap_guard_available(env=None, runner=None, which=None):
     if is_flatpak(env):
         # The sandbox has no route to the host's systemd, and the probe
         # would only find that out the slow way.
+        return False
+    total = total_memory_mib()
+    if total is None or total < MIN_GUARDED_MEMORY_MIB:
+        # Kept out of swap here, the game would starve everything else.
         return False
     which = shutil.which if which is None else which
     if not which(SYSTEMD_RUN):
