@@ -2405,6 +2405,7 @@ class MainWindow(QMainWindow):
         self.set_status("Minecraft closed.")
         self.end_progress()
         self._set_busy(False)
+        self._offer_pending_restart()
 
     def _play_failed(self, message):
         self.ui_state["launch_active"] = False
@@ -2430,6 +2431,7 @@ class MainWindow(QMainWindow):
                                  then=self._play_again_after_ack)
         else:
             self.error_box("Minecraft could not start", message[:2000])
+        self._offer_pending_restart()
 
     def _play_again_after_ack(self):
         """The player pressed PLAY and answered Yes: carry on with PLAY.
@@ -2470,10 +2472,10 @@ class MainWindow(QMainWindow):
             # the download still says there is no account. Offering the same
             # window again is the loop from issue #214, not a fix.
             self.error_box("Minecraft could not be downloaded", message[:2000])
-            return
-        if self._offer_store_account_link(message):
+        elif self._offer_store_account_link(message):
             self.ui_state["store_signin_offered"] = True
             self._link_store_account(then=self.do_play)
+        self._offer_pending_restart()
 
     def _set_busy(self, on):
         self.ui_state["busy"] = on
@@ -3711,8 +3713,39 @@ class MainWindow(QMainWindow):
         self._start_worker("update", w)
 
     def _restart_prompt(self):
-        if self.question_box("Update installed", "Restart now to run the new version?"):
-            self.relaunch_app()
+        """Offer the new version, but never while a launch is active.
+
+        The restart is an execv: this process is replaced where it stands, so
+        the launch thread never reaches its teardown and the GPU safety marker
+        stays "running". execv keeps the PID and its start time, which is how
+        a marker names its launcher, so the new launcher took the marker for
+        a launch of its own still running and refused every PLAY until it was
+        started again from scratch. The question waits for the game to close:
+        _offer_pending_restart asks it then.
+        """
+        if not self.ui_state.get("launch_active"):
+            if not self.question_box("Update installed",
+                                     "Restart now to run the new version?"):
+                return
+            # PLAY can start while the question is open: a Store sign-in that
+            # completes in the meantime resumes it by itself.
+            if not self.ui_state.get("launch_active"):
+                self.relaunch_app()
+                return
+        self.ui_state["restart_pending"] = True
+
+    def _offer_pending_restart(self):
+        """The launch is over: ask what the update held back for it.
+
+        Not yet while PLAY carries on by itself -- the GPU acknowledgement
+        resumes it at once, a Store sign-in once it completes.
+        """
+        if (not self.ui_state.get("restart_pending")
+                or self.ui_state.get("launch_active")
+                or self.ui_state.get("store_login_active")):
+            return
+        del self.ui_state["restart_pending"]
+        self._restart_prompt()
 
     def relaunch_app(self):
         self.na.stop()

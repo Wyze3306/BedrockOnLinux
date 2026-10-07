@@ -82,6 +82,15 @@
   an interrupted launch no longer tells the player to reboot when they
   already have, or to repair a driver nothing says is broken.
 
+- **Restarting into an update no longer blocks PLAY.** When an update
+  finished while Minecraft was running, *Restart now* replaced the launcher
+  on the spot. The game session it was watching never reached the step that
+  clears its GPU safety record, and the restarted launcher, which keeps the
+  same process ID, took that record for a session of its own still running:
+  every PLAY was refused as "still marked active in this launcher" until the
+  launcher was quit and started again. The restart is now offered once the
+  game has closed.
+
 ### Packaging
 
 - **A `pyproject.toml`, for distributions to build the launcher with their
