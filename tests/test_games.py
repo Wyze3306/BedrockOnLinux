@@ -90,6 +90,37 @@ class VersionListingTests(unittest.TestCase):
         self.assertFalse(
             {b["version"]: b for b in builds}["1.26.42.1"]["installed"])
 
+    def test_a_build_on_disk_the_index_dropped_is_still_offered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _write_store_game(base / "release" / "1.26.30.5")
+            with mock.patch.object(games, "GAMES", base), \
+                    mock.patch.object(games.xodus, "version_catalogue",
+                                      return_value=_CATALOGUE):
+                builds = games.list_versions("release")
+
+        versions = [b["version"] for b in builds]
+        self.assertIn("1.26.30.5", versions)
+        self.assertEqual(versions, sorted(
+            versions, key=games.xodus.version_key, reverse=True))
+        self.assertTrue({b["version"]: b
+                         for b in builds}["1.26.30.5"]["installed"])
+
+    def test_with_the_index_out_of_reach_the_builds_on_disk_remain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _write_store_game(base / "release" / "1.26.42.1")
+            with mock.patch.object(games, "GAMES", base), \
+                    mock.patch.object(games.xodus, "version_catalogue",
+                                      side_effect=games.xodus.XodusError(
+                                          "offline")), \
+                    mock.patch.object(games, "warn"):
+                builds = games.list_versions("release")
+                self.assertEqual([b["version"] for b in builds], ["1.26.42.1"])
+                # About to download: there the index is not optional.
+                with self.assertRaises(games.xodus.XodusError):
+                    games.list_versions("release", offline_ok=False)
+
 
 class InstallTests(unittest.TestCase):
     def setUp(self):
@@ -216,6 +247,34 @@ class InstallTests(unittest.TestCase):
 
             # A build Microsoft stopped serving must not leave PLAY dead.
             self.assertEqual(root, base / "release" / "1.26.44.3")
+
+    def test_a_build_on_disk_starts_once_the_index_stops_listing_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _write_store_game(base / "release" / "1.26.30.5")
+
+            with mock.patch.object(games, "GAMES", base), \
+                    mock.patch.object(games.xodus, "install") as install, \
+                    mock.patch.object(games, "warn") as warned:
+                root = games.install_game(self._edition(), "1.26.30.5")
+
+            self.assertEqual(root, base / "release" / "1.26.30.5")
+            install.assert_not_called()
+            warned.assert_not_called()
+
+    def test_a_build_on_disk_starts_with_the_index_out_of_reach(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _write_store_game(base / "release" / "1.26.42.1")
+
+            with mock.patch.object(games, "GAMES", base), \
+                    mock.patch.object(games, "list_versions",
+                                      side_effect=BolError("offline")), \
+                    mock.patch.object(games.xodus, "install") as install:
+                root = games.install_game(self._edition(), "1.26.42.1")
+
+            self.assertEqual(root, base / "release" / "1.26.42.1")
+            install.assert_not_called()
 
     def test_an_empty_catalogue_is_an_error(self):
         with tempfile.TemporaryDirectory() as tmp, \

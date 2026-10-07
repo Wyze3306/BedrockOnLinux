@@ -64,21 +64,52 @@ def version_dir(edition_id, version):
     return GAMES / edition_id / version
 
 
-def list_versions(edition_id, ignore_cache=False):
+def list_versions(edition_id, ignore_cache=False, offline_ok=True):
     """Installable builds for an edition, newest first.
 
     Each entry gains ``installed``: whether that exact build is already on
     disk, which is what lets switching back to a build you already have cost
     nothing. ``ignore_cache`` bypasses the 12-hour cache on the build index,
     for when a build known to be out is not showing up yet.
+
+    The builds on disk are listed whether or not the index names them: it is
+    a third party's, it stops listing builds, and it can be out of reach. A
+    build installed here starts either way, so it stays one to pick. With
+    ``offline_ok`` an index out of reach leaves just those; without, it is an
+    error, for a caller that is about to download.
     """
+    on_disk = _installed_versions(edition_id)
+    try:
+        catalogue = xodus.version_catalogue(edition_id,
+                                            ignore_cache=ignore_cache)
+    except Exception as exc:
+        if not (offline_ok and on_disk):
+            raise
+        warn(f"The list of Minecraft builds could not be read ({exc}); "
+             "showing the builds already installed.")
+        catalogue = []
     out = []
-    for entry in xodus.version_catalogue(edition_id, ignore_cache=ignore_cache):
+    for entry in catalogue:
         entry = dict(entry)
-        entry["installed"] = _game_root(
-            version_dir(edition_id, entry["version"])) is not None
+        entry["installed"] = entry["version"] in on_disk
         out.append(entry)
+    listed = {entry["version"] for entry in out}
+    out.extend({"version": version, "urls": [], "installed": True}
+               for version in on_disk - listed)
+    out.sort(key=lambda entry: xodus.version_key(entry["version"]),
+             reverse=True)
     return out
+
+
+def _installed_versions(edition_id):
+    """The builds of an edition that are complete on disk, by version."""
+    try:
+        folders = list((GAMES / edition_id).iterdir())
+    except OSError:
+        return set()
+    return {folder.name for folder in folders
+            if folder.is_dir() and not folder.is_symlink()
+            and _game_root(folder) is not None}
 
 
 def _game_root(dest):
@@ -156,12 +187,21 @@ def install_game(edition, version=None, progress=None, force=False):
     local segment hashes against the package, fetches only what changed and
     commits with a rename -- so there is deliberately no staging dance here.
     """
-    catalogue = list_versions(edition["id"])
+    wanted = str(version or "").strip()
+    if wanted and not force:
+        # A build already on disk needs nothing from the index of builds: it
+        # starts with the index out of reach, and stays the build the player
+        # picked once the index stops listing it, instead of being swapped
+        # for the newest one with a download nobody asked for.
+        root = _game_root(version_dir(edition["id"], wanted))
+        if root:
+            info(f"{edition['name']} {wanted} already installed")
+            return root
+    catalogue = list_versions(edition["id"], offline_ok=False)
     if not catalogue:
         raise BolError(
             f"No {edition['name']} build is listed. Check the network "
             "connection and try again.")
-    wanted = str(version or "").strip()
     entry = next((c for c in catalogue if c["version"] == wanted), None)
     if entry is None:
         if wanted:

@@ -73,6 +73,14 @@
 
 ### Fixed
 
+- **A build on disk starts whatever the build index says.** The list of
+  Minecraft builds comes from a third party's index (GdkLinks), and PLAY read
+  it even for a build already installed. A build the index stopped listing
+  was swapped for the newest one, with a download nobody asked for. With the
+  index out of reach and no copy of it cached, PLAY failed outright. An
+  installed build now starts without the index, and the version picker lists
+  the builds on disk whether the index names them or not.
+
 - **An interrupted restore can no longer cost a world.** Restoring a backup
   copies it in beside the current data, then swaps the two folders with two
   renames. A launcher stopped between the renames left the player's data
