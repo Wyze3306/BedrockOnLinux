@@ -134,6 +134,10 @@ class GameCrashDiagnosisTests(unittest.TestCase):
             "display a backtrace\n")
         self.assertIn(gamesetup.LICENCE_UNREACHABLE, hits)
         self.assertIn("internet connection", gamesetup.LICENCE_UNREACHABLE)
+        # login.live.com and "failed" in the same panic are not a sign-in
+        # the player can do anything about.
+        self.assertFalse(any(hit.startswith("Microsoft sign-in failed")
+                             for hit in hits), hits)
 
     def test_other_xodus_panics_are_not_called_offline(self):
         hits = self._diagnose(

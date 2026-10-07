@@ -250,6 +250,12 @@ def diagnose():
                 pass
     text = "\n".join(blobs)
     hits = [msg for pat, msg in _DIAG_RULES if re.search(pat, text, re.I)]
+    # The game never ran: xodus-cli died fetching the licence, and its panic
+    # names login.live.com right before "failed to lookup address", which
+    # the in-game sign-in rule reads as a failed sign-in (#308).
+    if LICENCE_UNREACHABLE in hits:
+        hits = [h for h in hits if not h.startswith(
+            "Microsoft sign-in failed in-game")]
     # Positive evidence wins: if the engine logged its XUser patches or a
     # successful pre-auth, WineGDK XUser IS present — drop any "no XUser" hit so
     # a benign HRESULT elsewhere can't tell the user to reinstall a working
