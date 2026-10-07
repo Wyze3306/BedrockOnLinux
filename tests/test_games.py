@@ -341,6 +341,20 @@ class ManifestVersionTests(unittest.TestCase):
                 encoding="utf-8")
             self.assertEqual(games.mc_version_str(root), "1.26.20.4")
 
+    def test_a_three_digit_minor_keeps_all_three(self):
+        # 1.21.120.4 is "1.21.12004.0" in its manifest; reading two digits for
+        # the minor made it 1.21.12.4, a version that does not exist.
+        for appx, mojang in (("1.21.12004.0", "1.21.120.4"),
+                             ("1.21.13201.0", "1.21.132.1"),
+                             ("1.26.5203.0", "1.26.52.3"),
+                             ("1.26.301.0", "1.26.3.1")):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "appxmanifest.xml").write_text(
+                    f'<Package><Identity Version="{appx}" /></Package>',
+                    encoding="utf-8")
+                self.assertEqual(games.mc_version_str(root), mojang, appx)
+
 
 class LegacyArchiveTests(unittest.TestCase):
     """#289: the zips launchers before 2.1 downloaded are not kept forever."""

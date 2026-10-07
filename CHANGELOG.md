@@ -103,6 +103,13 @@
   before it replaced the running launcher. Each download is now named for
   its release and checked against the release's SHA-256 list.
 
+- **Versions with a three-digit minor are named right.** The game's
+  manifest writes 1.21.120.4 as `1.21.12004.0`, and the launcher read
+  1.21.12.4 out of it. The patch is the last two digits.
+
+- **`BOL_FRAME_RATE=inf` means no cap** instead of failing the launch with
+  an OverflowError.
+
 - **On an ARM computer, the launcher says what x86-64 programs need**
   ([#250](https://github.com/Wyze3306/BedrockOnLinux/issues/250)). The
   launcher is Python and starts anywhere, but the game, the Wine engine,

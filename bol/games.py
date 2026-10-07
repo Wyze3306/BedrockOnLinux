@@ -496,11 +496,12 @@ def mc_version_str(game_dir: Path):
                           man.read_text(errors="ignore"))
             if m:
                 p = m.group(3)
-                # Bedrock packs "<minor><patch>" into the Appx 3rd field, e.g.
-                # 2004 -> "20.4", 3005 -> "30.5", 0301 -> "3.1" — split it back
-                # so the result matches Mojang's version numbers (e.g. 1.26.20.4).
+                # Bedrock packs "<minor><patch>" into the Appx 3rd field, the
+                # patch always on the last two digits: 2004 -> "20.4", 0301 ->
+                # "3.1", 12004 -> "120.4" -- split it back so the result
+                # matches Mojang's version numbers (1.26.20.4, 1.21.120.4).
                 if len(p) >= 3:
-                    return f"{m.group(1)}.{m.group(2)}.{int(p[:2])}.{int(p[2:])}"
+                    return f"{m.group(1)}.{m.group(2)}.{int(p[:-2])}.{int(p[-2:])}"
                 return f"{m.group(1)}.{m.group(2)}.{int(p)}"
     return None
 

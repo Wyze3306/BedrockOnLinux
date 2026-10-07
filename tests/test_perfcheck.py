@@ -477,6 +477,15 @@ class FrameRateLimitTests(unittest.TestCase):
         self.assertEqual(applied, 144)
         self.assertTrue(warned.called)
 
+    def test_infinity_means_no_cap_rather_than_a_crash(self):
+        # float("inf") parses, and the rate is rounded up to whole frames:
+        # math.ceil(inf) raised OverflowError and the launch failed.
+        env = {}
+        applied, _ = self._apply(env=env, environ={"BOL_FRAME_RATE": "inf"},
+                                 gfx_vsync="0", gfx_max_framerate="0")
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
     def test_an_inherited_limit_is_never_overridden(self):
         env = {"VKD3D_FRAME_RATE": "30"}
         applied, _ = self._apply(env=env, gfx_vsync="0",

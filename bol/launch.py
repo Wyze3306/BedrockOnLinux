@@ -212,6 +212,11 @@ def _requested_frame_rate(environ=None):
     try:
         value = float(raw)
     except ValueError:
+        value = math.nan
+    if math.isinf(value) and value > 0:
+        # "inf" reads as a number to Python and means no cap.
+        return 0.0
+    if not math.isfinite(value):
         warn("BOL_FRAME_RATE=%s is not a number of frames per second — "
              "ignored." % raw)
         return None
