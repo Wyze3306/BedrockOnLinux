@@ -1243,6 +1243,12 @@ class RefusedLicenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.assertIn("account.microsoft.com/devices/content",
                       str(raised.exception))
 
+    def test_an_unreachable_licence_ends_the_launch_too(self):
+        from bol.gamesetup import LICENCE_UNREACHABLE
+        with self.assertRaises(launch.BolError) as raised:
+            self._play([LICENCE_UNREACHABLE])
+        self.assertEqual(str(raised.exception), LICENCE_UNREACHABLE)
+
     def test_any_other_diagnosis_leaves_the_launch_to_return(self):
         self.assertEqual(self._play(["Out of memory (RAM/VRAM)."]), 0)
         self.assertEqual(self._play([]), 0)

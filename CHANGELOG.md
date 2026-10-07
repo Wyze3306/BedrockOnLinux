@@ -49,6 +49,15 @@
 
 ### Fixed
 
+- **Starting Minecraft without a network says why it cannot**
+  ([#308](https://github.com/Wyze3306/BedrockOnLinux/issues/308)). A game
+  downloaded from the Microsoft Store stays encrypted on disk, and xodus-cli
+  fetches the key that decrypts it from Microsoft at every launch. With no
+  connection that ended in a Rust panic in the log and a game that closed at
+  once. The launch now ends as *Minecraft could not start*, saying that the
+  game needs an internet connection to start, single-player included. The
+  README no longer says single-player works offline.
+
 - **The Microsoft Store sign-in works where the system's WebKitGTK has no
   TLS support** ([#249](https://github.com/Wyze3306/BedrockOnLinux/issues/249)).
   WebKitGTK speaks TLS through a GIO module, glib-networking's, that GIO looks

@@ -32,7 +32,7 @@ from .fixups import (
     hide_signin_button,
 )
 from .gameinput import install_gameinput
-from .gamesetup import LICENCE_REFUSED, diagnose
+from .gamesetup import LICENCE_REFUSED, LICENCE_UNREACHABLE, diagnose
 from .gpu_safety import (
     acknowledge_gpu_crash_command,
     arm_gpu_launch,
@@ -1153,6 +1153,8 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     # launcher-free shortcut as a desktop notification.
     if LICENCE_REFUSED in hits:
         raise BolError(LICENCE_REFUSED)
+    if LICENCE_UNREACHABLE in hits:
+        raise BolError(LICENCE_UNREACHABLE)
     return rc
 
 

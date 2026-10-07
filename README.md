@@ -35,8 +35,11 @@ You sign in to Microsoft from inside Minecraft, exactly as on Windows, so
 Friends, invitations, public servers, Realms and the Marketplace work like they
 should. Nothing goes through a third party.
 
-You can also play without an account: single-player worlds and LAN games work
-offline, only the online features are out of reach. Achievements show up in the
+You can also play without signing in to Xbox Live: single-player worlds and LAN
+games work, only the online features are out of reach. Starting the game does
+need an internet connection, though: a game downloaded from the Microsoft Store
+stays encrypted on disk, and Microsoft hands out the key to it each time it
+starts. Achievements show up in the
 game, but they don't unlock yet.
 
 ## Install

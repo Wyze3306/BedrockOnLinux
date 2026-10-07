@@ -85,6 +85,26 @@ LICENCE_REFUSED = (
     "again.")
 
 
+# The same kind of failure, reached without a network. A Store build stays
+# encrypted on disk and xodus-cli fetches the key that decrypts it from
+# Microsoft at every launch, so with no connection the game never starts --
+# and all xodus-cli says is a Rust panic on login.live.com (#308):
+#   thread 'main' panicked at crates/xodus-cli/src/license.rs:51:6:
+#   called `Result::unwrap()` on an `Err` value: Request(reqwest::Error {
+#   kind: Request, url: "https://login.live.com/RST2.srf", source: … dns error
+LICENCE_UNREACHABLE = (
+    "Minecraft could not start because its licence could not be fetched: no "
+    "connection to Microsoft. A game downloaded from the Microsoft Store "
+    "stays encrypted on disk, and Microsoft hands out the key that decrypts "
+    "it each time it starts, so it needs an internet connection to start, "
+    "single-player included. Connect to the internet and click PLAY again.")
+_LICENCE_UNREACHABLE = (
+    r"panicked at [^\n]*license\.rs[^\n]*\n[^\n]*"
+    r"(?:dns error|failed to lookup address|ConnectError|Connect,|"
+    r"timed out|Connection refused|Network is unreachable|"
+    r"error sending request)")
+
+
 # DRM devices, for telling a virtual GPU from a real one (#302).
 DRM_SYSFS = Path("/sys/class/drm")
 
@@ -157,6 +177,7 @@ _DIAG_RULES = [
     # a launch failure and not only a download one. The account is out of
     # Store devices, and where they are given back is not in the message.
     (r"Device group is full", LICENCE_REFUSED),
+    (_LICENCE_UNREACHABLE, LICENCE_UNREACHABLE),
     (r"\bInitialConnection[-_: ]*13(?!\d)",
      "LAN InitialConnection-13 — check that the host firewall allows "
      "Minecraft's inbound RakNet UDP 19132 and, on Windows, that the host "

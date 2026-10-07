@@ -117,6 +117,31 @@ class GameCrashDiagnosisTests(unittest.TestCase):
             "remove a device and try again\n")
         self.assertIn(gamesetup.LICENCE_REFUSED, hits)
 
+    def test_a_licence_fetched_without_a_network_is_named(self):
+        # What xodus-cli printed with the network down (#308): a Store build
+        # cannot be decrypted without the key Microsoft hands out per launch.
+        hits = self._diagnose(
+            "appxmanifest.xml: 73994240 4913\n\n"
+            "thread 'main' (277526) panicked at "
+            "crates/xodus-cli/src/license.rs:51:6:\n"
+            "called `Result::unwrap()` on an `Err` value: Request(reqwest::"
+            "Error { kind: Request, url: \"https://login.live.com/RST2.srf\", "
+            "source: hyper_util::client::legacy::Error(Connect, ConnectError("
+            "\"dns error\", Custom { kind: Uncategorized, error: \"failed to "
+            "lookup address information: Temporary failure in name "
+            "resolution\" })) })\n"
+            "note: run with `RUST_BACKTRACE=1` environment variable to "
+            "display a backtrace\n")
+        self.assertIn(gamesetup.LICENCE_UNREACHABLE, hits)
+        self.assertIn("internet connection", gamesetup.LICENCE_UNREACHABLE)
+
+    def test_other_xodus_panics_are_not_called_offline(self):
+        hits = self._diagnose(
+            "thread 'main' panicked at crates/xodus-cli/src/run.rs:133:58:\n"
+            "called `Result::unwrap()` on an `Err` value: Os { code: 2, "
+            "kind: NotFound, message: \"No such file or directory\" }\n")
+        self.assertNotIn(gamesetup.LICENCE_UNREACHABLE, hits)
+
 
 class OnlineDiagnosisTests(unittest.TestCase):
     def _diagnose(self, log, settings):
