@@ -21,7 +21,8 @@ class ReadyLaunchHarness:
                                lock_fds=(), managed_engine=True,
                                umu_env=None, account=None, on_started=None,
                                extra_settings=None, environ=None,
-                               diagnosis=(), swap_guard=False):
+                               diagnosis=(), swap_guard=False,
+                               signed_out=False, notices=None):
         content = root / "content"
         logs = root / "logs"
         data = root / "data"
@@ -109,6 +110,11 @@ class ReadyLaunchHarness:
                               side_effect=record("restore_frame_limits", [])),
             mock.patch.object(launch, "guard_game_command", side_effect=guard),
             mock.patch.object(launch, "seed_default_servers"),
+            # Nor the player's real worlds: a backup is a copy of them.
+            mock.patch.object(launch.saves, "before_launch",
+                              side_effect=self._before_launch),
+            mock.patch.object(launch.saves, "ran_signed_out",
+                              return_value=signed_out),
             mock.patch.object(launch, "diagnose",
                               return_value=list(diagnosis)),
             mock.patch.object(launch, "_prefix_stably_idle_after_wrapper",
@@ -140,7 +146,12 @@ class ReadyLaunchHarness:
                              "_prefix_stably_idle_after_wrapper")
             }
             return launch._launch_once(lock_fds=lock_fds,
-                                       on_started=on_started)
+                                       on_started=on_started,
+                                       notices=notices)
+
+    def _before_launch(self, _settings):
+        self.options_calls.append("before_launch")
+        return "release", "1.26.52.3"
 
     def _announce_presence(self, *args, **kwargs):
         self.presence_calls.append((args, kwargs))
@@ -1302,7 +1313,8 @@ class LaunchStartedHookTests(ReadyLaunchHarness, unittest.TestCase):
                                   return_value=0) as once:
             lock.return_value.__enter__.return_value = (71, 72)
             self.assertEqual(launch.launch(on_started=hook), 0)
-        once.assert_called_once_with((71, 72), on_started=hook)
+        once.assert_called_once_with((71, 72), on_started=hook,
+                                     notices=None)
 
 
 class AutoInjectionLaunchTests(ReadyLaunchHarness, unittest.TestCase):
@@ -1452,7 +1464,8 @@ class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
     the game really starts from; it is put back only after the game is gone.
     """
 
-    def _play(self, environ=None, swap_guard=False):
+    def _play(self, environ=None, swap_guard=False, signed_out=False,
+              notices=None, account=None):
         self.commands = commands = []
 
         def popen(command, **_kwargs):
@@ -1469,14 +1482,48 @@ class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
                 disarm=lambda _token: True,
                 environ=environ,
                 swap_guard=swap_guard,
+                signed_out=signed_out,
+                notices=notices,
+                account=account,
             )
 
     def test_a_paced_launch_sets_the_limit_aside_between_repair_and_copy(self):
         self.assertEqual(self._play(environ={"BOL_FRAME_RATE": "60"}), 0)
         self.assertEqual(
             self.options_calls,
-            ["restore_truncated", "set_aside_frame_limit", "snapshot", "game",
+            ["restore_truncated", "before_launch", "set_aside_frame_limit",
+             "snapshot", "game",
              "restore_truncated", "patch_options", "restore_frame_limits"])
+
+    def test_the_worlds_are_backed_up_from_the_repaired_untouched_file(self):
+        # After a torn settings file is put back, so the backup is never of
+        # the torn one; before the launcher sets anything aside for the
+        # session, so restoring it never brings back a session's setting.
+        self.assertEqual(self._play(environ={"BOL_FRAME_RATE": "60"}), 0)
+        calls = self.options_calls
+        self.assertLess(calls.index("restore_truncated"),
+                        calls.index("before_launch"))
+        self.assertLess(calls.index("before_launch"),
+                        calls.index("set_aside_frame_limit"))
+
+    def test_a_session_played_signed_out_is_explained_to_the_window(self):
+        notices = []
+        self.assertEqual(self._play(signed_out=True, notices=notices), 0)
+        self.assertEqual(notices, [launch.saves.SIGNED_OUT_NOTICE])
+        self.assertIn(launch.saves.SIGNED_OUT_NOTICE, self._warnings())
+
+    def test_a_signed_in_session_leaves_nothing_to_explain(self):
+        notices = []
+        self.assertEqual(self._play(signed_out=False, notices=notices), 0)
+        self.assertEqual(notices, [])
+
+    def test_playing_with_no_account_linked_is_not_called_signed_out(self):
+        # That is the offline mode the launch already announced, not a
+        # version that failed to sign in.
+        notices = []
+        self.assertEqual(self._play(signed_out=True, notices=notices,
+                                    account={}), 0)
+        self.assertEqual(notices, [])
 
     def test_an_unpaced_launch_writes_no_limit_but_still_puts_one_back(self):
         # Nothing to hand over this time; a value an interrupted session

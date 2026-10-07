@@ -21,7 +21,7 @@ from .auth import (
     xbl_preauth_diagnostic,
     xbl_preauth_error_message,
 )
-from . import discord, presence as xbl_presence, supervision, xodus
+from . import discord, presence as xbl_presence, saves, supervision, xodus
 from .config import CONTENT, DATA, HOME, LOGS, WINEGDK_BUILD_REV
 from .deps import ensure_login_deps
 from .dgc import dgc_warning_message, intel_dgpus_on_legacy_driver
@@ -648,7 +648,7 @@ def _prepare_launch_engine():
     return _prepare_graphics_engine()
 
 
-def _launch_once(lock_fds=(), on_started=None):
+def _launch_once(lock_fds=(), on_started=None, notices=None):
     s = load_settings()
     gd = s.get("game_dir")
     if not gd or not Path(gd, "Minecraft.Windows.exe").exists():
@@ -876,6 +876,16 @@ def _launch_once(lock_fds=(), on_started=None):
     # started yet, so nothing that writes options.txt can be running,
     # whatever wineboot left behind.
     restore_truncated_game_options(prefix_idle=True)
+    # Before anything the game reads is changed for this session: Preview
+    # gets a copy of the stable game's data if it has none of its own, and a
+    # build other than the last one to open this data gets a backup of it
+    # first. A launch never fails over a backup; it says so instead.
+    try:
+        edition, _version = saves.before_launch(s)
+    except Exception as exc:
+        edition = None
+        warn(f"Your worlds and settings could not be backed up before this "
+             f"launch ({type(exc).__name__}: {exc}).")
     if frame_limit:
         _set_aside_game_frame_limit()
     else:
@@ -893,6 +903,10 @@ def _launch_once(lock_fds=(), on_started=None):
     info("Starting Minecraft … your account is already linked; "
          "join your server from the Servers tab.")
     glog = open(LOGS / "minecraft.log", "w")
+    # Everything above that writes a settings file has written it by now, so
+    # what is written after this is the game's.
+    session_started = time.time()
+    signed_out = False
     rc = None
     hits = []
     gpu_marker_token = None
@@ -1045,6 +1059,9 @@ def _launch_once(lock_fds=(), on_started=None):
             prefix_idle = False
         if prefix_idle is None:
             prefix_idle = _prefix_stably_idle_after_wrapper()
+        # Read before the lines below rewrite a settings file themselves.
+        signed_out = bool(tok and game_returned and saves.ran_signed_out(
+            edition, session_started))
         restore_truncated_game_options(prefix_idle=prefix_idle)
         patch_options(prefix_idle=prefix_idle)
         restore_game_frame_limits(prefix_idle=prefix_idle)
@@ -1055,6 +1072,13 @@ def _launch_once(lock_fds=(), on_started=None):
             for old in logs[:-1]:
                 old.unlink(missing_ok=True)
         ok(f"Game closed (exit {rc}).")
+        if signed_out:
+            # "My worlds stayed on the old version": a build that did not
+            # sign in shows the signed-out profile, and nothing else says
+            # where everything went.
+            warn(saves.SIGNED_OUT_NOTICE)
+            if notices is not None:
+                notices.append(saves.SIGNED_OUT_NOTICE)
         hits = diagnose()
     # Diagnose only; never reset or relaunch a GPU process automatically.
     broken = any("prefix broken" in h.lower() for h in hits)
@@ -1090,16 +1114,19 @@ def _launch_once(lock_fds=(), on_started=None):
     return rc
 
 
-def launch(on_started=None):
+def launch(on_started=None, notices=None):
     """Run exactly one guarded launch for each user action.
 
     ``on_started`` is called once the game process exists, before the wait on
     it. A launcher window uses it to get out of the game's way in a session
-    that shows one window at a time.
+    that shows one window at a time. ``notices``, when given, is a list that
+    collects what the session left the player to know, for a window to show
+    rather than leave in the log.
     """
     try:
         with launch_lock() as lock_fds:
-            return _launch_once(lock_fds, on_started=on_started)
+            return _launch_once(lock_fds, on_started=on_started,
+                                notices=notices)
     finally:
         # The session's teardown is over and its locks are released: a stop
         # signal it held for the game ends the process now.

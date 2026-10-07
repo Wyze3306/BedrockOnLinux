@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -43,6 +44,7 @@ from .games import installed_builds, list_editions, list_versions, remove_build
 from .gamesetup import do_setup
 from .inject import run_injector
 from .launch import direct_launch_readiness, launch, single_window_session
+from . import saves
 from .navigation import ControllerNav
 from . import log, supervision
 from .log import BolError, _LEVELS, desktop_notify, warn
@@ -1045,6 +1047,9 @@ class LaunchWorker(QThread):
     close_window = Signal()
     step_aside = Signal()
     come_back = Signal()
+    # What the session left the player to know, said in a dialog rather than
+    # in a log nobody has open when the game closes.
+    session_notice = Signal(str)
 
     def __init__(self, ver):
         super().__init__()
@@ -1062,10 +1067,13 @@ class LaunchWorker(QThread):
                 elif action == "step-aside":
                     self.step_aside.emit()
 
+            notices = []
             try:
-                launch(on_started=on_started)
+                launch(on_started=on_started, notices=notices)
             finally:
                 self.come_back.emit()
+            for notice in notices:
+                self.session_notice.emit(notice)
             self.done.emit("closed")
         except Exception as exc:
             self.come_back.emit()
@@ -2348,6 +2356,8 @@ class MainWindow(QMainWindow):
             return
         if not self._online_sign_in_settled():
             return
+        if not self._preview_data_settled(ver):
+            return
         self._set_busy(True)
         self.set_status("Preparing…")
         self._show_bar_busy()
@@ -2360,6 +2370,7 @@ class MainWindow(QMainWindow):
         w.close_window.connect(self._close_for_game)
         w.step_aside.connect(self._step_aside_for_game)
         w.come_back.connect(self._come_back_from_game)
+        w.session_notice.connect(self._show_session_notice)
         self.ui_state["launch_active"] = True
         if not self._start_worker("play", w):
             # The previous launch thread is still on its way out. Leaving the
@@ -2367,6 +2378,41 @@ class MainWindow(QMainWindow):
             self.ui_state["launch_active"] = False
             self.end_progress()
             self._set_busy(False)
+
+    def _preview_data_settled(self, ver) -> bool:
+        """Ask, the first time, whether Preview starts from the stable game's
+        worlds. False when the player closed the question instead.
+
+        Preview keeps a data folder of its own -- Mojang's choice, so that a
+        world it upgrades never reaches the stable game -- and without this
+        the first Preview launch looked like every world, setting and server
+        had gone. The launch makes the copy; this only records a no.
+        """
+        if ((ver.get("edition") or {}).get("id") != "preview"
+                or not saves.preview_copy_pending()):
+            return True
+        box = self._box(
+            QMessageBox.Question, "Bring your worlds to Preview?",
+            "Minecraft Preview keeps its own worlds, settings and servers, "
+            "apart from Minecraft's, and has none yet.\n\n"
+            "Copy yours into it? Minecraft keeps the originals: a world "
+            "Preview opens is upgraded to a version Minecraft does not have "
+            "yet, so the two never share one.")
+        copy = box.addButton("Copy my worlds", QMessageBox.AcceptRole)
+        empty = box.addButton("Start Preview empty", QMessageBox.DestructiveRole)
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(copy)
+        box.exec()
+        if box.clickedButton() is empty:
+            saves.keep_preview_separate()
+            return True
+        return box.clickedButton() is copy
+
+    def _show_session_notice(self, message):
+        if self.ui_state.get("window_gone"):
+            desktop_notify(message[:400], "Your worlds are safe")
+            return
+        self.info_box("Your worlds are safe", message)
 
     def _close_for_game(self):
         """The player asked for this in Settings ▸ General: the window goes
@@ -2563,6 +2609,7 @@ class MainWindow(QMainWindow):
     def _on_settings_tab(self, index):
         if index == getattr(self, "_versions_tab", -1):
             self.refresh_builds()
+            self.refresh_backups()
 
     def _scrollable(self, inner: QWidget) -> QScrollArea:
         area = QScrollArea()
@@ -2706,9 +2753,18 @@ class MainWindow(QMainWindow):
         "three copies of a game that size. Remove the ones you are finished "
         "with here.\n\n"
         "Your worlds, settings, screenshots, skins and packs are not kept in "
-        "these folders. They belong to the profile, so removing a build never "
-        "removes anything you made — and playing that version again simply "
-        "downloads it back."
+        "these folders. They belong to the profile, and every version of "
+        "Minecraft opens the same ones (Preview keeps a set of its own), so "
+        "removing a build never removes anything you made — and playing that "
+        "version again simply downloads it back."
+    )
+
+    _BACKUPS_EXPLAINER = (
+        "Before a different version opens your worlds, the launcher keeps a "
+        "copy of everything you made in that edition: worlds, settings, the "
+        "Servers tab, skins and packs. A world a newer version has opened is "
+        "upgraded for good, and the copy made before it is the way back. The "
+        "last five are kept."
     )
 
     def _build_versions_tab(self) -> QWidget:
@@ -2734,8 +2790,176 @@ class MainWindow(QMainWindow):
                                   "again."))
         builds.addLayout(actions)
 
+        backups = card_section(v, "Backups of your worlds",
+                               self._BACKUPS_EXPLAINER)
+        self.backups_summary = QLabel("Reading the backups…")
+        self.backups_summary.setObjectName("Muted")
+        self.backups_summary.setWordWrap(True)
+        backups.addWidget(self.backups_summary)
+
+        self.backups_list = QVBoxLayout()
+        self.backups_list.setSpacing(6)
+        backups.addLayout(self.backups_list)
+
+        backup_actions = QHBoxLayout()
+        backup_actions.addWidget(btn(
+            "Copy my worlds to Preview", self._copy_to_preview, kind="ghost",
+            h=30, tip="Give Minecraft Preview a copy of Minecraft's worlds, "
+                      "settings and servers. What Preview has now is backed "
+                      "up first."))
+        backup_actions.addStretch(1)
+        backup_actions.addWidget(btn(
+            "Open folder", self._open_backups, kind="ghost", w=110, h=30,
+            tip=str(saves.BACKUPS)))
+        backups.addLayout(backup_actions)
+
         v.addStretch(1)
         return w
+
+    # ------------------------------------------------------- world backups
+    def refresh_backups(self):
+        if not _alive(getattr(self, "backups_summary", None)):
+            return
+        while self.backups_list.count():
+            item = self.backups_list.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        backups = saves.list_backups()
+        if not backups:
+            self.backups_summary.setText(
+                "No backup yet — one is made the first time a different "
+                "version is about to open your worlds.")
+            return
+        total = sum(backup.get("size") or 0 for backup in backups)
+        self.backups_summary.setText(
+            f"{len(backups)} backup{'s' if len(backups) != 1 else ''}, "
+            f"{self._fmt_size(total)} in total.")
+        for backup in backups:
+            self.backups_list.addWidget(self._backup_row(backup))
+
+    @staticmethod
+    def _backup_title(backup):
+        edition = saves.EDITION_NAMES.get(backup.get("edition"), "Minecraft")
+        reason = backup.get("reason")
+        if reason == "version-change" and backup.get("version"):
+            return f"{edition}, before {backup['version']}"
+        if reason == "before-restore":
+            return f"{edition}, before a restore"
+        if reason == "before-preview-copy":
+            return f"{edition}, before the copy from Minecraft"
+        return edition
+
+    def _backup_notes(self, backup):
+        notes = [time.strftime("%Y-%m-%d %H:%M",
+                               time.localtime(backup.get("created") or 0))]
+        if backup.get("reason") == "version-change" and backup.get("previous"):
+            notes.append(f"saved by {backup['previous']}")
+        worlds = backup.get("worlds") or 0
+        notes.append(f"{worlds} world{'s' if worlds != 1 else ''}")
+        notes.append(self._fmt_size(backup.get("size") or 0))
+        return "  ·  ".join(notes)
+
+    def _backup_row(self, backup):
+        row = QFrame()
+        row.setObjectName("CardFlat")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        title = QLabel(self._backup_title(backup))
+        title.setStyleSheet("font-weight:600;")
+        text.addWidget(title)
+        notes = QLabel(self._backup_notes(backup))
+        notes.setObjectName("Muted")
+        notes.setStyleSheet("font-size:11px;")
+        notes.setWordWrap(True)
+        text.addWidget(notes)
+        layout.addLayout(text, 1)
+
+        layout.addWidget(btn("Open", lambda: self._open_folder(backup["path"]),
+                             kind="ghost-small", w=64, h=28,
+                             tip=str(backup["path"])))
+        layout.addWidget(btn("Restore", lambda: self._restore_backup(backup),
+                             kind="ghost-small", w=76, h=28,
+                             tip="Put these worlds, settings and servers "
+                                 "back. What is there now is backed up "
+                                 "first."))
+        return row
+
+    def _open_folder(self, path):
+        subprocess.Popen(["xdg-open", str(path)],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _open_backups(self):
+        saves.BACKUPS.mkdir(parents=True, exist_ok=True)
+        self._open_folder(saves.BACKUPS)
+
+    def _saved_data_blocked(self, action) -> bool:
+        if self.ui_state.get("launch_active") or _mc_running():
+            self.warn_box("Minecraft is running",
+                          f"Close the game before you {action}.")
+            return True
+        return False
+
+    def _restore_backup(self, backup):
+        if self._saved_data_blocked("restore a backup"):
+            return
+        edition = saves.EDITION_NAMES.get(backup.get("edition"), "Minecraft")
+        box = self._box(
+            QMessageBox.Question, f"Restore {self._backup_title(backup)}?",
+            f"Your {edition} worlds, settings and servers go back to how "
+            f"they were on {self._backup_notes(backup).split('  ·  ')[0]}."
+            "\n\nWhat is there now is backed up first, so this can be "
+            "undone from this list.")
+        restore = box.addButton("Restore", QMessageBox.AcceptRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not restore:
+            return
+        self.backups_summary.setText("Restoring…")
+        self._run_saved_data_job(
+            "backup-restore", saves.restore_backup, backup["path"],
+            done=f"{edition} worlds and settings restored.",
+            title="Restore backup")
+
+    def _copy_to_preview(self):
+        if self._saved_data_blocked("copy your worlds"):
+            return
+        if not self.question_box(
+                "Copy your worlds to Preview?",
+                "Minecraft Preview gets a copy of Minecraft's worlds, "
+                "settings and servers in place of its own. What Preview has "
+                "now is backed up first, and Minecraft keeps its originals."):
+            return
+        self.backups_summary.setText("Copying into Preview…")
+        self._run_saved_data_job(
+            "preview-copy", saves.copy_to_preview_when_idle,
+            done="Minecraft Preview now has a copy of your worlds.",
+            title="Copy to Preview")
+
+    def _run_saved_data_job(self, slot, func, *args, done, title):
+        worker = Worker(func, *args)
+
+        def finished(_result):
+            if not _alive(self):
+                return
+            self.set_status(done, self.theme.green)
+            self.refresh_backups()
+
+        def failed(message):
+            if not _alive(self):
+                return
+            self.refresh_backups()
+            self.error_box(title, message[:2000])
+
+        worker.done.connect(finished)
+        worker.failed.connect(failed)
+        if not self._start_worker(slot, worker):
+            self.refresh_backups()
 
     def refresh_builds(self):
         """Re-read what is on disk, off the UI thread.

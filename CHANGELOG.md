@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added
+
+- **Your worlds, settings and servers follow you from one Minecraft version
+  to the next, and can be had back.** Every Minecraft build already opened the
+  same data, but nothing showed it, and a version change could leave it looking
+  lost. Three things are fixed:
+  - **Automatic backups.** Before a version other than the last one opens your
+    data, PLAY copies everything you made in that edition (worlds, settings,
+    the Servers tab, skins and packs) into a backup. The copy matters: a world
+    a newer version has opened is upgraded for good, and one an older version
+    opens may not load. The last five are kept, and **Settings ▸ Versions ▸
+    Backups of your worlds** restores any of them. A restore first backs up
+    what it replaces, so it can be undone.
+  - **Preview starts from your worlds.** Minecraft Preview keeps a data folder
+    of its own: Mojang separates it on purpose, so that a world it upgrades
+    never reaches the stable game. It used to open empty. The first Preview
+    launch now offers to copy your Minecraft worlds, settings and servers into
+    it. It is a copy, and the originals stay with Minecraft. The same section
+    can make the copy later.
+  - **A session played signed out is explained.** A Minecraft version that
+    does not sign in opens the signed-out profile, which has none of your
+    worlds, settings or servers, and that reads as "everything stayed on the
+    old version". When the game ran that way while your account's data was
+    there to be missed, the launcher says so once the game closes: nothing was
+    lost, and it all comes back once the game signs in.
+
 ### Fixed
 
 - **`bedrock-on-linux optiscaler` works from the portable .pyz.** The .pyz

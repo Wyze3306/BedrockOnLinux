@@ -51,6 +51,9 @@ def headless_window(store_signed_in=False, **settings):
             mock.patch.object(gui.MainWindow, "refresh_versions", lambda _s: None), \
             mock.patch.object(gui.MainWindow, "check_for_update_async", lambda _s: None), \
             mock.patch.object(gui, "installed_builds", return_value=[]), \
+            mock.patch.object(gui.saves, "list_backups", return_value=[]), \
+            mock.patch.object(gui.saves, "preview_copy_pending",
+                              return_value=False), \
             mock.patch.object(gui, "mc_releases", return_value=[]), \
             mock.patch.object(gui, "gh_releases", return_value=[]), \
             mock.patch.object(xodus, "signed_in", return_value=store_signed_in):
