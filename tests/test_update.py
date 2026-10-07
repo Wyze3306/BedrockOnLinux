@@ -105,5 +105,145 @@ class FlatpakUpdateMessageTests(unittest.TestCase):
         self.assertNotIn("flatpak", msg)
 
 
+class _Run:
+    """subprocess.run for the package database: owner by command."""
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.calls = []
+
+    def __call__(self, argv, **_kwargs):
+        self.calls.append(argv)
+        code, out = self.answers.get(argv[0], (1, ""))
+        return mock.Mock(returncode=code, stdout=out)
+
+
+class PackageFormatTests(unittest.TestCase):
+    """Which installs the launcher may update through a package manager."""
+
+    def _format(self, answers):
+        with mock.patch.object(update, "is_flatpak", return_value=False):
+            return update.package_format(runner=_Run(answers))
+
+    def test_the_release_deb_is_recognised_by_dpkg(self):
+        self.assertEqual(self._format({"dpkg-query": (
+            0, "bedrock-on-linux: /usr/lib/bedrock-on-linux/bol/__init__.py\n")
+        }), "deb")
+
+    def test_the_release_rpm_is_recognised_by_rpm(self):
+        self.assertEqual(self._format({"rpm": (0, "bedrock-on-linux\n")}),
+                         "rpm")
+
+    def test_a_package_built_by_someone_else_is_left_to_them(self):
+        self.assertIsNone(self._format({"dpkg-query": (
+            0, "python3-bedrock: /usr/lib/python3/dist-packages/bol/x.py\n")}))
+        self.assertIsNone(self._format({}))
+
+    def test_never_inside_a_flatpak(self):
+        with mock.patch.object(update, "is_flatpak", return_value=True):
+            self.assertIsNone(update.package_format(runner=_Run(
+                {"dpkg-query": (0, "bedrock-on-linux: /x\n")})))
+
+
+_DEB = b"!<arch>\n a release package"
+_SUMS = ("%s  bedrock-on-linux_2.2.9_amd64.deb\n"
+         "0000000000000000000000000000000000000000000000000000000000000000"
+         "  BedrockOnLinux-2.2.9-x86_64.flatpak\n")
+
+
+class PackageUpdateTests(unittest.TestCase):
+    """A .deb or .rpm install updates itself through its package manager
+    (#294), with the file the release's checksum list names."""
+
+    def setUp(self):
+        import hashlib
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.cache = Path(holder.name)
+        self.release = dict(_RELEASE, assets=_RELEASE["assets"] + [
+            {"name": "BedrockOnLinux-2.2.9-SHA256SUMS",
+             "browser_download_url": "https://example.invalid/sums"}])
+        self.sums = _SUMS % hashlib.sha256(_DEB).hexdigest()
+
+    def _update(self, kind="deb", served=_DEB, installed=0, tools=None):
+        tools = {"pkexec", "apt-get"} if tools is None else tools
+
+        def fetch(url, dest, label=None, progress=None):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if url.endswith("sums"):
+                dest.write_text(self.sums)
+            else:
+                dest.write_bytes(served)
+
+        with mock.patch.object(update, "CACHE", self.cache), \
+                mock.patch.object(update, "update_kind", return_value=kind), \
+                mock.patch.object(update, "download", side_effect=fetch), \
+                mock.patch.object(update.shutil, "which",
+                                  side_effect=lambda name: (
+                                      f"/usr/bin/{name}" if name in tools
+                                      else None)), \
+                mock.patch.object(update.subprocess, "run",
+                                  return_value=mock.Mock(
+                                      returncode=installed, stdout="",
+                                      stderr="E: broken")) as run:
+            result = update.self_update(self.release)
+        return result, run
+
+    def test_the_checked_package_is_installed_with_apt(self):
+        (state, msg), run = self._update()
+        self.assertEqual(state, "ok")
+        self.assertIn("restart", msg)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:4], ["pkexec", "apt-get", "install", "-y"])
+        self.assertEqual(Path(argv[4]).name, "bedrock-on-linux_2.2.9_amd64.deb")
+        # Installed, so not kept; and the checksum list is not kept either.
+        self.assertEqual(list((self.cache / "updates").iterdir()), [])
+
+    def test_a_package_that_does_not_match_its_checksum_is_not_installed(self):
+        (state, msg), run = self._update(served=b"something else")
+        self.assertEqual(state, "error")
+        self.assertIn("checksum", msg)
+        run.assert_not_called()
+        self.assertEqual(list((self.cache / "updates").iterdir()), [])
+
+    def test_a_cancelled_password_prompt_says_how_to_install_it_by_hand(self):
+        (state, msg), _ = self._update(installed=126)
+        self.assertEqual(state, "error")
+        self.assertIn("cancelled", msg)
+        self.assertIn("sudo apt install", msg)
+        self.assertTrue((self.cache / "updates" /
+                         "bedrock-on-linux_2.2.9_amd64.deb").is_file())
+
+    def test_a_package_manager_failure_is_reported_with_its_words(self):
+        (state, msg), _ = self._update(installed=100)
+        self.assertEqual(state, "error")
+        self.assertIn("E: broken", msg)
+
+    def test_without_pkexec_the_downloaded_package_is_pointed_at(self):
+        (state, msg), run = self._update(tools={"apt-get"})
+        self.assertEqual(state, "system")
+        self.assertIn("sudo apt install", msg)
+        run.assert_not_called()
+
+    def test_a_release_without_the_package_sends_to_the_page(self):
+        self.release["assets"] = [a for a in self.release["assets"]
+                                  if not a["name"].endswith(".deb")]
+        (state, msg), _ = self._update()
+        self.assertEqual(state, "error")
+        self.assertIn(self.release["url"], msg)
+
+    def test_an_rpm_goes_to_dnf(self):
+        self.release["assets"].append(
+            {"name": "bedrock-on-linux-2.2.9-1.x86_64.rpm",
+             "browser_download_url": "https://example.invalid/rpm"})
+        self.sums += "%s  bedrock-on-linux-2.2.9-1.x86_64.rpm\n" % (
+            __import__("hashlib").sha256(_DEB).hexdigest())
+        (state, _msg), run = self._update(kind="rpm",
+                                          tools={"pkexec", "dnf"})
+        self.assertEqual(state, "ok")
+        self.assertEqual(run.call_args.args[0][:4],
+                         ["pkexec", "dnf", "install", "-y"])
+
+
 if __name__ == "__main__":
     unittest.main()

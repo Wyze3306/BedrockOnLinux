@@ -1,16 +1,22 @@
 """bol.update — self-update of the launcher."""
 # SPDX-License-Identifier: MIT
 
+import hashlib
 import os
 import re
+import shutil
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
 
-from .config import SELF_REPO, VERSION
+from .config import CACHE, SELF_REPO, VERSION
 from .log import BolError
 from .util import asset_url, download, gh_latest
 from .xdg_migration import is_flatpak
+
+# The name the release's .deb and .rpm install the launcher under.
+PACKAGE = "bedrock-on-linux"
 
 def _ver_tuple(s):
     """Parse 'v1.2.3' / '1.2.3' into a comparable tuple; non-numeric parts → 0."""
@@ -93,7 +99,7 @@ def _flatpak_update_message(rel, installation):
 
 def update_kind():
     """How the launcher is installed — decides how (and whether) it can
-    replace itself: 'appimage' | 'git' | 'system' | 'file'."""
+    replace itself: 'appimage' | 'git' | 'deb' | 'rpm' | 'system' | 'file'."""
     if os.environ.get("APPIMAGE"):
         return "appimage"
     p = _self_path()
@@ -108,10 +114,140 @@ def update_kind():
     # Under `python3 -m bol` it is the package's own __main__.py.
     if (package.parent.name in ("site-packages", "dist-packages")
             or p.parent == package):
-        return "system"
+        return package_format() or "system"
     if str(p).startswith(("/usr/", "/app/", "/bin/")) or not os.access(p, os.W_OK):
-        return "system"                    # packaged / read-only install
+        # Packaged or read-only. The release's own .deb and .rpm can be
+        # updated from here, through the package manager that installed
+        # them (#294); anything else is left to whoever packaged it.
+        return package_format() or "system"
     return "file"                          # a plain user-writable script
+
+
+def package_format(runner=None):
+    """'deb' or 'rpm' when the release's package installed this launcher.
+
+    Asked of the package database rather than guessed from the path: a
+    distribution's own build lives under /usr too, and is not ours to
+    replace. Never inside a Flatpak, whose /usr is the runtime's.
+    """
+    if is_flatpak():
+        return None
+    runner = runner or subprocess.run
+    target = str(_package_dir() / "__init__.py")
+    for kind, argv in (("deb", ["dpkg-query", "-S", target]),
+                       ("rpm", ["rpm", "-qf", "--qf", "%{NAME}\\n", target])):
+        if runner is subprocess.run and not shutil.which(argv[0]):
+            continue
+        try:
+            result = runner(argv, capture_output=True, text=True,
+                            errors="replace", timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode:
+            continue
+        owner = (result.stdout or "").strip().splitlines()
+        owner = owner[0].split(":", 1)[0].strip() if owner else ""
+        if owner == PACKAGE:
+            return kind
+    return None
+
+
+def _expected_sha256(rel, name, progress=None):
+    """The SHA-256 the release's checksum list gives `name`, or None."""
+    url, sums_name, _ = asset_url(rel, lambda n: n.endswith("-SHA256SUMS"))
+    if not url:
+        return None
+    sums = CACHE / "updates" / sums_name
+    sums.unlink(missing_ok=True)
+    download(url, sums, label=sums_name, progress=progress)
+    try:
+        listing = sums.read_text(errors="replace")
+    finally:
+        sums.unlink(missing_ok=True)
+    for line in listing.splitlines():
+        digest, _, listed = line.strip().partition("  ")
+        if listed.lstrip("*") == name and re.fullmatch(r"[0-9a-f]{64}",
+                                                        digest.lower()):
+            return digest.lower()
+    return None
+
+
+def _installer(kind, package):
+    """The command that installs `package` as root, or None."""
+    if not shutil.which("pkexec"):
+        return None
+    if kind == "deb":
+        if shutil.which("apt-get"):
+            return ["pkexec", "apt-get", "install", "-y", str(package)]
+        return ["pkexec", "dpkg", "-i", str(package)]
+    if shutil.which("dnf"):
+        return ["pkexec", "dnf", "install", "-y", str(package)]
+    if shutil.which("zypper"):
+        # The release's .rpm is not signed; zypper refuses that unless told.
+        return ["pkexec", "zypper", "--non-interactive", "install",
+                "--allow-unsigned-rpm", str(package)]
+    return ["pkexec", "rpm", "-U", str(package)]
+
+
+def _manual_command(kind, package):
+    if kind == "deb":
+        return f"sudo apt install {package}"
+    return f"sudo dnf install {package}"
+
+
+def _package_update(rel, kind, progress=None):
+    """Download the release's `kind` package, check it, and install it.
+
+    The password prompt is the system's (pkexec), as for any package; the
+    file it installs is the one the release's checksum list names.
+    """
+    suffix = "." + kind
+    url, name, _ = asset_url(rel, lambda n: n.lower().endswith(suffix))
+    if not url:
+        return ("error", f"No {suffix} in release v{rel['version']} to update "
+                         f"from — download it from {rel['url']}")
+    expected = _expected_sha256(rel, name, progress)
+    if not expected:
+        return ("error", f"Release v{rel['version']} lists no checksum for "
+                         f"{name}, so it was not installed — download it "
+                         f"from {rel['url']}")
+    package = CACHE / "updates" / name
+    if package.is_file():
+        package.unlink()
+    download(url, package, label=name, progress=progress)
+    digest = hashlib.sha256()
+    with open(package, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != expected:
+        package.unlink(missing_ok=True)
+        return ("error", f"The downloaded {name} does not match the "
+                         "release's checksum, so it was not installed.")
+    argv = _installer(kind, package)
+    if argv is None:
+        return ("system", f"Downloaded v{rel['version']} to {package}. "
+                          f"Install it with: {_manual_command(kind, package)}")
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True,
+                                errors="replace", timeout=1800)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return ("error", f"Could not start the package manager ({exc}). "
+                         f"Install {package} with: "
+                         f"{_manual_command(kind, package)}")
+    if result.returncode in (126, 127) and argv[0] == "pkexec":
+        # pkexec: the prompt was dismissed, or no agent could show one.
+        return ("error", "The update was downloaded but not installed: the "
+                         "password prompt was cancelled. Install it with: "
+                         f"{_manual_command(kind, package)}")
+    if result.returncode:
+        said = [line for line in (result.stderr or result.stdout or "")
+                .splitlines() if line.strip()]
+        return ("error", f"The package manager could not install v"
+                         f"{rel['version']} (exit {result.returncode}"
+                         + (f": {said[-1].strip()}" if said else "")
+                         + f"). The package is in {package}.")
+    package.unlink(missing_ok=True)
+    return ("ok", f"Updated to v{rel['version']} — restart to use it.")
 
 
 def self_update(rel, progress=None):
@@ -122,6 +258,8 @@ def self_update(rel, progress=None):
     try:
         if kind == "git":
             return ("git", "This is a git checkout — run `git pull` to update.")
+        if kind in ("deb", "rpm"):
+            return _package_update(rel, kind, progress)
         if kind == "system":
             if is_flatpak():
                 return ("system", _flatpak_update_message(

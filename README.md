@@ -55,8 +55,11 @@ Download the file you want from the
 | Flatpak | Atomic systems such as Bazzite | `flatpak install --user ./BedrockOnLinux-*-x86_64.flatpak` |
 | Nix | NixOS, or any Linux with Nix installed | `nix run github:Wyze3306/BedrockOnLinux` |
 
-The launcher tells you when a new version is out. The AppImage updates itself;
-for the others, download the new file and install it with the same command.
+The launcher tells you when a new version is out. The AppImage updates itself.
+The `.deb` and `.rpm` update themselves too, through apt or dnf: **Update now**
+downloads the new package, checks it against the release's checksums, and
+asks for your password to install it. For the Flatpak, download the new file
+and install it with the same command.
 Keep `--user` for the Flatpak: without it, Flatpak installs a second,
 system-wide copy, and the menu keeps starting the per-user one at the old
 version. `flatpak uninstall --system io.github.wyze3306.BedrockOnLinux` removes

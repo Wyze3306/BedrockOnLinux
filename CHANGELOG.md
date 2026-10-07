@@ -4,6 +4,18 @@
 
 ### Added
 
+- **The `.deb` and `.rpm` update themselves**
+  ([#294](https://github.com/Wyze3306/BedrockOnLinux/issues/294)). **Update
+  now**, and `bedrock-on-linux update`, used to send a package install to the
+  releases page to download the new file by hand. When the release's own
+  package installed the launcher, which the package database says, the
+  launcher now downloads the new `.deb` or `.rpm` and checks it against the
+  release's SHA-256 list. It then installs it with `apt-get` or `dnf` (zypper
+  and plain `rpm` too) behind the system's password prompt, and offers to
+  restart. A cancelled prompt leaves the package downloaded and says how to
+  install it by hand. A package someone else built, such as a distribution's,
+  is still left to its package manager.
+
 - **A BetterRTX preset manager**
   ([#166](https://github.com/Wyze3306/BedrockOnLinux/issues/166)).
   **Settings ▸ Tools ▸ BetterRTX** and `bedrock-on-linux betterrtx` list the
