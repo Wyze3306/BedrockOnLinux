@@ -3690,8 +3690,11 @@ class MainWindow(QMainWindow):
         try:
             if os.environ.get("APPIMAGE"):
                 os.execv(os.environ["APPIMAGE"], [os.environ["APPIMAGE"], "gui"])
+            # Only `python3 -m bol` comes back with -m: a .pyz's __main__
+            # has a spec too, named "__main__", and a new interpreter could
+            # not find bol outside the archive.
             main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
-            if main_spec and main_spec.name:
+            if main_spec and main_spec.name == "bol.__main__":
                 os.execv(sys.executable, [sys.executable, "-m", "bol", "gui"])
             tgt = os.path.realpath(sys.argv[0] or __file__)
             os.execv(sys.executable, [sys.executable, tgt, "gui"])
