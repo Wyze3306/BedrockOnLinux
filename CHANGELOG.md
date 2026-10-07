@@ -61,6 +61,19 @@
 
 ### Fixed
 
+- **Minimizing Minecraft with *Keep the mouse inside the window* on clears
+  the screen** ([#189](https://github.com/Wyze3306/BedrockOnLinux/issues/189)).
+  That setting runs the game in a Wine virtual desktop as large as the
+  screen, and the game's title bar is one Wine draws inside it. Its minimize
+  button shrank the game to a small bar in the desktop's corner, and the
+  desktop stayed over everything with the game's last frame on it. A small
+  helper run inside Wine (`src/desktop-bridge.c`) now tells the launcher when
+  the game is minimized. The launcher then minimizes the desktop's window,
+  as the window manager's own button would. When that window is back on
+  screen, from the taskbar like any other, the game is restored in it.
+  Checked with the game on a virtual display: the screen is clear while the
+  game is minimized, and the game comes back maximized and drawing.
+
 - **A Microsoft sign-in window that could only stay blank is explained
   instead** ([#273](https://github.com/Wyze3306/BedrockOnLinux/issues/273)).
   WebKitGTK draws every page through EGL, with or without a GPU, and the

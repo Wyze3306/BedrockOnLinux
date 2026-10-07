@@ -353,6 +353,11 @@ def _load_xlib():
             ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
         xlib.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
         xlib.XFree.argtypes = [ctypes.c_void_p]
+        xlib.XDefaultScreen.restype = ctypes.c_int
+        xlib.XDefaultScreen.argtypes = [ctypes.c_void_p]
+        xlib.XIconifyWindow.restype = ctypes.c_int
+        xlib.XIconifyWindow.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int]
         return xlib
     except (OSError, AttributeError):
         return None
@@ -431,6 +436,12 @@ class _XlibWindows:
             ctypes.c_ulong(_XA_CARDINAL), 32, _PROP_MODE_REPLACE,
             ctypes.cast(payload, ctypes.c_void_p), 1)
         return True
+
+    def iconify(self, window):
+        """Ask the window manager to minimize `window` (ICCCM 4.1.4)."""
+        return bool(self._lib.XIconifyWindow(
+            self._display, ctypes.c_ulong(window),
+            self._lib.XDefaultScreen(self._display)))
 
     def flush(self):
         self._lib.XSync(self._display, False)
@@ -565,3 +576,50 @@ def find_presentable_window(wm_class, display=None):
         pass
     return False
 
+
+def _presentable_toplevels(windows, wanted, depth=_WINDOW_SEARCH_DEPTH,
+                           budget=_WINDOW_SEARCH_BUDGET):
+    """The on-screen `wanted` toplevels, looking inside WM frames only."""
+    found = []
+    pending = [(windows.root(), 0)]
+    while pending and budget > 0:
+        window, level = pending.pop(0)
+        budget -= 1
+        names = ()
+        if level:
+            names = tuple(str(name).lower()
+                          for name in windows.wm_classes(window))
+            if wanted in names:
+                if windows.is_presentable(window):
+                    found.append(window)
+                continue
+        if not names and level < depth:
+            pending.extend(
+                (child, level + 1) for child in windows.children(window))
+    return found
+
+
+def iconify_windows(wm_class, display=None, windows=None):
+    """Minimize every on-screen `wm_class` toplevel; how many were asked.
+
+    Zero, never an error, when the display or libX11 is not there.
+    """
+    wanted = str(wm_class or "").strip().lower()
+    if not wanted:
+        return 0
+    if windows is not None:
+        found = _presentable_toplevels(windows, wanted)
+        asked = sum(1 for window in found if windows.iconify(window))
+        windows.flush()
+        return asked
+    target = str(display if display is not None
+                 else os.environ.get("DISPLAY", "")).strip()
+    if not target:
+        return 0
+    try:
+        with _x_windows(target) as opened:
+            if opened is None:
+                return 0
+            return iconify_windows(wanted, windows=opened)
+    except Exception:
+        return 0

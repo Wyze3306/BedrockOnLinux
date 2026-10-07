@@ -564,6 +564,10 @@ class FakeWindows:
         self.properties[(window, name)] = value
         return True
 
+    def iconify(self, window):
+        self.iconified = getattr(self, "iconified", []) + [window]
+        return True
+
     def flush(self):
         self.flushes += 1
 
@@ -754,6 +758,30 @@ class XlibLoadTests(unittest.TestCase):
         # Xlib's default handler calls exit(); windows belonging to another
         # client can disappear mid-walk, which must never take us down.
         self.assertEqual(x11._ignore_x_error(None, None), 0)
+
+
+class IconifyTests(unittest.TestCase):
+    """The Wine virtual desktop is minimized with the game inside it (#189)."""
+
+    def test_the_desktop_inside_its_frame_is_minimized(self):
+        windows = FakeWindows({1: (2, 3), 2: (5,)},
+                              {5: ("explorer.exe", "Explorer.exe"),
+                               3: (GAME_CLASS,)})
+        self.assertEqual(x11.iconify_windows("explorer.exe", windows=windows),
+                         1)
+        self.assertEqual(windows.iconified, [5])
+        self.assertEqual(windows.flushes, 1)
+
+    def test_a_window_already_off_screen_is_left_alone(self):
+        windows = FakeWindows({1: (5,)}, {5: ("explorer.exe",)}, hidden=(5,))
+        self.assertEqual(x11.iconify_windows("explorer.exe", windows=windows),
+                         0)
+        self.assertFalse(hasattr(windows, "iconified"))
+
+    def test_no_display_is_nothing_to_minimize(self):
+        with mock.patch.dict(x11.os.environ, {"DISPLAY": ""}):
+            self.assertEqual(x11.iconify_windows("explorer.exe"), 0)
+        self.assertEqual(x11.iconify_windows(""), 0)
 
 
 if __name__ == "__main__":

@@ -20,18 +20,15 @@ already resized, is not touched. BOL_FULLSCREEN_NUDGE=0 turns it off.
 # SPDX-License-Identifier: MIT
 
 import os
-import pkgutil
 import subprocess
-import tempfile
 import threading
 import time
-from pathlib import Path
 
-from .config import CACHE, LOGS
+from . import winehelper
+from .config import LOGS
 from .inject import _menu_reached
 from .perfcheck import find_options_file, read_game_options
 from .prefix import _mc_running, active_prefix
-from .proton import proton_path
 from .util import env_flag
 
 EXE = "fullscreen-nudge.exe"
@@ -57,42 +54,14 @@ def _log(message):
         log.write(f"{time.strftime('%F %T')} {message}\n")
 
 
-def _extract():
-    blob = pkgutil.get_data("bol", EXE)
-    if not blob:
-        return None
-    CACHE.mkdir(parents=True, exist_ok=True)
-    target = CACHE / EXE
-    try:
-        if target.is_file() and target.read_bytes() == blob:
-            return target
-    except OSError:
-        pass
-    fd, name = tempfile.mkstemp(prefix=".nudge-", suffix=".tmp", dir=CACHE)
-    staged = Path(name)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(blob)
-        os.replace(staged, target)
-    finally:
-        staged.unlink(missing_ok=True)
-    return target
-
-
 def nudge():
     """Run the helper in the game's prefix; its exit code, or None."""
-    engine = proton_path()
-    helper = _extract()
-    if not engine or helper is None:
+    prepared = winehelper.command(EXE)
+    if prepared is None:
         return None
-    wine = Path(engine) / "files" / "bin" / "wine"
-    if not wine.exists():
-        return None
-    env = dict(os.environ, WINEPREFIX=str(active_prefix()),
-               WINEDEBUG="-all")
+    argv, env = prepared
     try:
-        result = subprocess.run([str(wine), str(helper)], env=env,
-                                capture_output=True, text=True,
+        result = subprocess.run(argv, env=env, capture_output=True, text=True,
                                 errors="replace", timeout=60)
     except (OSError, subprocess.SubprocessError) as exc:
         _log(f"could not run the helper: {exc}")

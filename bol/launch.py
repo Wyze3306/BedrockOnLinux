@@ -27,6 +27,7 @@ from . import (
     presence as xbl_presence,
     saves,
     supervision,
+    virtual_desktop,
     xodus,
 )
 from .config import CONTENT, DATA, HOME, LOGS, WINEGDK_BUILD_REV
@@ -1041,6 +1042,15 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         except Exception as nudge_error:
             warn("The fullscreen resize watcher could not be started (%s)."
                  % type(nudge_error).__name__)
+        # In Wine's virtual desktop, minimizing the game leaves the desktop
+        # on screen unless the launcher minimizes it too (#189). Gamescope
+        # runs the game on an X server of its own, out of this one's reach.
+        try:
+            virtual_desktop.start(
+                s, display=None if use_gamescope else env.get("DISPLAY"))
+        except Exception as bridge_error:
+            warn("The virtual desktop bridge could not be started (%s)."
+                 % type(bridge_error).__name__)
         started = time.time()
         # Say on Discord what is being played, for as long as it is played:
         # the launcher is found by word of mouth, and this is it saying its

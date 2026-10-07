@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from bol import fullscreen_fix
+from bol import fullscreen_fix, winehelper
 
 _OPTIONS = ("drive_c/users/steamuser/AppData/Roaming/Minecraft Bedrock/Users/"
             "1/games/com.mojang/minecraftpe/options.txt")
@@ -89,11 +89,11 @@ class NudgeTests(unittest.TestCase):
             engine = Path(td) / "engine"
             (engine / "files" / "bin").mkdir(parents=True)
             (engine / "files" / "bin" / "wine").write_text("")
-            with mock.patch.object(fullscreen_fix, "proton_path",
+            with mock.patch.object(winehelper, "proton_path",
                                    return_value=engine), \
-                    mock.patch.object(fullscreen_fix, "CACHE", Path(td)), \
+                    mock.patch.object(winehelper, "CACHE", Path(td)), \
                     mock.patch.object(fullscreen_fix, "LOGS", Path(td)), \
-                    mock.patch.object(fullscreen_fix, "active_prefix",
+                    mock.patch.object(winehelper, "active_prefix",
                                       return_value=Path("/pfx")), \
                     mock.patch.object(
                         fullscreen_fix.subprocess, "run",
@@ -112,7 +112,7 @@ class NudgeTests(unittest.TestCase):
         self.assertEqual(helper.read_bytes()[:2], b"MZ")
 
     def test_no_engine_means_nothing_to_run(self):
-        with mock.patch.object(fullscreen_fix, "proton_path",
+        with mock.patch.object(winehelper, "proton_path",
                                return_value=None):
             self.assertIsNone(fullscreen_fix.nudge())
 
