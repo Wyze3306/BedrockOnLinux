@@ -644,6 +644,26 @@ def _configure_graphics_cache(env, managed_engine):
     env["DXVK_SHADER_CACHE_PATH"] = str(cache)
 
 
+def _collect_xcurl_log(game_dir):
+    """Move the session's XCurl request log to where the other logs are.
+
+    With Advanced diagnostics on, the XCurl shim writes one line per HTTP
+    request the game makes -- curl's result, the HTTP status, the URL, and
+    the bodies of the social and Realms answers -- into xcurl.log beside the
+    DLL, in the game's folder: where nobody looks for a log, and where it
+    grows by every session. It is what tells an online feature that fails
+    with "check your internet connection" apart from one the service
+    refused (the Realms Hub's screenshot upload, #163; greyed-out Realms,
+    #313). Each session's now lands in the logs folder instead.
+    """
+    source = Path(game_dir) / "xcurl.log"
+    try:
+        if source.is_file():
+            source.replace(LOGS / "xcurl.log")
+    except OSError as exc:
+        warn(f"Could not move the XCurl request log ({exc}).")
+
+
 def _clear_previous_proton_logs():
     """Keep post-mortem diagnosis scoped to the launch about to start."""
     for path in (LOGS / "proton.log", *LOGS.glob("steam-*.log")):
@@ -1128,6 +1148,8 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
             logs[-1].replace(LOGS / "proton.log")
             for old in logs[:-1]:
                 old.unlink(missing_ok=True)
+        if env.get("XCURL_LOG") == "1":
+            _collect_xcurl_log(Path(gd))
         ok(f"Game closed (exit {rc}).")
         if signed_out:
             # "My worlds stayed on the old version": a build that did not

@@ -61,6 +61,18 @@
 
 ### Fixed
 
+- **The XCurl request log lands in the logs folder.** With *Advanced
+  diagnostics* on, the XCurl shim records one line per HTTP request the game
+  makes: curl's result, the HTTP status and the URL, plus the answers of the
+  social and Realms services. It wrote them into the game's folder, where
+  nobody looks for a log and where the file grew with every session. Each
+  session's `xcurl.log` now moves to the logs folder when the game closes, next
+  to `minecraft.log`. That is the file that tells a Realms Hub upload which
+  "checks the internet connection"
+  ([#163](https://github.com/Wyze3306/BedrockOnLinux/issues/163)) or greyed-out
+  Realms ([#313](https://github.com/Wyze3306/BedrockOnLinux/issues/313)) apart
+  from a request the service refused.
+
 - **Started in fullscreen, Minecraft is no longer stretched and the mouse
   lines up** ([#283](https://github.com/Wyze3306/BedrockOnLinux/issues/283)).
   The game shows its window maximized, creates its frame at that window's

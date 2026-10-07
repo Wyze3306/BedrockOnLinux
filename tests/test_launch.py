@@ -1749,3 +1749,30 @@ class GraphicsCardLaunchTests(unittest.TestCase):
                 mock.patch.object(launch, "warn") as warned:
             self.assertIsNone(launch._configure_gpu({}, {}))
         self.assertIn("default", warned.call_args.args[0])
+
+
+class XcurlLogTests(ReadyLaunchHarness, unittest.TestCase):
+    """The XCurl request log ends up beside the other logs (#163, #313)."""
+
+    def _play(self, diagnostics):
+        def popen(command, **kwargs):
+            # The shim writes it beside XCurl.dll, in the game's folder.
+            (Path(kwargs["cwd"]) / "xcurl.log").write_text("DONE rc=0\n")
+            proc = mock.Mock()
+            proc.wait.return_value = 0
+            return proc
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._exercise_ready_launch(
+                root, popen, arm=lambda: "owned-token",
+                disarm=lambda _token: True,
+                extra_settings={"diagnostics": diagnostics})
+            return ((root / "logs" / "xcurl.log").is_file(),
+                    (root / "content" / "xcurl.log").is_file())
+
+    def test_a_diagnostics_session_moves_it_to_the_logs_folder(self):
+        self.assertEqual(self._play(diagnostics=True), (True, False))
+
+    def test_an_ordinary_session_leaves_the_game_folder_alone(self):
+        self.assertEqual(self._play(diagnostics=False), (False, True))
