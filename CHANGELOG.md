@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`bedrock-on-linux optiscaler` works from the portable .pyz.** The .pyz
+  started the launcher's command line itself, which has no `optiscaler`
+  command, so `optiscaler install` answered "invalid choice", and an
+  OptiScaler installed some other way was not applied when the launcher
+  started. Every way of starting the launcher now goes through the same
+  entry point.
+
+- **The portable .pyz comes back after updating itself.** *Restart now*
+  took the .pyz for a launcher started with `python3 -m bol`, restarted it
+  that way, and Python could not find the launcher outside the archive: the
+  window closed and nothing came back.
+
+- **Switching profile under Nix or Guix no longer stops at a Python error.**
+  The new window was started by handing the `bedrock-on-linux` found on
+  `PATH` to Python, and the wrapper both install under that name is a shell
+  script. It is now run directly.
+
+### Packaging
+
+- **A `pyproject.toml`, for distributions to build the launcher with their
+  own Python tooling**
+  ([#306](https://github.com/Wyze3306/BedrockOnLinux/pull/306)). The wheel
+  installs the `bedrock-on-linux` command, the desktop entry and the icon,
+  which is now `data/bedrock-on-linux.png`, the name the icon theme uses;
+  `data/icon.png` stays as a link to it. Contributed by
+  [@apteryks](https://github.com/apteryks), who packages BedrockOnLinux for
+  Guix. On top of it, the wheel carries the DLL injector, declares the
+  modules the launcher would otherwise pip-install on first start, finds its
+  icon under the prefix it was installed to, and leaves updates to pip or to
+  the package manager instead of writing a .pyz over pip's script.
+
+- **The Nix flake gets PySide6 from the binary cache again**
+  ([#309](https://github.com/Wyze3306/BedrockOnLinux/pull/309)). It asked
+  for Python 3.12, and cache.nixos.org no longer carries PySide6 for it on
+  current nixos-unstable, so every update of nixpkgs meant building PySide6
+  from source. The flake now uses nixpkgs' default Python, 3.14, with
+  PySide6 6.11; the test suite passes on Python 3.14. Contributed by
+  [@silverhadch](https://github.com/silverhadch).
+
 ## 2.2.8 — 2026-10-04
 
 ### Added
