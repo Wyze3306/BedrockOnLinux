@@ -21,6 +21,17 @@
   `PATH` to Python, and the wrapper both install under that name is a shell
   script. It is now run directly.
 
+- **The Legacy compatibility renderer keeps Minecraft's own Max Framerate**
+  ([#314](https://github.com/Wyze3306/BedrockOnLinux/issues/314)). Since
+  2.2.8 the launcher holds the player's limit through vkd3d-proton and sets
+  the game's own limiter aside for the session. Proton leaves vkd3d-proton
+  out altogether for the legacy renderer, so on the older GPUs that need it
+  nothing held the limit any more, and the game ran unpaced from its splash
+  screen on. There, the game now keeps pacing itself, as it did before 2.2.8.
+  A limit that a session cut short left set aside, by a hard reset or a
+  killed launcher, now goes back before the next game starts. Going back to
+  an older launcher did not restore it: those do not know where it was kept.
+
 ### Packaging
 
 - **A `pyproject.toml`, for distributions to build the launcher with their

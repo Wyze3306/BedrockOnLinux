@@ -1444,6 +1444,17 @@ class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.assertNotIn("set_aside_frame_limit", self.options_calls)
         self.assertEqual(self.options_calls[-1], "restore_frame_limits")
 
+    def test_an_unpaced_launch_puts_a_limit_left_aside_back_before_the_game(
+            self):
+        # Nothing holds it this session: left at Unlimited, the game would
+        # start with no limit at all (#314).
+        self.assertEqual(self._play(environ={"BOL_FRAME_RATE": "0"}), 0)
+        calls = self.options_calls
+        self.assertLess(calls.index("restore_frame_limits"),
+                        calls.index("snapshot"))
+        self.assertLess(calls.index("restore_frame_limits"),
+                        calls.index("game"))
+
     def test_the_game_starts_inside_the_swap_guard_when_there_is_one(self):
         self.assertEqual(self._play(swap_guard=True), 0)
         self.assertEqual(self.commands,
