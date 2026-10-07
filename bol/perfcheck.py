@@ -99,6 +99,11 @@ def available_memory_mib(meminfo_path=None):
     return _meminfo_mib("MemAvailable", meminfo_path)
 
 
+def total_memory_mib(meminfo_path=None):
+    """The machine's RAM as the kernel counts it, or None if unreadable."""
+    return _meminfo_mib("MemTotal", meminfo_path)
+
+
 def swap_used_mib(meminfo_path=None):
     """How much has already been pushed to swap, or None if unreadable."""
     total = _meminfo_mib("SwapTotal", meminfo_path)

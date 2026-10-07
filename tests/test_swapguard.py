@@ -11,6 +11,7 @@ since a wrapper that fails would be a game that does not start.
 
 import subprocess
 import unittest
+from unittest import mock
 
 from bol import swapguard
 
@@ -32,7 +33,17 @@ def _systemd_run(name):
     return "/usr/bin/" + name if name == "systemd-run" else None
 
 
-class SwapGuardProbeTests(unittest.TestCase):
+class _PlentyOfMemory:
+    """The machine running a test is not the one the test describes."""
+
+    def setUp(self):
+        patcher = mock.patch.object(swapguard, "total_memory_mib",
+                                    return_value=16 * 1024)
+        self.total_memory = patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class SwapGuardProbeTests(_PlentyOfMemory, unittest.TestCase):
     def test_a_scope_that_reads_its_limit_back_as_zero_is_available(self):
         run, calls = _probe()
         self.assertTrue(swapguard.swap_guard_available(
@@ -84,8 +95,33 @@ class SwapGuardProbeTests(unittest.TestCase):
             which=_systemd_run))
         self.assertEqual(calls, [])
 
+    def test_a_machine_too_small_for_the_game_and_its_desktop_is_never_probed(
+            self):
+        # A 4 GiB laptop reports about 3.7 GiB. Held in RAM there, the game
+        # leaves the kernel nothing to reclaim but program code, and the
+        # whole desktop freezes instead of the game slowing down (#314).
+        for total in (1900, 3700, swapguard.MIN_GUARDED_MEMORY_MIB - 1):
+            self.total_memory.return_value = total
+            run, calls = _probe()
+            self.assertFalse(swapguard.swap_guard_available(
+                {}, runner=run, which=_systemd_run), total)
+            self.assertEqual(calls, [], total)
 
-class GuardedCommandTests(unittest.TestCase):
+    def test_an_eight_gib_machine_is_guarded(self):
+        self.total_memory.return_value = 7500
+        run, _ = _probe()
+        self.assertTrue(swapguard.swap_guard_available(
+            {}, runner=run, which=_systemd_run))
+
+    def test_memory_that_cannot_be_read_is_not_guarded(self):
+        self.total_memory.return_value = None
+        run, calls = _probe()
+        self.assertFalse(swapguard.swap_guard_available(
+            {}, runner=run, which=_systemd_run))
+        self.assertEqual(calls, [])
+
+
+class GuardedCommandTests(_PlentyOfMemory, unittest.TestCase):
     def test_the_game_runs_inside_the_scope_unchanged(self):
         run, _ = _probe()
         game = ["python3", "/umu/umu-run", "Minecraft.Windows.exe"]
