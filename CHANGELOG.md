@@ -89,6 +89,13 @@
   ordinary amdgpu or i915 messages, one of those blocked PLAY as a GPU
   failure until a reboot. Only the kernel's own faults count now.
 
+- **Moving the data folder to another drive fails cleanly.** A copy cut short
+  between two filesystems, by a full drive for instance, had its partial
+  copy moved back *into* the original folder (`games/games`). A deletion cut
+  short after a complete copy lost the files it had already deleted. Each
+  move now knows whether its copy completed, and undoes itself accordingly.
+  The world backups also move with the rest of the data now.
+
 - **On an ARM computer, the launcher says what x86-64 programs need**
   ([#250](https://github.com/Wyze3306/BedrockOnLinux/issues/250)). The
   launcher is Python and starts anywhere, but the game, the Wine engine,

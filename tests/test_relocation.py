@@ -3,6 +3,7 @@
 """Tests for the data directory relocation feature."""
 import json
 import os
+import errno
 import shutil
 import sys
 from pathlib import Path
@@ -363,16 +364,11 @@ def test_migration_rollback_restores_backup_when_source_move_fails(tmp_path, mon
     existing_games.mkdir(parents=True)
     (existing_games / "marker.txt").write_text("pre-existing destination data")
 
-    real_move = shutil.move
-    call_count = {"n": 0}
+    def failing_transfer(src, dst, item):
+        raise RuntimeError("simulated mid-move failure")
 
-    def flaky_move(src, dst, *a, **kw):
-        call_count["n"] += 1
-        if call_count["n"] == 2:
-            raise RuntimeError("simulated mid-move failure")
-        return real_move(src, dst, *a, **kw)
-
-    monkeypatch.setattr(relocation.shutil, "move", flaky_move)
+    # The destination's backup is taken; then moving the source fails.
+    monkeypatch.setattr(relocation, "_transfer", failing_transfer)
 
     with pytest.raises(RelocationError):
         migrate_data(old_dir, new_dir)
@@ -381,6 +377,88 @@ def test_migration_rollback_restores_backup_when_source_move_fails(tmp_path, mon
     assert not (new_dir / "games.old").exists()
     assert (old_dir / "games").exists()
     assert install_file.read_text().strip() == str(old_dir)
+
+
+def _across_filesystems(monkeypatch):
+    """Every rename fails as it does between two filesystems."""
+    def exdev(src, dst):
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+    monkeypatch.setattr(relocation.os, "rename", exdev)
+
+
+def test_a_copy_cut_short_on_another_drive_leaves_the_data_where_it_was(
+        tmp_path, monkeypatch):
+    """A full destination drive used to have the partial copy moved back
+    *into* the original folder (games/games)."""
+    install_file = tmp_path / ".config" / "bedrock-on-linux" / "install_location"
+    monkeypatch.setattr(config, "INSTALL_LOCATION_FILE", install_file)
+    monkeypatch.setattr(relocation, "INSTALL_LOCATION_FILE", install_file)
+    old_dir = tmp_path / "old_data"
+    old_dir.mkdir()
+    _make_user_data(old_dir)
+    (old_dir / "games" / "release").mkdir(parents=True, exist_ok=True)
+    (old_dir / "games" / "release" / "big.bin").write_bytes(b"x" * 64)
+    new_dir = tmp_path / "new_data"
+    _across_filesystems(monkeypatch)
+    real_copy2, real_copytree = shutil.copy2, shutil.copytree
+
+    def full_drive(src, dst, *a, **kw):
+        if Path(src).name == "big.bin":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real_copy2(src, dst, *a, **kw)
+
+    def copytree(src, dst, symlinks=False, ignore=None, copy_function=None,
+                 *rest, **kw):
+        # copytree recurses through the module attribute, positionally.
+        return real_copytree(src, dst, symlinks, ignore, full_drive,
+                             *rest, **kw)
+
+    monkeypatch.setattr(relocation.shutil, "copytree", copytree)
+
+    with pytest.raises(RelocationError, match="No space left"):
+        migrate_data(old_dir, new_dir)
+
+    assert (old_dir / "games" / "release" / "big.bin").read_bytes() == b"x" * 64
+    assert not (old_dir / "games" / "games").exists()
+    assert not (new_dir / "games").exists()
+    assert install_file.read_text().strip() == str(old_dir)
+
+
+def test_a_deletion_cut_short_on_another_drive_is_put_back_whole(
+        tmp_path, monkeypatch):
+    install_file = tmp_path / ".config" / "bedrock-on-linux" / "install_location"
+    monkeypatch.setattr(config, "INSTALL_LOCATION_FILE", install_file)
+    monkeypatch.setattr(relocation, "INSTALL_LOCATION_FILE", install_file)
+    old_dir = tmp_path / "old_data"
+    old_dir.mkdir()
+    _make_user_data(old_dir)
+    (old_dir / "games" / "a.bin").write_bytes(b"a")
+    (old_dir / "games" / "b.bin").write_bytes(b"b")
+    new_dir = tmp_path / "new_data"
+    _across_filesystems(monkeypatch)
+    real_rmtree = shutil.rmtree
+
+    cut = []
+
+    def cut_short(path, *a, **kw):
+        if Path(path) == old_dir / "games" and not cut:
+            cut.append(path)
+            (old_dir / "games" / "a.bin").unlink()
+            raise OSError(errno.EIO, "Input/output error")
+        return real_rmtree(path, *a, **kw)
+
+    monkeypatch.setattr(relocation.shutil, "rmtree", cut_short)
+
+    with pytest.raises(RelocationError):
+        migrate_data(old_dir, new_dir)
+
+    assert (old_dir / "games" / "a.bin").read_bytes() == b"a"
+    assert (old_dir / "games" / "b.bin").read_bytes() == b"b"
+    assert not (new_dir / "games").exists()
+
+
+def test_the_world_backups_move_with_the_data(tmp_path, monkeypatch):
+    assert "backups" in relocation.DIRS_TO_MOVE
 
 
 # ===== failures during the rewrite/recreate steps must be fatal =====

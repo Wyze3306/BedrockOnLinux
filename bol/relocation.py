@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Transactional relocation of BedrockOnLinux user data."""
+import errno
 import json
 import os
 import shutil
@@ -12,7 +13,10 @@ from .config import INSTALL_LOCATION_FILE, set_install_location
 # that cannot simply be fetched again: a lost keyring costs one of the
 # account's ten Store download devices (issue #198), so moving the data root
 # must take it along rather than leave the user to sign in from nothing.
-DIRS_TO_MOVE = ["games", "compatdata/pfx", "content", "msa", "xodus-home"]
+# "backups" holds the copies of the player's worlds made before a version
+# change; left behind, they would be out of the launcher's sight for good.
+DIRS_TO_MOVE = ["games", "compatdata/pfx", "content", "msa", "xodus-home",
+                "backups"]
 # GPU safety state must move with the data root to preserve incident history.
 FILES_TO_MOVE = [
     "settings.json",
@@ -44,6 +48,44 @@ def paths_overlap(old_dir: Path, new_dir: Path) -> bool:
     return False
 
 
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+
+
+def _transfer(src_path: Path, dst_path: Path, item: dict) -> None:
+    """Move one path; ``item["complete"]`` once the destination holds it all.
+
+    Within one filesystem that is a rename. Across two it is a copy and then
+    a deletion, and the two can fail apart: a copy cut short (a full drive)
+    leaves a partial destination beside an intact source, which is removed
+    here; a deletion cut short leaves a complete destination beside what is
+    left of the source, which rollback puts back.
+    """
+    try:
+        os.rename(src_path, dst_path)
+        item["complete"] = True
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+    try:
+        if src_path.is_dir() and not src_path.is_symlink():
+            shutil.copytree(src_path, dst_path, symlinks=True)
+        else:
+            shutil.copy2(src_path, dst_path, follow_symlinks=False)
+    except BaseException:
+        try:
+            _remove(dst_path)
+        except OSError as e:
+            log.warn(f"Could not remove the partial copy {dst_path}: {e}")
+        raise
+    item["complete"] = True
+    _remove(src_path)
+
+
 def _move_item(src_path: Path, dst_path: Path, moved_items: list) -> None:
     """Move one path, backing up its destination for rollback."""
     if not src_path.exists() and not src_path.is_symlink():
@@ -58,15 +100,23 @@ def _move_item(src_path: Path, dst_path: Path, moved_items: list) -> None:
                 backup.unlink()
         shutil.move(str(dst_path), str(backup))
     # Record before moving: cross-filesystem moves may fail after the backup.
-    moved_items.append((src_path, dst_path, backup))
-    shutil.move(str(src_path), str(dst_path))
+    item = {"src": src_path, "dst": dst_path, "backup": backup,
+            "complete": False}
+    moved_items.append(item)
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    _transfer(src_path, dst_path, item)
 
 
 def _rollback(moved_items: list) -> None:
     """Undo recorded moves in reverse order without masking the root error."""
-    for src, dst, backup in reversed(moved_items):
+    for item in reversed(moved_items):
+        src, dst, backup = item["src"], item["dst"], item["backup"]
         try:
-            if dst.exists() or dst.is_symlink():
+            if item["complete"] and (dst.exists() or dst.is_symlink()):
+                # The destination holds all of it; whatever the source still
+                # has is the remainder of a deletion that was cut short.
+                if src.exists() or src.is_symlink():
+                    _remove(src)
                 shutil.move(str(dst), str(src))
             if backup is not None and (backup.exists() or backup.is_symlink()):
                 shutil.move(str(backup), str(dst))
