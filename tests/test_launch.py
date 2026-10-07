@@ -113,6 +113,8 @@ class ReadyLaunchHarness:
             # Nor the machine's own graphics cards.
             mock.patch.object(launch, "apply_gpu_choice", return_value=None),
             mock.patch.object(launch, "hybrid_gpu_problem", return_value=None),
+            # Nor a watcher reading the machine's own game settings.
+            mock.patch.object(launch.fullscreen_fix, "start"),
             mock.patch.object(launch, "seed_default_servers"),
             # Nor the player's real worlds: a backup is a copy of them.
             mock.patch.object(launch.saves, "before_launch",

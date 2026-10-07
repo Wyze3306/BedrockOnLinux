@@ -25,10 +25,11 @@ classifiers = [
 [tool.setuptools]
 packages = ["bol"]
 
-# DLL injection extracts injector.exe from the package (bol/inject.py);
+# DLL injection and the fullscreen fix extract their .exe from the package
+# (bol/inject.py, bol/fullscreen_fix.py);
 # setuptools leaves out every non-Python file it is not told about.
 [tool.setuptools.package-data]
-bol = ["injector.exe"]
+bol = ["injector.exe", "fullscreen-nudge.exe"]
 
 [project.urls]
 Homepage = "https://wyze3306.github.io/BedrockOnLinux/"

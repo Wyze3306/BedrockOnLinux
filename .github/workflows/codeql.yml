@@ -1,6 +1,6 @@
 # CodeQL static analysis for the Python launcher and the native C sources
-# (the DLL injector, the cryptbase RNG stub, and the XCurl CA shim: the
-# highest-risk code in the tree). Python needs no build; the C sources are
+# (the DLL injector, the fullscreen resize helper, the cryptbase RNG stub,
+# and the XCurl CA shim: the highest-risk code in the tree). Python needs no build; the C sources are
 # cross-compiled with mingw between init and analyze so the extractor observes
 # them. Results surface in the repository's code-scanning tab.
 name: CodeQL
@@ -55,6 +55,7 @@ jobs:
           "$CC" -c -O2 -mrdrnd src/cryptbase-stub.c -o "$RUNNER_TEMP/cryptbase.o"
           "$CC" -c -O2 src/xcurl-cashim.c -o "$RUNNER_TEMP/xcurl-cashim.o"
           "$CC" -c -O2 src/injector.c -o "$RUNNER_TEMP/injector.o"
+          "$CC" -c -O2 -municode src/fullscreen-nudge.c -o "$RUNNER_TEMP/fullscreen-nudge.o"
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@4187e74d05793876e9989daffde9c3e66b4acd07 # v3

@@ -61,6 +61,22 @@
 
 ### Fixed
 
+- **Started in fullscreen, Minecraft is no longer stretched and the mouse
+  lines up** ([#283](https://github.com/Wyze3306/BedrockOnLinux/issues/283)).
+  The game shows its window maximized, creates its frame at that window's
+  size, 848 rows on a 900-row screen once the window manager has drawn its
+  title bar, and only then makes the window fullscreen. It records the new
+  size but never resizes its frame, so the picture was stretched over the
+  screen and every click landed where the unstretched picture had the button.
+  Toggling fullscreen in game fixed it until the next start. The game does
+  resize for any later change of size, so once its menu is up the launcher
+  now sends its window one, a row shorter and then the real size, through a
+  small helper run inside Wine (`src/fullscreen-nudge.c`). The helper is aimed
+  at the game's window, never at whatever has the keyboard, and only at a
+  window that covers its screen. Measured: the game then reallocated to
+  1600×899 and 1600×900, and its buttons are drawn at their native size again.
+  `BOL_FULLSCREEN_NUDGE=0` turns it off.
+
 - **Automatic DLL injection waits for the main menu**
   ([#281](https://github.com/Wyze3306/BedrockOnLinux/issues/281)). It waited
   for the game's window and the configured delay, but the window opens on the

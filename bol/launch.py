@@ -21,7 +21,14 @@ from .auth import (
     xbl_preauth_diagnostic,
     xbl_preauth_error_message,
 )
-from . import discord, presence as xbl_presence, saves, supervision, xodus
+from . import (
+    discord,
+    fullscreen_fix,
+    presence as xbl_presence,
+    saves,
+    supervision,
+    xodus,
+)
 from .config import CONTENT, DATA, HOME, LOGS, WINEGDK_BUILD_REV
 from .deps import ensure_login_deps
 from .dgc import dgc_warning_message, intel_dgpus_on_legacy_driver
@@ -1006,6 +1013,14 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         except Exception as inject_error:
             warn("Automatic DLL injection could not be started (%s)."
                  % type(inject_error).__name__)
+        # Started in fullscreen, the game keeps a frame the size of its
+        # maximized window until it is resized once its menu is up (#283).
+        try:
+            fullscreen_fix.start(environ={
+                **os.environ, **custom_env_map(s.get("custom_env") or "")})
+        except Exception as nudge_error:
+            warn("The fullscreen resize watcher could not be started (%s)."
+                 % type(nudge_error).__name__)
         started = time.time()
         # Say on Discord what is being played, for as long as it is played:
         # the launcher is found by word of mouth, and this is it saying its
