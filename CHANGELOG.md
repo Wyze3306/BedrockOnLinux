@@ -73,6 +73,16 @@
 
 ### Fixed
 
+- **An interrupted restore can no longer cost a world.** Restoring a backup
+  copies it in beside the current data, then swaps the two folders with two
+  renames. A launcher stopped between the renames left the player's data
+  under a temporary name. If the game then started, it made a fresh, empty
+  Users folder in its place, and the next restore deleted the player's data
+  as a leftover. PLAY now finishes or undoes an interrupted swap before the
+  game opens the folder. The player's data goes back, and anything the game
+  saved in the fresh folder is kept as a backup that says so. The test that
+  reproduces it lost the world on the old code.
+
 - **On an ARM computer, the launcher says what x86-64 programs need**
   ([#250](https://github.com/Wyze3306/BedrockOnLinux/issues/250)). The
   launcher is Python and starts anywhere, but the game, the Wine engine,

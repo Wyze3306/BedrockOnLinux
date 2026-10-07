@@ -250,11 +250,69 @@ def test_a_swap_cut_between_its_two_renames_keeps_the_real_data(env):
     # Stopped after the data went out and before the copy came in.
     os.rename(target, target.with_name(saves._OUTGOING))
     target.with_name(saves._INCOMING).mkdir()
-    saves._recover_interrupted_swap(target)
+    saves._recover_interrupted_swap(target, "release", pfx)
     assert (target / ACCOUNT / "games" / "com.mojang" / "minecraftpe"
             / "options.txt").exists()
     assert not target.with_name(saves._OUTGOING).exists()
     assert not target.with_name(saves._INCOMING).exists()
+
+
+def test_a_game_started_after_a_cut_swap_does_not_cost_the_real_data(env):
+    """The game makes a fresh Users folder where the data went out; the next
+    recovery used to delete the data that went out as the leftover."""
+    pfx, settings, tmp_path = env
+    _play(pfx, worlds=("Survie",))
+    target = saves.users_dir("release", pfx)
+    os.rename(target, target.with_name(saves._OUTGOING))
+    (target.with_name(saves._INCOMING) / "x").mkdir(parents=True)
+    # The session in between, on a profile the game made from nothing.
+    _play(pfx, worlds=("Nouveau monde",))
+    _select(settings, tmp_path, "release", "1.26.52.3")
+    settings[saves.LAST_PLAYED] = {"release": "1.26.52.3"}
+
+    saves.before_launch(settings, pfx)
+
+    worlds = _account(pfx) / "minecraftWorlds"
+    assert sorted(p.name for p in worlds.iterdir()) == ["Survie"]
+    assert not target.with_name(saves._OUTGOING).exists()
+    assert not target.with_name(saves._INCOMING).exists()
+    # What that session saved is kept, as a backup that says what it is.
+    kept = [b for b in saves.list_backups()
+            if b["reason"] == "after-interrupted-swap"]
+    assert len(kept) == 1
+    assert (kept[0]["path"] / "Users" / ACCOUNT / "games" / "com.mojang"
+            / "minecraftWorlds" / "Nouveau monde").is_dir()
+
+
+def test_a_completed_swap_only_loses_what_it_replaced(env):
+    pfx, _settings, _tmp_path = env
+    _play(pfx, worlds=("Nouveau",))
+    target = saves.users_dir("release", pfx)
+    # Stopped while deleting what the swap replaced.
+    (target.with_name(saves._OUTGOING) / "old").mkdir(parents=True)
+    saves._recover_interrupted_swap(target, "release", pfx)
+    assert (_account(pfx) / "minecraftWorlds" / "Nouveau").is_dir()
+    assert not target.with_name(saves._OUTGOING).exists()
+    assert saves.list_backups() == []
+
+
+def test_no_room_to_keep_the_new_folder_moves_nothing(env, monkeypatch):
+    pfx, settings, tmp_path = env
+    _play(pfx, worlds=("Survie",))
+    target = saves.users_dir("release", pfx)
+    os.rename(target, target.with_name(saves._OUTGOING))
+    target.with_name(saves._INCOMING).mkdir()
+    _play(pfx, worlds=("Nouveau monde",))
+    monkeypatch.setattr(saves.shutil, "disk_usage",
+                        lambda _path: _Usage(10, 10, 0))
+    _select(settings, tmp_path, "release", "1.26.52.3")
+
+    with pytest.raises(BolError, match="Nothing was deleted"):
+        saves.before_launch(settings, pfx)
+
+    assert (target.with_name(saves._OUTGOING) / ACCOUNT / "games"
+            / "com.mojang" / "minecraftWorlds" / "Survie").is_dir()
+    assert (_account(pfx) / "minecraftWorlds" / "Nouveau monde").is_dir()
 
 
 # ------------------------------------------------------------ preview

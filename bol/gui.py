@@ -2852,6 +2852,8 @@ class MainWindow(QMainWindow):
             return f"{edition}, before a restore"
         if reason == "before-preview-copy":
             return f"{edition}, before the copy from Minecraft"
+        if reason == "after-interrupted-swap":
+            return f"{edition}, made while a restore was interrupted"
         return edition
 
     def _backup_notes(self, backup):

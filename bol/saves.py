@@ -242,13 +242,29 @@ def back_up(edition, reason, version=None, previous=None, prefix=None,
     return final
 
 
-def _recover_interrupted_swap(target):
-    """Finish, or undo, a replacement the launcher was stopped in."""
+def _recover_interrupted_swap(target, edition, prefix=None):
+    """Finish, or undo, a replacement the launcher was stopped in.
+
+    A replacement copies the new data in beside the old, then makes two
+    renames: the old data goes out, the new copy goes in. Stopped between
+    the two, the data that went out is the player's and the copy never went
+    in -- which the copy still being there says. A game started before
+    anything looked has meanwhile made a fresh Users folder of its own where
+    the data was. That is no reason to throw the player's data away: what the
+    game made is backed up when it holds anything, and the player's data goes
+    back.
+    """
     outgoing = target.with_name(_OUTGOING)
     incoming = target.with_name(_INCOMING)
-    if outgoing.exists() and not target.exists():
-        # Stopped between the two renames: what went out is the real data.
+    if outgoing.exists() and (incoming.exists() or not target.exists()):
+        if target.exists():
+            # Raises before anything is moved when there is no room for it.
+            back_up(edition, "after-interrupted-swap", prefix=prefix,
+                    protect=())
+            shutil.rmtree(target)
         os.rename(outgoing, target)
+    # Past this point, anything that went out was replaced by a completed
+    # swap, and anything that was coming in never made it.
     shutil.rmtree(outgoing, ignore_errors=True)
     shutil.rmtree(incoming, ignore_errors=True)
 
@@ -262,7 +278,7 @@ def _replace_users(source, edition, prefix=None):
     """
     target = users_dir(edition, prefix)
     target.parent.mkdir(parents=True, exist_ok=True)
-    _recover_interrupted_swap(target)
+    _recover_interrupted_swap(target, edition, prefix)
     incoming = target.with_name(_INCOMING)
     outgoing = target.with_name(_OUTGOING)
     shutil.copytree(source, incoming, symlinks=True)
@@ -388,6 +404,16 @@ def before_launch(settings=None, prefix=None):
     edition, version = launched_build(s)
     if edition is None:
         return None, None
+    # Before the game opens the folder: a replacement stopped half-way has
+    # the player's data beside it, under another name (see
+    # _recover_interrupted_swap).
+    try:
+        _recover_interrupted_swap(users_dir(edition, prefix), edition, prefix)
+    except (BolError, OSError) as exc:
+        raise BolError(
+            f"An earlier restore of your {EDITION_NAMES[edition]} worlds was "
+            f"interrupted, and putting them back failed: {exc}. Nothing was "
+            "deleted; free some space and press PLAY again.") from exc
     copied = False
     if edition == "preview" and not s.get(PREVIEW_DATA):
         if preview_copy_pending(s, prefix):
