@@ -42,6 +42,7 @@ from .content import game_content_dir, import_content
 from .doctor import acknowledge_gpu_crash, gpu_crash_acknowledgement_status
 from .games import installed_builds, list_editions, list_versions, remove_build
 from .gamesetup import do_setup
+from . import gpus
 from .inject import run_injector
 from .launch import direct_launch_readiness, launch, single_window_session
 from . import saves
@@ -3105,6 +3106,39 @@ class MainWindow(QMainWindow):
         self.refresh_builds()
         self.error_box("Remove build", message[:2000])
 
+    def _gpu_choice_row(self):
+        """Settings ▸ Advanced ▸ Graphics card (#275)."""
+        row = QHBoxLayout()
+        label = QLabel("Graphics card:")
+        tip = ("Which graphics card Minecraft renders on. Automatic leaves it "
+               "to the system, which on a laptop is the integrated one; pick "
+               "the discrete card to play on it.")
+        label.setToolTip(tip)
+        row.addWidget(label)
+        combo = QComboBox()
+        combo.setToolTip(tip)
+        combo.addItem("Automatic (system default)", gpus.AUTO)
+        try:
+            cards = gpus.list_gpus()
+        except Exception:
+            cards = []
+        for card in cards:
+            suffix = " — runs the display" if card.boot_vga else ""
+            combo.addItem(f"{card.name} ({card.slot}){suffix}", card.slot)
+        current = str(self.settings.get(gpus.SETTING) or gpus.AUTO)
+        index = combo.findData(current)
+        if index < 0:
+            # Chosen once, gone since (an eGPU): say so rather than show
+            # Automatic for a setting that still names a card.
+            combo.addItem(f"Card not found ({current})", current)
+            index = combo.count() - 1
+        combo.setCurrentIndex(index)
+        combo.currentIndexChanged.connect(
+            lambda idx: self._save_setting(gpus.SETTING, combo.itemData(idx)))
+        self.gpu_combo = combo
+        row.addWidget(combo, 1)
+        return row
+
     def _build_advanced_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
@@ -3127,6 +3161,8 @@ class MainWindow(QMainWindow):
                         "Last resort for GPUs without Vulkan 1.3 — drops DXVK/vkd3d.")
         lr.toggled.connect(lambda on: self._save_setting("renderer", "opengl" if on else "auto"))
         graphics.addWidget(lr)
+
+        graphics.addLayout(self._gpu_choice_row())
 
         env = card_section(v, "Environment")
         env.addWidget(QLabel("Custom environment variables"))

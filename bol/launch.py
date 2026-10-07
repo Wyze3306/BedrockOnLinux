@@ -25,6 +25,7 @@ from . import discord, presence as xbl_presence, saves, supervision, xodus
 from .config import CONTENT, DATA, HOME, LOGS, WINEGDK_BUILD_REV
 from .deps import ensure_login_deps
 from .dgc import dgc_warning_message, intel_dgpus_on_legacy_driver
+from .gpus import apply_gpu_choice, hybrid_gpu_problem
 from .fixups import (
     _install_cryptbase_in_prefix,
     bump_stack_reserve,
@@ -598,6 +599,34 @@ def _configure_runtime_compat(env, settings, backend, host_wayland,
     env["VKD3D_DEBUG"] = "info"
 
 
+def _configure_gpu(env, settings, environ=None):
+    """Put the game on the graphics card chosen in Settings (#275).
+
+    With no choice, a laptop about to start the game on its integrated GPU
+    beside a discrete one is told where the choice is: nothing else would
+    tell the player why the game runs at a fraction of what the machine can
+    do. ``environ`` carries the custom-environment field, whose variables are
+    an answer already.
+    """
+    try:
+        gpu = apply_gpu_choice(env, settings)
+    except Exception as exc:
+        warn(f"Could not apply the graphics card chosen in Settings ({exc}); "
+             "Minecraft starts on the system's default one.")
+        return None
+    if gpu is not None:
+        info(f"Minecraft renders on the {gpu.name} "
+             "(Settings ▸ Advanced ▸ Graphics card).")
+        return gpu
+    try:
+        advice = hybrid_gpu_problem(settings, environ)
+    except Exception:
+        advice = None
+    if advice:
+        warn(advice)
+    return None
+
+
 def _configure_graphics_cache(env, managed_engine):
     """Keep managed-engine shader caches across Minecraft version changes."""
     if not managed_engine:
@@ -819,6 +848,8 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         env, s, backend, bool(wl), diagnostics=diag,
     )
     _configure_graphics_cache(env, managed_engine=not custom_proton())
+    _configure_gpu(env, s, environ={**os.environ,
+                                    **custom_env_map(s.get("custom_env") or "")})
     disp = os.environ.get("DISPLAY")
     if backend == "wayland" and wl:
         env["PROTON_ENABLE_WAYLAND"] = "1"

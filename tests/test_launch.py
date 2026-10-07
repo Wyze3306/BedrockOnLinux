@@ -110,6 +110,9 @@ class ReadyLaunchHarness:
             mock.patch.object(launch, "restore_game_frame_limits",
                               side_effect=record("restore_frame_limits", [])),
             mock.patch.object(launch, "guard_game_command", side_effect=guard),
+            # Nor the machine's own graphics cards.
+            mock.patch.object(launch, "apply_gpu_choice", return_value=None),
+            mock.patch.object(launch, "hybrid_gpu_problem", return_value=None),
             mock.patch.object(launch, "seed_default_servers"),
             # Nor the player's real worlds: a backup is a copy of them.
             mock.patch.object(launch.saves, "before_launch",
@@ -1705,3 +1708,36 @@ class EditorLaunchTests(ReadyLaunchHarness, unittest.TestCase):
             lock.return_value.__enter__.return_value = ()
             launch.launch(editor=True)
         self.assertTrue(once.call_args.kwargs["editor"])
+
+
+class GraphicsCardLaunchTests(unittest.TestCase):
+    """The card chosen in Settings reaches the game's environment (#275)."""
+
+    def test_a_chosen_card_is_named_in_the_log(self):
+        card = mock.Mock()
+        card.name = "NVIDIA GeForce RTX 3050 Mobile"
+        with mock.patch.object(launch, "apply_gpu_choice",
+                               return_value=card) as apply, \
+                mock.patch.object(launch, "hybrid_gpu_problem") as advice, \
+                mock.patch.object(launch, "info") as said:
+            self.assertIs(launch._configure_gpu({}, {"gpu": "x"}), card)
+        apply.assert_called_once()
+        advice.assert_not_called()
+        self.assertIn("RTX 3050", said.call_args.args[0])
+
+    def test_with_no_choice_a_laptop_is_told_where_it_is(self):
+        with mock.patch.object(launch, "apply_gpu_choice", return_value=None), \
+                mock.patch.object(launch, "hybrid_gpu_problem",
+                                  return_value="two cards") as advice, \
+                mock.patch.object(launch, "warn") as warned:
+            self.assertIsNone(launch._configure_gpu(
+                {}, {}, environ={"DRI_PRIME": "1"}))
+        self.assertEqual(advice.call_args.args[1], {"DRI_PRIME": "1"})
+        warned.assert_called_once_with("two cards")
+
+    def test_a_broken_inventory_never_fails_a_launch(self):
+        with mock.patch.object(launch, "apply_gpu_choice",
+                               side_effect=OSError("sysfs")), \
+                mock.patch.object(launch, "warn") as warned:
+            self.assertIsNone(launch._configure_gpu({}, {}))
+        self.assertIn("default", warned.call_args.args[0])

@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Settings ▸ Advanced ▸ Graphics card picks the GPU Minecraft renders on**
+  ([#275](https://github.com/Wyze3306/BedrockOnLinux/issues/275)). A laptop
+  starts every program on its integrated GPU unless told otherwise, so the
+  game could run on an Intel iGPU beside an idle GeForce. The setting lists
+  the computer's cards, read from sysfs without loading a graphics driver. A
+  chosen card is asked for with the variables GNOME and KDE set for *Launch
+  using Discrete Graphics Card*: Mesa's device selection, which then shows
+  the game that card alone, `DRI_PRIME`, and NVIDIA's offload layer for a
+  GeForce. Left on *Automatic* on a laptop whose display runs on its
+  integrated GPU beside a discrete one, PLAY says where the choice is.
+
 - **Bedrock Editor opens from the launcher**
   ([#286](https://github.com/Wyze3306/BedrockOnLinux/issues/286)). Mojang's
   world-building tool is part of the game, started with the protocol URI a

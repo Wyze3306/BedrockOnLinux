@@ -123,6 +123,9 @@ highlight, **A** selects, **B** goes back, the shoulder buttons change tab and
 *Minecraft Bedrock* entry to your app menu or to Steam. That is the one to use
 on a Steam Deck.
 
+On a laptop with two graphics cards, **Settings ▸ Advanced ▸ Graphics card**
+chooses the one Minecraft plays on.
+
 Mojang's **Bedrock Editor** is part of the game: open it from **Settings ▸
 Tools ▸ Open Bedrock Editor**, the *Open Bedrock Editor* action of the app menu
 entry, or `bedrock-on-linux play --editor`.
