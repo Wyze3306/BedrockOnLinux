@@ -1149,7 +1149,7 @@ class WrapEncryptedLaunchTests(unittest.TestCase):
     EXE = "/games/release/1.26.44.3/Minecraft.Windows.exe"
     NT = "\\??\\Z:\\games\\release\\1.26.44.3\\Minecraft.Windows.exe"
 
-    def _wrap(self, tmp, argv, stage_dir=None, env=None):
+    def _wrap(self, tmp, argv, stage_dir=None, env=None, game_args=()):
         # xodus-cli decrypts the executable out of the package it keeps beside
         # it, so an encrypted build that can start always has one.
         game = Path(tmp) / "game"
@@ -1168,7 +1168,8 @@ class WrapEncryptedLaunchTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(
                     xodus, "staging_dir", return_value=Path(stage_dir)))
             return xodus.wrap_encrypted_launch(argv, Path(tmp) / "game",
-                                               Path(tmp) / "run", env=env)
+                                               Path(tmp) / "run", env=env,
+                                               game_args=game_args)
 
     def test_running_an_encrypted_build_needs_the_store_account(self):
         # It used to get as far as xodus-cli, which died on a missing keyring
@@ -1321,6 +1322,18 @@ class WrapEncryptedLaunchTests(unittest.TestCase):
                       f"import os, sys, pathlib; "
                       f"pathlib.Path({str(path)!r}).write_text({script})",
                       self.EXE]
+
+    def test_the_game_gets_its_own_arguments_after_the_executable(self):
+        # Bedrock Editor is the game asked for it on its command line (#286).
+        editor = "minecraft://creator/?Editor=true"
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder, argv = self._recorder(tmp, "repr(sys.argv[1:])")
+            cmd = self._wrap(tmp, argv, game_args=[editor])
+            fd = self._memfd()
+
+            self._run(cmd[3], self.NT, f"{fd}:{self.NT}", (fd,), check=True)
+
+            self.assertEqual(recorder.read_text(), repr([self.NT, editor]))
 
     def test_the_executable_is_chosen_by_name_not_by_position(self):
         with tempfile.TemporaryDirectory() as tmp:

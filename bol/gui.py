@@ -1051,9 +1051,10 @@ class LaunchWorker(QThread):
     # in a log nobody has open when the game closes.
     session_notice = Signal(str)
 
-    def __init__(self, ver):
+    def __init__(self, ver, editor=False):
         super().__init__()
         self._ver = ver
+        self._editor = editor
 
     def run(self):
         try:
@@ -1069,7 +1070,8 @@ class LaunchWorker(QThread):
 
             notices = []
             try:
-                launch(on_started=on_started, notices=notices)
+                launch(on_started=on_started, notices=notices,
+                       editor=self._editor)
             finally:
                 self.come_back.emit()
             for notice in notices:
@@ -2340,7 +2342,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(1500, lambda: self._copy_btn.setText("Copy code"))
 
     # ------------------------------------------------------------ play / kill
-    def do_play(self):
+    def do_play(self, *, editor=False):
         if self.ui_state["busy"]:
             return
         ver = self.selected_version()
@@ -2362,7 +2364,7 @@ class MainWindow(QMainWindow):
         self.set_status("Preparing…")
         self._show_bar_busy()
 
-        w = LaunchWorker(ver)
+        w = LaunchWorker(ver, editor=editor)
         w.progress.connect(self.set_progress)
         w.done.connect(self._play_finished)
         w.failed.connect(self._play_failed)
@@ -3408,6 +3410,15 @@ class MainWindow(QMainWindow):
 
         self._update_injector_settings_ui()
 
+        editor = card_section(
+            v, "Bedrock Editor",
+            "Mojang's world-building tool, part of the game you already have: "
+            "projects, brushes and scripted extensions instead of survival.")
+        editor.addWidget(tool_row("Open Bedrock Editor",
+                                  self._do_open_editor,
+                                  tip="Start the selected Minecraft version in "
+                                      "Editor mode instead of the game."))
+
         shortcuts = card_section(v, "Shortcuts")
         shortcuts.addWidget(tool_row("Create direct launch shortcut (skips this window)…",
                                  self._do_play_shortcut,
@@ -3448,6 +3459,11 @@ class MainWindow(QMainWindow):
         v.addWidget(self.tools_status_label)
         v.addStretch(1)
         return w
+
+    def _do_open_editor(self):
+        if self.stack.currentWidget() is self.settings_page:
+            self.toggle_settings()
+        self.do_play(editor=True)
 
     def _do_import(self):
         files, _ = QFileDialog.getOpenFileNames(

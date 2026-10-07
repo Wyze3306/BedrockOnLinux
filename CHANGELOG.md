@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Bedrock Editor opens from the launcher**
+  ([#286](https://github.com/Wyze3306/BedrockOnLinux/issues/286)). Mojang's
+  world-building tool is part of the game, started with the protocol URI a
+  Windows shortcut to `minecraft:?Editor=true` hands it. **Settings ▸ Tools ▸
+  Open Bedrock Editor**, the *Open Bedrock Editor* action of the app menu entry
+  and `bedrock-on-linux play --editor` now start the selected version that way,
+  Store builds included: the URI follows the decrypted executable.
+
 - **Your worlds, settings and servers follow you from one Minecraft version
   to the next, and can be had back.** Every Minecraft build already opened the
   same data, but nothing showed it, and a version change could leave it looking

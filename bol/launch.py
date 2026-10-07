@@ -93,6 +93,11 @@ _OFFLINE_MODE_NOTICE = (
     "Xbox Live sign-in succeeds."
 )
 
+# Asks Minecraft to open Bedrock Editor instead of the game (#286): the
+# protocol activation a Windows shortcut to "minecraft:?Editor=true" makes,
+# handed to the executable as its argument.
+EDITOR_URI = "minecraft://creator/?Editor=true"
+
 _SONY_STEAM_INPUT_HIDRAW_IDS = ",".join((
     "0x054C/0x05C4",  # DualShock 4
     "0x054C/0x09CC",  # DualShock 4 v2
@@ -648,7 +653,7 @@ def _prepare_launch_engine():
     return _prepare_graphics_engine()
 
 
-def _launch_once(lock_fds=(), on_started=None, notices=None):
+def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     s = load_settings()
     gd = s.get("game_dir")
     if not gd or not Path(gd, "Minecraft.Windows.exe").exists():
@@ -843,10 +848,16 @@ def _launch_once(lock_fds=(), on_started=None, notices=None):
         elif wl:
             warn("Wayland session without X DISPLAY — install XWayland (or set "
                  "BOL_INPUT=wayland to use winewayland).")
+    game_args = [EDITOR_URI] if editor else []
+    if editor:
+        info("Opening Bedrock Editor instead of the game.")
     if encrypted_exe:
         # Must wrap before gamescope: gamescope has to stay outermost so it
         # owns the compositor the game renders into.
-        cmd = xodus.wrap_encrypted_launch(cmd, Path(gd), DATA / "run", env=env)
+        cmd = xodus.wrap_encrypted_launch(cmd, Path(gd), DATA / "run", env=env,
+                                          game_args=game_args)
+    else:
+        cmd = cmd + game_args
     if use_gamescope:
         if gs_opt and not env_flag(gs_opt):
             gs_argv = ["gamescope"] + shlex.split(gs_opt)
@@ -1114,19 +1125,20 @@ def _launch_once(lock_fds=(), on_started=None, notices=None):
     return rc
 
 
-def launch(on_started=None, notices=None):
+def launch(on_started=None, notices=None, editor=False):
     """Run exactly one guarded launch for each user action.
 
     ``on_started`` is called once the game process exists, before the wait on
     it. A launcher window uses it to get out of the game's way in a session
     that shows one window at a time. ``notices``, when given, is a list that
     collects what the session left the player to know, for a window to show
-    rather than leave in the log.
+    rather than leave in the log. ``editor`` opens Bedrock Editor instead of
+    the game.
     """
     try:
         with launch_lock() as lock_fds:
             return _launch_once(lock_fds, on_started=on_started,
-                                notices=notices)
+                                notices=notices, editor=editor)
     finally:
         # The session's teardown is over and its locks are released: a stop
         # signal it held for the game ends the process now.

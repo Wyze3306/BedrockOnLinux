@@ -83,7 +83,7 @@ class SessionNoticeTests(unittest.TestCase):
         worker.session_notice.connect(lambda text: seen.append(("notice", text)))
         worker.done.connect(lambda result: seen.append(("done", result)))
 
-        def play(on_started=None, notices=None):
+        def play(on_started=None, notices=None, editor=False):
             notices.append("signed out")
             return 0
 

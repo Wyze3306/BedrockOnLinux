@@ -383,7 +383,13 @@ class LauncherStartTests(unittest.TestCase):
 
     def test_play_stays_the_launcher_free_path(self):
         launched, window = self._run(["bedrock-on-linux", "play"], True)
-        launched.assert_called_once_with()
+        launched.assert_called_once_with(editor=False)
+        window.assert_not_called()
+
+    def test_play_editor_opens_bedrock_editor(self):
+        launched, window = self._run(
+            ["bedrock-on-linux", "play", "--editor"], True)
+        launched.assert_called_once_with(editor=True)
         window.assert_not_called()
 
     def test_shortcut_launch_failure_reaches_the_desktop(self):

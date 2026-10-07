@@ -123,6 +123,10 @@ highlight, **A** selects, **B** goes back, the shoulder buttons change tab and
 *Minecraft Bedrock* entry to your app menu or to Steam. That is the one to use
 on a Steam Deck.
 
+Mojang's **Bedrock Editor** is part of the game: open it from **Settings ▸
+Tools ▸ Open Bedrock Editor**, the *Open Bedrock Editor* action of the app menu
+entry, or `bedrock-on-linux play --editor`.
+
 ### Experimental OptiScaler / frame generation
 
 The launcher can install a tested OptiScaler v10 setup for Minecraft RTX under

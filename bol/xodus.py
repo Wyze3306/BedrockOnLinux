@@ -1572,6 +1572,9 @@ import sys
 import tempfile
 
 ARGV = json.loads({argv!r})
+# What the game itself is asked for, after its executable: the Editor's
+# protocol URI, for one.
+GAME_ARGS = json.loads({game_args!r})
 LAUNCHER_PATH = {launcher_path!r}
 EXE_NAME = {exe_name!r}
 STAGE_DIR = {stage_dir!r}
@@ -1651,19 +1654,20 @@ for name, value in WEBVIEW_ENV.items():
         os.environ.pop(name, None)
     else:
         os.environ[name] = value
-os.execvp(ARGV[0], ARGV + [nt_name])
+os.execvp(ARGV[0], ARGV + [nt_name] + GAME_ARGS)
 '''
 
 
 def wrap_encrypted_launch(argv, game_dir: Path, work_dir: Path,
-                          launcher_path=None, env=None):
+                          launcher_path=None, env=None, game_args=()):
     """Turn a launch command into one that can start an encrypted executable.
 
     The returned command runs ``xodus-cli run`` outermost. It holds the license
     and the XVD decryption, which live in Xodus's Rust crates and are not
     reimplementable here, and it hands the plaintext to Wine as a descriptor
     rather than a file. ``argv``'s last element is the executable path, which
-    the wrapper replaces with the NT name Xodus assigns.
+    the wrapper replaces with the NT name Xodus assigns; ``game_args`` go to
+    the game after it.
 
     ``env`` is the environment the game will be started with. Since xodus-cli
     is the outermost process, a host without WebKitGTK needs the bundled
@@ -1727,6 +1731,7 @@ def wrap_encrypted_launch(argv, game_dir: Path, work_dir: Path,
             warn(f"Could not create {stage_dir} for the decrypted game: {exc}")
     wrapper.write_text(
         _WRAPPER.format(argv=json.dumps(list(argv[:-1])),
+                        game_args=json.dumps([str(a) for a in game_args]),
                         launcher_path=launcher_path,
                         exe_name=Path(argv[-1]).name,
                         stage_dir=str(stage_dir),

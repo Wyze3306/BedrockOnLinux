@@ -22,7 +22,8 @@ class ReadyLaunchHarness:
                                umu_env=None, account=None, on_started=None,
                                extra_settings=None, environ=None,
                                diagnosis=(), swap_guard=False,
-                               signed_out=False, notices=None):
+                               signed_out=False, notices=None,
+                               editor=False):
         content = root / "content"
         logs = root / "logs"
         data = root / "data"
@@ -147,7 +148,7 @@ class ReadyLaunchHarness:
             }
             return launch._launch_once(lock_fds=lock_fds,
                                        on_started=on_started,
-                                       notices=notices)
+                                       notices=notices, editor=editor)
 
     def _before_launch(self, _settings):
         self.options_calls.append("before_launch")
@@ -1314,7 +1315,7 @@ class LaunchStartedHookTests(ReadyLaunchHarness, unittest.TestCase):
             lock.return_value.__enter__.return_value = (71, 72)
             self.assertEqual(launch.launch(on_started=hook), 0)
         once.assert_called_once_with((71, 72), on_started=hook,
-                                     notices=None)
+                                     notices=None, editor=False)
 
 
 class AutoInjectionLaunchTests(ReadyLaunchHarness, unittest.TestCase):
@@ -1670,3 +1671,37 @@ class StopRequestLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.assertEqual(calls, ["arm", "popen", "mark", "disarm"])
         self.presence.stop.assert_called_once_with()
         self.assertIsNone(launch.supervision._state["signum"])
+
+
+class EditorLaunchTests(ReadyLaunchHarness, unittest.TestCase):
+    """Bedrock Editor is the same game, asked for its Editor (#286)."""
+
+    def _commands(self, editor):
+        commands = []
+
+        def popen(command, **_kwargs):
+            commands.append(list(command))
+            proc = mock.Mock()
+            proc.wait.return_value = 0
+            return proc
+
+        with tempfile.TemporaryDirectory() as td:
+            self._exercise_ready_launch(
+                Path(td), popen, arm=lambda: "owned-token",
+                disarm=lambda _token: True, editor=editor)
+        return commands
+
+    def test_the_editor_uri_follows_the_executable(self):
+        self.assertEqual(self._commands(editor=True),
+                         [["fake-umu", launch.EDITOR_URI]])
+
+    def test_a_plain_launch_passes_the_game_nothing(self):
+        self.assertEqual(self._commands(editor=False), [["fake-umu"]])
+
+    def test_launch_hands_the_request_to_the_session(self):
+        with mock.patch.object(launch, "launch_lock") as lock, \
+                mock.patch.object(launch, "_launch_once") as once, \
+                mock.patch.object(launch.supervision, "end_session"):
+            lock.return_value.__enter__.return_value = ()
+            launch.launch(editor=True)
+        self.assertTrue(once.call_args.kwargs["editor"])

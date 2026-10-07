@@ -201,7 +201,9 @@ def main():
     sub = p.add_subparsers(dest="cmd")
 
     sub.add_parser("gui", help="open the launcher (default)")
-    sub.add_parser("play", help="launch Minecraft")
+    play = sub.add_parser("play", help="launch Minecraft")
+    play.add_argument("--editor", action="store_true",
+                      help="open Bedrock Editor instead of the game")
     sp = sub.add_parser("setup", help="download & prepare Minecraft")
     sp.add_argument("--mc", metavar="EDITION",
                     help="Minecraft edition to install: release or preview")
@@ -313,7 +315,7 @@ def main():
             # A poweroff or a stopped scope with the game running lets the
             # session finish its teardown before the launcher goes.
             supervision.install()
-            launch()
+            launch(editor=a.editor)
         elif a.cmd == "shortcut":
             require_shortcuts_supported()
             profile = create_profile(a.profile) if a.profile else None

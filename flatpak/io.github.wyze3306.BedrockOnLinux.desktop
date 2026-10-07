@@ -10,8 +10,12 @@ Categories=Game;ActionGame;
 Keywords=minecraft;bedrock;gdk;wine;proton;mcbe;
 StartupNotify=true
 StartupWMClass=BedrockOnLinux
-Actions=Play;
+Actions=Play;Editor;
 
 [Desktop Action Play]
 Name=Play without the launcher
 Exec=bedrock-on-linux play
+
+[Desktop Action Editor]
+Name=Open Bedrock Editor
+Exec=bedrock-on-linux play --editor
