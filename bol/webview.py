@@ -117,6 +117,29 @@ _RENDERER = "WEBKIT_DISABLE_DMABUF_RENDERER"
 _A11Y = "WEBKIT_A11Y_BUS_ADDRESS"
 _A11Y_OPT_IN = "BOL_WEBVIEW_A11Y"
 
+# WebKitGTK speaks TLS through GIO, and GIO through a module it finds at run
+# time -- glib-networking's libgiognutls.so, in GIO's module directory or on
+# GIO_EXTRA_MODULES. A host whose WebKitGTK loads but whose GIO finds no such
+# module shows "TLS support is not available" where the Microsoft sign-in
+# should be: a Nix or Guix WebKitGTK reached outside the wrapper that sets
+# GIO_EXTRA_MODULES for it (#249). Loading the library proves nothing about
+# that, so the probe asks the GIO that WebKitGTK itself loads, in the
+# environment xodus-cli gets.
+_TLS_PROBE = (
+    "import ctypes, sys\n"
+    "ctypes.CDLL('libwebkit2gtk-4.1.so.0', mode=ctypes.RTLD_GLOBAL)\n"
+    "gio = ctypes.CDLL('libgio-2.0.so.0')\n"
+    "gio.g_tls_backend_get_default.restype = ctypes.c_void_p\n"
+    "gio.g_tls_backend_supports_tls.argtypes = [ctypes.c_void_p]\n"
+    "backend = gio.g_tls_backend_get_default()\n"
+    "sys.exit(0 if backend and gio.g_tls_backend_supports_tls(backend)"
+    " else 3)\n"
+)
+_TLS_MISSING = 3
+_TLS_PROBE_KEYS = ("LD_LIBRARY_PATH", "GIO_MODULE_DIR", "GIO_EXTRA_MODULES",
+                   "GIO_USE_TLS")
+_TLS_CACHE = {}
+
 
 def host_package_name():
     """What the host's package manager calls the WebKitGTK runtime."""
@@ -173,6 +196,27 @@ def load_failure(binary, env=None):
 def binary_loads(binary, env=None):
     """Whether the dynamic loader can start ``binary`` with this environment."""
     return load_failure(binary, env) is None
+
+
+def host_tls_available(env=None):
+    """Whether the host's WebKitGTK can open an https:// page.
+
+    False only when the probe ran and GIO said it has no TLS backend; a probe
+    that could not run at all (no Python able to load the library, a
+    timeout) is "cannot tell", and answers True so that nothing which used
+    to work is taken away on a guess.
+    """
+    source = os.environ if env is None else env
+    key = tuple(source.get(name) for name in _TLS_PROBE_KEYS)
+    if key not in _TLS_CACHE:
+        try:
+            proc = subprocess.run([sys.executable, "-c", _TLS_PROBE],
+                                  env=dict(source), stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, timeout=30)
+            _TLS_CACHE[key] = proc.returncode != _TLS_MISSING
+        except (OSError, subprocess.SubprocessError):
+            _TLS_CACHE[key] = True
+    return _TLS_CACHE[key]
 
 
 def _host_failure(binary):
@@ -536,12 +580,20 @@ def apply(binary, env, force=False):
     if not force:
         failure = _host_failure(binary)
         if failure is None:
-            return previous
-        too_old = glibc_too_old_message(failure)
-        if too_old:
-            # The bundle is ~80 MB built against the same glibc floor.
-            restore_env(env, previous)
-            raise BolError(too_old)
+            if host_tls_available(env):
+                return previous
+            # The bundle carries its own GIO TLS module, and its library
+            # directory goes in front of the host's.
+            info("This system's WebKitGTK has no TLS support (GIO finds no "
+                 "glib-networking module), so the Microsoft sign-in would "
+                 "only say \"TLS support is not available\". Using the "
+                 "bundled WebKitGTK runtime instead.")
+        else:
+            too_old = glibc_too_old_message(failure)
+            if too_old:
+                # The bundle is ~80 MB built against the same glibc floor.
+                restore_env(env, previous)
+                raise BolError(too_old)
     try:
         root = prepare()
     except BolError as exc:
@@ -565,6 +617,9 @@ def status():
     or None when the sign-in has a working library to use.
     """
     if host_has_webkitgtk():
+        if not host_tls_available():
+            return ("host WebKitGTK has no TLS support (glib-networking); "
+                    "the bundled runtime is used instead"), None
         return "OK (store sign-in)", None
     if installed():
         return "OK (bundled runtime)", None

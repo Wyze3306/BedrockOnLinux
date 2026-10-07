@@ -30,6 +30,20 @@ _EXEC_DIR = webview.XODUS_WEBVIEW_EXEC_DIR
 # on the network (#303). PATH has the shell wherever these tests can run.
 SH = shutil.which("sh") or "/bin/sh"
 
+# The TLS probe loads the machine's own WebKitGTK; every test below that does
+# not ask about TLS gets a host whose WebKitGTK has it, whatever runs them.
+_REAL_TLS_PROBE = webview.host_tls_available
+_TLS_PATCH = mock.patch.object(webview, "host_tls_available",
+                               lambda env=None: True)
+
+
+def setUpModule():
+    _TLS_PATCH.start()
+
+
+def tearDownModule():
+    _TLS_PATCH.stop()
+
 
 def _encrypted_build(game_dir):
     """A game directory xodus-cli run has something to decrypt from."""
@@ -192,11 +206,11 @@ class InstallTests(unittest.TestCase):
             patched, target = self._install(base, digest)
 
             with patched, mock.patch.object(webview.sys, "argv",
-                                            [str(asset.parent / "launcher")]), \
-                    self.assertRaises(webview.BolError):
-                webview.ensure_runtime()
-
-            self.assertFalse(webview.installed())
+                                            [str(asset.parent / "launcher")]):
+                with self.assertRaises(webview.BolError):
+                    webview.ensure_runtime()
+                # Asked of the test's runtime directory, not the machine's.
+                self.assertFalse(webview.installed())
 
 
 class HelperRelocationTests(unittest.TestCase):
@@ -626,6 +640,75 @@ class LauncherIntegrationTests(unittest.TestCase):
         for call in calls:
             self.assertIn("env", [word.arg for word in call.keywords],
                           "wrap_encrypted_launch() was called without env=")
+
+
+
+class TlsBackendTests(unittest.TestCase):
+    """A WebKitGTK whose GIO has no TLS module cannot sign anyone in (#249)."""
+
+    def setUp(self):
+        webview._TLS_CACHE.clear()
+        self.addCleanup(webview._TLS_CACHE.clear)
+
+    def _probe(self, returncode=None, raises=None):
+        def run(argv, **kwargs):
+            self.argv, self.kwargs = argv, kwargs
+            if raises is not None:
+                raise raises
+            return mock.Mock(returncode=returncode)
+        with mock.patch.object(webview.subprocess, "run", side_effect=run):
+            return _REAL_TLS_PROBE({"GIO_MODULE_DIR": "/nowhere"})
+
+    def test_gio_without_a_tls_backend_is_reported(self):
+        self.assertFalse(self._probe(returncode=webview._TLS_MISSING))
+        # Asked of the GIO WebKitGTK loads, in the environment xodus-cli gets.
+        self.assertIn("libwebkit2gtk-4.1.so.0", self.argv[-1])
+        self.assertIn("g_tls_backend_supports_tls", self.argv[-1])
+        self.assertEqual(self.kwargs["env"], {"GIO_MODULE_DIR": "/nowhere"})
+
+    def test_a_tls_backend_is_reported(self):
+        self.assertTrue(self._probe(returncode=0))
+
+    def test_a_probe_that_cannot_tell_changes_nothing(self):
+        self.assertTrue(self._probe(returncode=1))
+        webview._TLS_CACHE.clear()
+        self.assertTrue(self._probe(raises=OSError("no python")))
+
+    def test_the_answer_is_kept_for_the_same_environment(self):
+        self._probe(returncode=webview._TLS_MISSING)
+        with mock.patch.object(webview.subprocess, "run",
+                               side_effect=AssertionError("probed twice")):
+            self.assertFalse(_REAL_TLS_PROBE({"GIO_MODULE_DIR": "/nowhere"}))
+
+    def test_a_host_library_without_tls_gives_way_to_the_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            binary = base / "xodus-cli"
+            binary.write_text(f"#!{SH}\nexit 0\n")
+            binary.chmod(0o755)
+            env = {"PATH": "/usr/bin"}
+            with mock.patch.object(webview, "host_tls_available",
+                                   return_value=False), \
+                    mock.patch.object(webview, "prepare",
+                                      return_value=base / "bundle") as prepared, \
+                    mock.patch.object(webview, "info") as said:
+                previous = webview.apply(binary, env)
+            prepared.assert_called_once()
+            self.assertTrue(env["LD_LIBRARY_PATH"].startswith(
+                str(base / "bundle" / "lib")))
+            self.assertEqual(env["GIO_EXTRA_MODULES"],
+                             str(base / "bundle" / "gio-modules"))
+            self.assertIn("TLS", said.call_args.args[0])
+            webview.restore_env(env, previous)
+            self.assertEqual(env, {"PATH": "/usr/bin"})
+
+    def test_doctor_names_a_host_library_without_tls(self):
+        with mock.patch.object(webview, "host_has_webkitgtk", lambda: True), \
+                mock.patch.object(webview, "host_tls_available",
+                                  lambda env=None: False):
+            summary, package = webview.status()
+        self.assertIn("no TLS support", summary)
+        self.assertIsNone(package)
 
 
 if __name__ == "__main__":

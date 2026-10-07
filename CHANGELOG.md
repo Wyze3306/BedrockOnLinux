@@ -49,6 +49,16 @@
 
 ### Fixed
 
+- **The Microsoft Store sign-in works where the system's WebKitGTK has no
+  TLS support** ([#249](https://github.com/Wyze3306/BedrockOnLinux/issues/249)).
+  WebKitGTK speaks TLS through a GIO module, glib-networking's, that GIO looks
+  for at run time. A Nix or Guix WebKitGTK reached outside the wrapper that
+  points GIO at it loads fine, and then the sign-in window shows only "TLS
+  support is not available". Before using the system's WebKitGTK, the
+  launcher now asks the GIO that library loads, in the environment xodus-cli
+  gets, whether it has a TLS backend. When it does not, it uses its bundled
+  WebKitGTK runtime, which carries its own, and `doctor` says so.
+
 - **`bedrock-on-linux optiscaler` works from the portable .pyz.** The .pyz
   started the launcher's command line itself, which has no `optiscaler`
   command, so `optiscaler install` answered "invalid choice", and an
