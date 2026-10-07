@@ -163,10 +163,23 @@ def process_environ(pid):
 
 def open_path(target):
     """Open a file, a folder or a URL with the desktop's default handler.
-    ``open`` on macOS, ``xdg-open`` on Linux. Best-effort; never raises."""
-    opener = "open" if IS_MAC else "xdg-open"
+    ``open`` on macOS, ``xdg-open`` on Linux. Best-effort; never raises.
+
+    Returns False when nothing could be opened, so the caller can say why.
+    The opener runs detached and reports a missing file only to a terminal
+    nobody sees, so a path that does not exist is caught here, before it is
+    handed over: that is what made a button that opens a folder Minecraft
+    has not created yet look like a button that does nothing.
+    """
+    text = str(target)
+    if "://" not in text and not text.startswith("mailto:") \
+            and not Path(text).expanduser().exists():
+        return False
+    # A .app is started with PATH=/usr/bin:/bin:/usr/sbin:/sbin; name the
+    # opener outright rather than depend on it.
+    opener = "/usr/bin/open" if IS_MAC else "xdg-open"
     try:
-        subprocess.Popen([opener, str(target)], stdout=subprocess.DEVNULL,
+        subprocess.Popen([opener, text], stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
         return True
     except OSError:

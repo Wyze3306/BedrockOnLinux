@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 
 from .log import die, ok, warn
 from .perfcheck import find_options_file
-from .prefix import _mc_running, active_prefix
+from .prefix import _mc_running, active_prefix, in_wine_user
 
 # Minecraft Bedrock normally imports these by "opening" the file, which has no
 # handler under Wine — so worlds/packs can't be imported in-game. We unpack
@@ -31,7 +31,8 @@ _PER_ACCOUNT_SUBS = frozenset({
 
 
 def _mojang_dir(prefix=None):
-    return (prefix or active_prefix()) / COM_MOJANG_REL
+    root = prefix or active_prefix()
+    return root / in_wine_user(COM_MOJANG_REL, root)
 
 
 def _active_mojang_dir(prefix=None):

@@ -19,9 +19,14 @@
   Two things do not work there, and the launcher says so instead of failing
   obscurely. Minecraft cannot be **downloaded**: the Store download and the
   decryption every launch needs both live in `xodus-cli`, which is built for
-  Linux and links WebKitGTK — so a Mac points Settings at a decrypted
-  Minecraft for Windows folder it already has, and an encrypted Store package
-  is refused by name rather than handed to Wine as ciphertext. And **Xbox
+  Linux and links WebKitGTK — so a Mac uses a decrypted Minecraft for Windows
+  folder it already has. **Settings ▸ Versions ▸ Use a Minecraft folder…**,
+  PLAY when there is no game yet, and `setup --game-dir` copy it into the
+  launcher's own `games` folder (a clone on APFS) and leave the original
+  untouched; an encrypted Store package is refused by name rather than handed
+  to Wine as ciphertext. With **CrossOver**, whose `bin/wine` runs bottles
+  and ignores `WINEPREFIX`, the launcher's prefix is handed over as a bottle
+  of its own, by path, so no `default` bottle is needed. And **Xbox
   Live sign-in** cannot happen: that is the WineGDK XUser fork compiled into
   GDK-Proton, which has no macOS build, so the game runs offline and on the
   LAN and the launcher warns once at PLAY rather than spending a round of

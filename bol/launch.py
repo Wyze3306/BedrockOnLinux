@@ -65,6 +65,7 @@ from .prefix import (
     active_prefix,
     boot_prefix,
     engine_cmd,
+    engine_finalize,
     game_frame_limit,
     launch_lock,
     patch_options,
@@ -857,7 +858,10 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     if not boot_prefix():
         die("Could not initialise the managed Wine prefix safely.")
     wine_apply_winegdk_prereqs()
-    _install_cryptbase_in_prefix()
+    if not IS_MAC:
+        # GDK-Proton's advapi32 forwards RtlGenRandom to a cryptbase.dll the
+        # prefix has to provide (#144); a macOS Wine has its own.
+        _install_cryptbase_in_prefix()
     try:
         install_gameinput(active_prefix(), Path(gd))
     except Exception as e:
@@ -1040,6 +1044,9 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
             "Minecraft was not started; click PLAY again.")
     apply_custom_env(env, s.get("custom_env") or "")
     _warn_custom_env_overrides(s.get("custom_env") or "")
+    # The environment is final from here: whatever the runtime itself still
+    # has to move out of it (CrossOver's DLL overrides) goes now.
+    cmd, env = engine_finalize(cmd, env)
     # Outermost of all, so the scope holds everything above it, gamescope
     # included; and after the custom environment, where its opt-out lives.
     cmd = _keep_game_out_of_swap(cmd, env)
@@ -1078,8 +1085,11 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     # The account travelled into the prefix a few lines above, so the
     # game signs itself in; the in-game button reaches a sign-in the
     # engine does not implement and only ever fails (#227/#228).
-    info("Starting Minecraft … your account is already linked; "
-         "join your server from the Servers tab.")
+    if online:
+        info("Starting Minecraft … your account is already linked; "
+             "join your server from the Servers tab.")
+    else:
+        info("Starting Minecraft …")
     glog = open(LOGS / "minecraft.log", "w")
     # Everything above that writes a settings file has written it by now, so
     # what is written after this is the game's.

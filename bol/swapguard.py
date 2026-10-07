@@ -41,6 +41,7 @@ import shutil
 import subprocess
 
 from .perfcheck import LOW_MEMORY_MIB, total_memory_mib
+from .platform import IS_LINUX
 from .util import env_flag
 from .xdg_migration import is_flatpak
 
@@ -80,6 +81,9 @@ def swap_guard_available(env=None, runner=None, which=None):
     ``env`` is the environment the game will be started with: the user bus
     has to be reachable from it, not from the launcher's own.
     """
+    if not IS_LINUX:
+        # A cgroup scope from the user's systemd: there is neither on macOS.
+        return False
     if is_flatpak(env):
         # The sandbox has no route to the host's systemd, and the probe
         # would only find that out the slow way.

@@ -5,12 +5,14 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
 from . import xodus
 from .config import CACHE, CONTENT, GAMES
 from .log import BolError, die, info, ok, warn
+from .platform import IS_MAC
 from .util import load_settings, save_settings
 
 
@@ -322,6 +324,114 @@ def use_game_dir(folder):
             s["mc_version"] = version
     save_settings(s)
     return folder
+
+
+# ------------------------------------------------------------ imported builds
+
+# A Mac has no way to download Minecraft (bol.xodus.MAC_UNSUPPORTED), so the
+# game it plays is one the player already has. It is copied in rather than
+# used where it is: setup changes files in the game folder for Wine (XCurl,
+# the UI patches, the executable's stack size), which is not the launcher's
+# to do to a folder it does not own -- and once the copy sits in
+# games/<edition>/<version>/ it is a build like any other, chosen in the
+# version picker and removed from Settings ▸ Versions.
+
+
+def _copy_build(source, target):
+    """Copy ``source`` to the new folder ``target``.
+
+    On macOS as a clone first: APFS copies a 2 GiB build that way in a
+    moment, and in no extra space until either side changes. Anything that
+    cannot be cloned -- another volume, another file system -- is copied.
+    """
+    if IS_MAC:
+        try:
+            subprocess.run(["/bin/cp", "-cR", str(source), str(target)],
+                           check=True, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=3600)
+            return
+        except (OSError, subprocess.SubprocessError):
+            shutil.rmtree(target, ignore_errors=True)
+    shutil.copytree(source, target, symlinks=True)
+
+
+def import_game_folder(source):
+    """Copy a Minecraft for Windows folder the player has into the launcher.
+
+    ``source`` may be the folder holding Minecraft.Windows.exe or any folder
+    above it, such as the "Minecraft for Windows" folder the Xbox app makes
+    with the game in its Content folder. Returns the build's folder in the
+    managed tree, ready for :func:`use_game_dir`.
+    """
+    from .saves import _manifest_edition
+
+    source = Path(source).expanduser()
+    if not source.is_dir():
+        raise BolError(f"{source} is not a folder.")
+    root = xodus.game_root(source)
+    if root is None:
+        if next(source.rglob("Minecraft.Windows.exe"), None) is not None:
+            raise BolError(
+                f"{source} has Minecraft.Windows.exe but no "
+                "appxmanifest.xml beside it, so it is not a complete "
+                "Minecraft for Windows installation. Copy the whole game "
+                "folder, not only the executable.")
+        raise BolError(
+            f"There is no Minecraft.Windows.exe in {source} or in the "
+            "folders inside it. Choose the folder Minecraft for Windows is "
+            "installed in.")
+    root = root.resolve()
+    if IS_MAC and xodus.exe_is_encrypted(root / "Minecraft.Windows.exe"):
+        raise BolError(
+            "This Minecraft.Windows.exe is encrypted: the Microsoft Store and "
+            "the Xbox app keep it that way on disk and decrypt it only while "
+            "the game runs. " + xodus.MAC_UNSUPPORTED)
+    managed = _managed_parts(root)
+    if managed is not None and len(managed) >= 2:
+        info(f"{root} is already one of the launcher's builds.")
+        return root
+    edition = _manifest_edition(root) or "release"
+    version = mc_version_str(root)
+    if not version:
+        raise BolError(
+            f"The appxmanifest.xml in {root} does not say which Minecraft "
+            "version this is.")
+    dest = version_dir(edition, version)
+    existing = _game_root(dest)
+    if existing is not None:
+        info(f"Minecraft {version} is already in the launcher; using that "
+             "copy.")
+        return existing
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    staging = dest.parent / f".import-{version}-{os.getpid()}"
+    shutil.rmtree(staging, ignore_errors=True)
+    info(f"Copying Minecraft {version} from {root} …")
+    try:
+        _copy_build(root, staging)
+        if dest.exists():
+            # An earlier copy that never finished: nothing to keep in it.
+            shutil.rmtree(dest)
+        staging.rename(dest)
+    except OSError as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise BolError(f"Could not copy {root} into the launcher: {exc}") \
+            from exc
+    record = {
+        "schema": 2,
+        "edition": edition,
+        "version": version,
+        "imported_from": str(root),
+        "installed": int(time.time()),
+    }
+    try:
+        (dest / _INSTALL_METADATA).write_text(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8")
+    except OSError:
+        pass
+    ok(f"Minecraft {version} copied into the launcher. The folder it came "
+       "from was not changed.")
+    return _game_root(dest) or dest
 
 
 # ------------------------------------------------------------ installed builds

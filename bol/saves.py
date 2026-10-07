@@ -67,7 +67,10 @@ def _prefix(prefix=None):
 
 def users_dir(edition, prefix=None):
     """The folder holding everything the player made in ``edition``."""
-    return _prefix(prefix) / _ROAMING / DATA_FOLDERS[edition] / "Users"
+    from .prefix import in_wine_user
+    root = _prefix(prefix)
+    roaming = in_wine_user(_ROAMING + "/", root).rstrip("/")
+    return root / roaming / DATA_FOLDERS[edition] / "Users"
 
 
 def _worlds(users):

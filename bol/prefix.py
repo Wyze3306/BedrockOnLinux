@@ -283,6 +283,39 @@ def engine_cmd(exe, prefix=None):
     return proton_umu_cmd(exe, prefix=prefix)
 
 
+def engine_finalize(cmd, env):
+    """The last step before a command from :func:`engine_cmd` runs.
+
+    Called once the environment is final, custom variables included. On
+    Linux there is nothing left to do; on macOS, CrossOver takes the DLL
+    overrides on its command line rather than from the environment.
+    """
+    if IS_MAC:
+        from .winemac import finalize_cmd
+        return finalize_cmd(cmd, env)
+    return cmd, env
+
+
+# Where every path below was written for: Proton names the prefix's Windows
+# user steamuser, always.
+_PROTON_USER = "drive_c/users/steamuser/"
+
+
+def in_wine_user(rel, prefix=None):
+    """``rel``, written for Proton's steamuser, for the user ``prefix`` has.
+
+    Linux keeps the path as it is. A macOS Wine names its user otherwise
+    (``crossover``, or the Mac's login), and there the same files live under
+    that name -- see bol.winemac.wine_user_name.
+    """
+    if not IS_MAC or not rel.startswith(_PROTON_USER):
+        return rel
+    from .winemac import wine_user_name
+    user = wine_user_name(Path(prefix) if prefix is not None
+                          else active_prefix())
+    return f"drive_c/users/{user}/" + rel[len(_PROTON_USER):]
+
+
 def prefix_ready(prefix: Path):
     """Return whether Wine completed the prefix, including both main hives."""
     prefix = Path(prefix)
@@ -453,6 +486,7 @@ def _run_wineboot(pfx: Path, log_path: Path, native_cryptbase):
     cmd.append("-u")
     env = headless_setup_env(env, native_cryptbase=native_cryptbase)
     env.setdefault("WINEDEBUG", "-all")
+    cmd, env = engine_finalize(cmd, env)
     timeout = WINEBOOT_TIMEOUT
     if runtime_setup_pending():
         # This first run pays for the Steam Linux Runtime as well as for Wine.
@@ -1334,7 +1368,7 @@ def patch_options(prefix_idle=None):
     really gone first: two processes truncating and rewriting the same
     settings file is precisely how one ends up cut in half (#175).
     """
-    opt = PFX / OPTIONS_REL
+    opt = PFX / in_wine_user(OPTIONS_REL, PFX)
     data = _read_bytes(opt)
     if not _options_intact(data):
         return
@@ -1591,7 +1625,7 @@ def seed_default_servers(prefix=None, prefix_idle=None,
     if not folders:
         # Before the first launch the game has created none of them; the
         # signed-out profile is the one it reads until an account is added.
-        folders = [root / SHARED_GAME_DATA_REL]
+        folders = [root / in_wine_user(SHARED_GAME_DATA_REL, root)]
     added = []
     for folder in sorted(folders):
         try:
