@@ -314,7 +314,8 @@ def ensure_cli():
 
     if not local_archive:
         try:
-            rels = gh_releases(WINEGDK_PREBUILT_REPO, 30)
+            # Every release, as for the OpenSSL XCurl set (bol.fixups).
+            rels = gh_releases(WINEGDK_PREBUILT_REPO, fetch_all=True)
         except Exception as exc:
             raise XodusError(
                 f"Could not look up the Xodus downloader ({exc}). Check the "

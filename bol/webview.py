@@ -443,7 +443,8 @@ def _fetch():
     local = archive is not None
     if not local:
         try:
-            releases = gh_releases(WINEGDK_PREBUILT_REPO, 30)
+            # Every release, as for the OpenSSL XCurl set (bol.fixups).
+            releases = gh_releases(WINEGDK_PREBUILT_REPO, fetch_all=True)
         except Exception as exc:
             raise BolError(
                 f"Could not look up the WebKitGTK runtime ({exc}). Check the "

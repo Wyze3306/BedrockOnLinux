@@ -319,7 +319,10 @@ def ensure_openssl_xcurl_set():
     url = None
     if not local_archive:
         try:
-            rels = gh_releases(WINEGDK_PREBUILT_REPO, 30)
+            # Every release, not the newest thirty: the set stays in the
+            # release it was uploaded to, and once thirty more had been
+            # published above it, no new install could find it any more.
+            rels = gh_releases(WINEGDK_PREBUILT_REPO, fetch_all=True)
         except Exception as e:
             warn(f"OpenSSL XCurl set lookup failed ({e}).")
             return have

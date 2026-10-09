@@ -73,6 +73,16 @@
 
 ### Fixed
 
+- **A new install finds its online-login components again.** The OpenSSL
+  XCurl set, which carries Minecraft's PlayFab traffic and the RNG DLL the
+  Wine prefix starts with, is downloaded from the release it was uploaded
+  to. The launcher looked for it among the 30 newest releases only, and
+  after 30 more were published it ended with "asset
+  'openssl-xcurl-set-504bb166e4e7.tar.gz' not published yet" on every
+  computer that had not downloaded it before. It now searches every
+  release, and so do the Microsoft Store downloader and its WebKitGTK
+  runtime, which were next in line.
+
 - **A game set to fullscreen that comes up windowed is switched to
   fullscreen** ([#316](https://github.com/Wyze3306/BedrockOnLinux/issues/316)).
   Sometimes Minecraft reached its menu in its windowed mode although its

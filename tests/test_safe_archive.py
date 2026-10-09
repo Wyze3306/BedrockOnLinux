@@ -358,6 +358,42 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
         self.assertEqual((openssl_set / "libcurl-4.dll").read_bytes(), b"curl")
         self.assertEqual((openssl_set / "xcurl-cashim.dll").read_bytes(), b"shim")
 
+    def test_xcurl_set_is_found_past_the_newest_thirty_releases(self):
+        # Uploaded once, the set stays in its own release while newer ones
+        # pile up above it; it was the 38th when fresh installs stopped
+        # finding it ("not published yet").
+        cache = self.base / "cache"
+        archive_name = (
+            "openssl-xcurl-set-" + fixups.OPENSSL_XCURL_REV + ".tar.gz")
+        reviewed = self.base / "reviewed.tar.gz"
+        self._write_xcurl_archive(reviewed)
+        package_sha = hashlib.sha256(reviewed.read_bytes()).hexdigest()
+        openssl_set = self.base / "installed/openssl-set"
+        releases = [{"assets": []} for _ in range(37)] + [{"assets": [{
+            "name": archive_name,
+            "browser_download_url": "https://invalid/xcurl.tar.gz"}]}]
+
+        def gh_releases(_repo, per_page=100, fetch_all=False,
+                        ignore_cache=False):
+            return releases if fetch_all else releases[:per_page]
+
+        def download_reviewed(url, destination, _label):
+            self.assertEqual(url, "https://invalid/xcurl.tar.gz")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(reviewed.read_bytes())
+
+        with mock.patch.object(fixups, "CACHE", cache), \
+                mock.patch.object(
+                    fixups, "OPENSSL_XCURL_SET", openssl_set), \
+                mock.patch.object(
+                    fixups, "OPENSSL_XCURL_ARCHIVE_SHA256", package_sha), \
+                mock.patch.object(fixups, "gh_releases", gh_releases), \
+                mock.patch.object(
+                    fixups, "download", side_effect=download_reviewed):
+            self.assertTrue(fixups.ensure_openssl_xcurl_set())
+
+        self.assertEqual((openssl_set / "libcurl-4.dll").read_bytes(), b"curl")
+
     def test_xcurl_retries_once_after_remote_tar_read_failure(self):
         cache = self.base / "cache"
         archive_name = (
