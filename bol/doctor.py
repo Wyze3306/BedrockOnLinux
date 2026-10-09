@@ -139,13 +139,6 @@ def doctor(acknowledge_gpu_crash=False):
     print(f"  {'webkit2gtk':12} : {webkit_summary}")
     if webkit_package:
         miss.append(webkit_package)
-    # Loading the bundled library is not drawing with it: its WebKitGTK needs
-    # an EGL display for every page, which the host provides, and without one
-    # the sign-in window opens blank (#273).
-    egl_problem = webview.blank_sign_in()
-    if egl_problem:
-        print(f"  {'sign-in gl':12} : BLANK ({egl_problem})")
-        warn(webview.egl_message(egl_problem))
     # Whether that sign-in is on file, and where. Never a missing dependency:
     # it is linked from the launcher, not installed. It is printed with its
     # path because losing it is expensive -- each fresh sign-in claims one of

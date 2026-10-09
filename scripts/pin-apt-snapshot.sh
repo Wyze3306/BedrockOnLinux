@@ -6,13 +6,18 @@
 # bytes and trip the fail-closed SHA asserts. Run as root inside the build
 # container, before `apt-get update`.
 #
-# Usage: pin-apt-snapshot.sh <bullseye|trixie>
+# Usage: pin-apt-snapshot.sh <bullseye|trixie> [YYYYMMDDTHHMMSSZ]
 set -Eeuo pipefail
 
-SUITE="${1:?usage: pin-apt-snapshot.sh <suite>}"
+SUITE="${1:?usage: pin-apt-snapshot.sh <suite> [snapshot]}"
 # Pinned reproducibility constant, like SOURCE_DATE_EPOCH. Bump only alongside a
 # deliberate re-baseline of the affected component hashes (see docs/BUILD.md).
-readonly SNAPSHOT="20260701T000000Z"
+# A second argument names another timestamp, for the one artifact that takes
+# its packages from a later snapshot (the WebKitGTK runtime, XODUS_WEBVIEW_SNAPSHOT
+# in bol/config.py); everything else keeps this one.
+readonly SNAPSHOT="${2:-20260701T000000Z}"
+[[ "$SNAPSHOT" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] \
+  || { echo "!! not a snapshot.debian.org timestamp: $SNAPSHOT" >&2; exit 1; }
 readonly BASE="http://snapshot.debian.org/archive/debian/${SNAPSHOT}"
 readonly SEC="http://snapshot.debian.org/archive/debian-security/${SNAPSHOT}"
 

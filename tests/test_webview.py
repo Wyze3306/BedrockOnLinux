@@ -35,14 +35,20 @@ SH = shutil.which("sh") or "/bin/sh"
 _REAL_TLS_PROBE = webview.host_tls_available
 _TLS_PATCH = mock.patch.object(webview, "host_tls_available",
                                lambda env=None: True)
+# Likewise the EGL question, which is asked of an old host WebKitGTK.
+_REAL_EGL_CHECK = webview.host_egl_failure
+_EGL_PATCH = mock.patch.object(webview, "host_egl_failure",
+                               lambda env=None: None)
 
 
 def setUpModule():
     _TLS_PATCH.start()
+    _EGL_PATCH.start()
 
 
 def tearDownModule():
     _TLS_PATCH.stop()
+    _EGL_PATCH.stop()
 
 
 def _encrypted_build(game_dir):
@@ -783,28 +789,59 @@ class EglDisplayTests(unittest.TestCase):
             self.assertIsNotNone(match, line)
             self.assertEqual(match.group(1), platform)
 
-    def test_only_the_bundled_runtime_is_asked_before_the_window(self):
-        # Its WebKitGTK (2.52) aborts without a display; a host's 2.54 drew
-        # the same page with no EGL vendor at all, so it is not refused on
-        # the probe's word.
-        bundle = {"LD_LIBRARY_PATH": f"{webview.XODUS_WEBVIEW_DIR / 'lib'}:/x"}
-        with mock.patch.object(webview, "egl_failure",
-                               return_value="no display") as probed:
-            self.assertEqual(webview.blank_sign_in(bundle), "no display")
-            self.assertIsNone(webview.blank_sign_in({"LD_LIBRARY_PATH": "/x"}))
-            self.assertIsNone(webview.blank_sign_in({}))
-        probed.assert_called_once_with(bundle)
+    def _host_check(self, version, failure="no display"):
+        with mock.patch.object(webview, "host_webkit_version",
+                               return_value=version), \
+                mock.patch.object(webview, "egl_failure",
+                                  return_value=failure) as probed:
+            return _REAL_EGL_CHECK({"DISPLAY": ":0"}), probed
 
-    def test_doctor_asks_when_the_host_library_would_not_be_used(self):
-        with mock.patch.object(webview, "egl_failure",
-                               return_value="no display"), \
-                mock.patch.object(webview, "host_tls_available",
-                                  lambda env=None: True):
-            with mock.patch.object(webview, "host_has_webkitgtk", lambda: True):
-                self.assertIsNone(webview.blank_sign_in())
-            with mock.patch.object(webview, "host_has_webkitgtk",
-                                   lambda: False):
-                self.assertEqual(webview.blank_sign_in(), "no display")
+    def test_a_host_webkitgtk_from_2_54_on_is_never_asked(self):
+        # It draws the page with no EGL display at all.
+        for version in ((2, 54), (2, 56), (3, 0), None):
+            answer, probed = self._host_check(version)
+            self.assertIsNone(answer, version)
+            probed.assert_not_called()
+
+    def test_an_older_host_webkitgtk_without_a_display_cannot_draw(self):
+        answer, probed = self._host_check((2, 52))
+        self.assertEqual(answer, "its WebKitGTK 2.52 needs an EGL display, "
+                                 "and no display")
+        probed.assert_called_once_with({"DISPLAY": ":0"})
+        answer, _ = self._host_check((2, 52), failure=None)
+        self.assertIsNone(answer)
+
+    def test_an_old_host_library_that_cannot_draw_gives_way_to_the_bundle(
+            self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            binary = base / "xodus-cli"
+            binary.write_text(f"#!{SH}\nexit 0\n")
+            binary.chmod(0o755)
+            env = {"PATH": "/usr/bin"}
+            with mock.patch.object(webview, "host_egl_failure",
+                                   return_value="its WebKitGTK 2.52 needs an "
+                                                "EGL display, and none"), \
+                    mock.patch.object(webview, "prepare",
+                                      return_value=base / "bundle") as prepared, \
+                    mock.patch.object(webview, "info") as said:
+                previous = webview.apply(binary, env)
+            prepared.assert_called_once()
+            self.assertTrue(env["LD_LIBRARY_PATH"].startswith(
+                str(base / "bundle" / "lib")))
+            self.assertIn("draws without one", said.call_args.args[0])
+            webview.restore_env(env, previous)
+            self.assertEqual(env, {"PATH": "/usr/bin"})
+
+    def test_doctor_names_a_host_library_that_cannot_draw(self):
+        with mock.patch.object(webview, "host_has_webkitgtk", lambda: True), \
+                mock.patch.object(webview, "host_egl_failure",
+                                  lambda env=None: "its WebKitGTK 2.52 needs "
+                                                   "an EGL display, and none"):
+            summary, package = webview.status()
+        self.assertIn("bundled runtime is used instead", summary)
+        self.assertIn("2.52", summary)
+        self.assertIsNone(package)
 
     def test_the_message_says_what_to_install(self):
         message = webview.egl_message("the default EGL display did not open "

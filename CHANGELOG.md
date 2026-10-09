@@ -159,20 +159,20 @@
   Checked with the game on a virtual display: the screen is clear while the
   game is minimized, and the game comes back maximized and drawing.
 
-- **A Microsoft sign-in window that could only stay blank is explained
-  instead** ([#273](https://github.com/Wyze3306/BedrockOnLinux/issues/273)).
-  WebKitGTK draws every page through EGL, with or without a GPU, and the
-  bundled runtime's WebKitGTK 2.52 aborts its page process when the system's
-  EGL cannot open a display: libglvnd with no EGL vendor installed, or a Mesa
-  built without EGL. The window stayed open and blank, and nothing said why.
-  Before opening the window with the bundled runtime, the launcher now asks
-  the system's EGL the same two questions WebKitGTK does, and says what to
-  install when there is no answer. With any WebKitGTK, the line its page
-  process prints when it gives up now closes the window and shows the same
-  explanation. `doctor` adds a `sign-in gl` line when the check fails.
-  Reproduced on a virtual display by hiding the EGL vendors. A missing GPU is
-  not a cause: Mesa's software renderer serves both platforms, and the sign-in
-  drew with `/dev/dri` hidden.
+- **The Microsoft sign-in draws on systems whose EGL cannot open a display**
+  ([#273](https://github.com/Wyze3306/BedrockOnLinux/issues/273)). The
+  bundled WebKitGTK runtime was 2.52, which draws every page through EGL, even
+  without a GPU. Its page process aborted when the system's EGL could not open
+  a display (libglvnd with no EGL vendor installed, or a Mesa built without
+  EGL), and the window stayed open and blank. The runtime is now built from
+  WebKitGTK 2.54, which Debian published in trixie-security on 2 October. It
+  draws the page with no EGL display at all, and brings the security fixes of
+  the 2.54 series. A system WebKitGTK older than 2.54 is asked the same two
+  questions WebKitGTK asks its EGL; when there is no display, the sign-in uses
+  the bundled runtime instead, and `doctor` says so. Should a WebKitGTK still
+  give up, the line its page process prints closes the window and says what
+  to install. Reproduced on a virtual display with the EGL vendors hidden:
+  2.52 left a grey window, 2.54 drew Microsoft's page.
 
 - **The bundled WebKitGTK runtime follows a session to another runtime
   directory.** The launcher points the runtime's helper processes at a

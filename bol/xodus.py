@@ -627,10 +627,6 @@ def login(on_line=None):
     binary = ensure_cli()
     reset_webview_state()
     env = _env(binary)
-    blank = webview.blank_sign_in(env)
-    if blank:
-        _record_login_output([], f"not opened: {blank}")
-        raise XodusError(webview.egl_message(blank))
     info("Sign in to the Microsoft account that owns Minecraft …")
     _announce_device_registration(env)
     with _LOGIN_LOCK:

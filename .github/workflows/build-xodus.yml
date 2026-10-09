@@ -110,8 +110,18 @@ jobs:
                 | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
               . "$HOME/.cargo/env"
               scripts/build-xodus-cli.sh /tmp/xodus-work
+              # The WebKitGTK runtime comes from a later snapshot than the
+              # toolchain above: Debian updates WebKitGTK within a stable
+              # release, and 2.54 draws a page where 2.52 aborted for want of
+              # an EGL display (#273). xodus-cli is already built and packaged,
+              # so moving the container on cannot change its bytes; its
+              # WebKitGTK ABI (webkit2gtk-4.1) is the same across the two.
+              webview_snapshot="$(grep -m1 "^XODUS_WEBVIEW_SNAPSHOT = " bol/config.py | cut -d\" -f2)"
+              bash scripts/pin-apt-snapshot.sh trixie "$webview_snapshot"
+              apt-get update
+              apt-get -y --no-install-recommends dist-upgrade
               # The same container, because the bundle has to be the closure of
-              # the binary that was just built, taken from the same snapshot.
+              # the binary that was just built.
               scripts/build-xodus-webview.sh /tmp/xodus-webview-work \
                 /tmp/xodus-work/xodus/target/release/xodus-cli
             '

@@ -52,10 +52,10 @@ def _cli_archive(path, body=b"#!/bin/sh\nexit 0\n"):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-# The sign-in asks the host's EGL whether WebKitGTK could draw before it opens
-# the window. The stand-ins below draw nothing, so no test depends on the EGL
-# of the machine running it; the ones about EGL say what it answers.
-_EGL_PATCH = mock.patch.object(xodus.webview, "blank_sign_in",
+# Choosing the WebKitGTK asks the host's EGL whether an old host library
+# could draw. The stand-ins below draw nothing, so no test depends on the
+# graphics stack of the machine running it.
+_EGL_PATCH = mock.patch.object(xodus.webview, "host_egl_failure",
                                lambda env=None: None)
 
 
@@ -1557,26 +1557,9 @@ class StoreSignInTests(unittest.TestCase):
                       str(caught.exception))
         self.assertNotIsInstance(caught.exception, xodus.LoginCancelled)
 
-    def test_a_host_whose_egl_cannot_draw_is_told_so_before_a_blank_window(
-            self):
-        """A blank sign-in window, and nothing to say why (#273)."""
-        with tempfile.TemporaryDirectory() as tmp, \
-                self._login(tmp, "touch \"$0.ran\"; sleep 30\n") as log, \
-                mock.patch.object(
-                    xodus.webview, "blank_sign_in",
-                    return_value="the default EGL display did not open "
-                                 "(EGL_BAD_PARAMETER)"):
-            with self.assertRaises(xodus.XodusError) as caught:
-                xodus.login()
-            self.assertFalse((Path(tmp) / "xodus-cli.ran").exists())
-            self.assertIn("EGL_BAD_PARAMETER", log.read_text())
-
-        self.assertIn("would stay blank", str(caught.exception))
-        self.assertIn("EGL_BAD_PARAMETER", str(caught.exception))
-
     def test_a_page_process_that_gives_up_on_egl_closes_the_window(self):
-        # What WebKitGTK 2.52's web process prints before it aborts; the
-        # window itself would stay open, blank, for as long as anyone let it.
+        # What WebKitGTK 2.52's web process printed before it aborted; the
+        # window itself stayed open, blank, for as long as anyone let it.
         script = ("echo 'Could not create default EGL display: "
                   "EGL_BAD_PARAMETER. Aborting...'; sleep 30\n")
         with tempfile.TemporaryDirectory() as tmp, \
@@ -1586,7 +1569,7 @@ class StoreSignInTests(unittest.TestCase):
                 xodus.login()
 
         self.assertLess(time.monotonic() - started, 20)
-        self.assertIn("would stay blank", str(caught.exception))
+        self.assertIn("stayed blank", str(caught.exception))
         self.assertIn("default EGL display did not open (EGL_BAD_PARAMETER)",
                       str(caught.exception))
         self.assertFalse(xodus.login_running())

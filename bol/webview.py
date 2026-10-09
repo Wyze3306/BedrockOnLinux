@@ -50,6 +50,7 @@ from pathlib import Path
 from .archive import safe_extract_tar
 from .config import (
     CACHE,
+    WEBKIT_DRAWS_WITHOUT_EGL,
     WINEGDK_PREBUILT_REPO,
     XODUS_WEBVIEW_DIR,
     XODUS_WEBVIEW_EXEC_DIR,
@@ -140,20 +141,21 @@ _TLS_PROBE_KEYS = ("LD_LIBRARY_PATH", "GIO_MODULE_DIR", "GIO_EXTRA_MODULES",
                    "GIO_USE_TLS")
 _TLS_CACHE = {}
 
-# WebKitGTK draws every page through EGL, with or without a GPU: the web
-# process opens a surfaceless EGL display when the EGL library offers that
-# platform, the default display otherwise, and aborts when the one it picked
-# cannot be initialized ("Could not create default EGL display:
+# WebKitGTK up to 2.52 draws every page through EGL, with or without a GPU:
+# the web process opens a surfaceless EGL display when the EGL library offers
+# that platform, the default display otherwise, and aborts when the one it
+# picked cannot be initialized ("Could not create default EGL display:
 # EGL_BAD_PARAMETER. Aborting..."). The window it was drawing for stays open
 # and stays blank, with nothing on screen to say why (issue #273). That
 # happens where libEGL.so.1 has nothing behind it: libglvnd without an EGL
 # vendor, a Mesa built without EGL. A missing GPU is not it -- Mesa's
-# software renderer serves both platforms. The probe asks the host's EGL the
-# same two questions, in the same order, before the window is opened.
+# software renderer serves both platforms.
 #
-# Only for the bundled runtime, whose WebKitGTK (2.52) is the one measured to
-# abort. A host's own may not: 2.54 drew the same page here with no EGL vendor
-# at all. Whichever library it is, the line it prints when it does give up is
+# 2.54 draws the same page with no EGL display at all, and the bundled runtime
+# carries 2.54. So the probe -- the same two questions, in the same order --
+# is only asked for a host WebKitGTK older than that, and a "no" hands the
+# sign-in over to the bundled runtime instead of opening a window that cannot
+# draw. Should a WebKitGTK still give up, the line it prints when it does is
 # recognised as it arrives (EGL_ABORT).
 _EGL_PROBE = (
     "import ctypes, sys\n"
@@ -327,28 +329,42 @@ def bundled(env):
     return libraries in (env.get("LD_LIBRARY_PATH") or "").split(os.pathsep)
 
 
-def blank_sign_in(env=None):
-    """Why the sign-in window would open blank, or None.
+def host_webkit_version():
+    """(major, minor) of the host's WebKitGTK, or None when it cannot be told."""
+    try:
+        library = ctypes.CDLL("libwebkit2gtk-4.1.so.0")
+        major = int(library.webkit_get_major_version())
+        minor = int(library.webkit_get_minor_version())
+    except (OSError, AttributeError, ValueError):
+        return None
+    return (major, minor)
 
-    With ``env``, as xodus-cli is about to be run with it; without, for
-    `doctor`, as the next sign-in would run on this host.
+
+def host_egl_failure(env=None):
+    """Why the host's WebKitGTK would open a blank sign-in window, or None.
+
+    Only a WebKitGTK older than WEBKIT_DRAWS_WITHOUT_EGL can: from that
+    version on it draws without an EGL display. A version that cannot be read
+    is not refused on a guess.
     """
-    if env is None:
-        uses_bundle = not host_has_webkitgtk() or not host_tls_available()
-    else:
-        uses_bundle = bundled(env)
-    return egl_failure(env) if uses_bundle else None
+    version = host_webkit_version()
+    if version is None or version >= WEBKIT_DRAWS_WITHOUT_EGL:
+        return None
+    failure = egl_failure(env)
+    if failure is None:
+        return None
+    return f"its WebKitGTK {version[0]}.{version[1]} needs an EGL display, " \
+           f"and {failure}"
 
 
 def egl_message(detail):
-    """What to tell someone whose EGL cannot give WebKitGTK a display."""
+    """What to tell someone whose WebKitGTK gave up for want of EGL."""
     return (
-        "The Microsoft sign-in window would stay blank on this system: "
-        "WebKitGTK draws every page through EGL, and " + detail + ". "
-        "Install Mesa with EGL enabled (it also draws without a GPU), or the "
-        "EGL vendor file of your graphics driver if libEGL comes from "
-        "libglvnd, then sign in again. The Flatpak build carries its own "
-        "graphics libraries.")
+        "The Microsoft sign-in window stayed blank: this WebKitGTK draws "
+        "every page through EGL, and " + detail + ". Install Mesa with EGL "
+        "enabled (it also draws without a GPU), or the EGL vendor file of "
+        "your graphics driver if libEGL comes from libglvnd, then sign in "
+        "again. The Flatpak build carries its own graphics libraries.")
 
 
 def _host_failure(binary):
@@ -735,14 +751,21 @@ def apply(binary, env, force=False):
     if not force:
         failure = _host_failure(binary)
         if failure is None:
-            if host_tls_available(env):
+            blank = host_egl_failure(env)
+            if host_tls_available(env) and blank is None:
                 return previous
-            # The bundle carries its own GIO TLS module, and its library
-            # directory goes in front of the host's.
-            info("This system's WebKitGTK has no TLS support (GIO finds no "
-                 "glib-networking module), so the Microsoft sign-in would "
-                 "only say \"TLS support is not available\". Using the "
-                 "bundled WebKitGTK runtime instead.")
+            if blank is not None:
+                # The bundle's WebKitGTK draws without one (#273).
+                info(f"This system's WebKitGTK cannot draw the Microsoft "
+                     f"sign-in: {blank}. Using the bundled WebKitGTK runtime "
+                     "instead, which draws without one.")
+            else:
+                # The bundle carries its own GIO TLS module, and its library
+                # directory goes in front of the host's.
+                info("This system's WebKitGTK has no TLS support (GIO finds "
+                     "no glib-networking module), so the Microsoft sign-in "
+                     "would only say \"TLS support is not available\". Using "
+                     "the bundled WebKitGTK runtime instead.")
         else:
             too_old = glibc_too_old_message(failure)
             if too_old:
@@ -775,6 +798,10 @@ def status():
         if not host_tls_available():
             return ("host WebKitGTK has no TLS support (glib-networking); "
                     "the bundled runtime is used instead"), None
+        blank = host_egl_failure()
+        if blank is not None:
+            return (f"host WebKitGTK cannot draw: {blank}; the bundled "
+                    "runtime is used instead"), None
         return "OK (store sign-in)", None
     if installed():
         return "OK (bundled runtime)", None

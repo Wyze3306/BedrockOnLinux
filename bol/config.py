@@ -184,14 +184,25 @@ XODUS_BIN = XODUS_DIR / "xodus-cli"
 # images, issue #184) get this runtime instead: the closure of that stack,
 # built by build-xodus.yml from the same pinned snapshot as xodus-cli.
 XODUS_WEBVIEW_DIR = DATA / "xodus-webview"
-XODUS_WEBVIEW_REV = "trixie-1"
+XODUS_WEBVIEW_REV = "trixie-2"
+# The snapshot.debian.org timestamp the runtime's packages are taken from,
+# later than the one xodus-cli is compiled against (scripts/pin-apt-snapshot.sh)
+# because Debian updates WebKitGTK within a stable release. 2.54, which reached
+# trixie-security on 2026-10-02, is the first to draw a page with no EGL
+# display; 2.52 aborted and left the sign-in window blank (#273). One line:
+# build-xodus.yml reads it with grep + cut.
+XODUS_WEBVIEW_SNAPSHOT = "20261008T000000Z"
+# The first WebKitGTK that draws without an EGL display. An older one on the
+# host hands the sign-in over to the bundled runtime when EGL cannot give it a
+# display, instead of opening a window that stays blank.
+WEBKIT_DRAWS_WITHOUT_EGL = (2, 54)
 # Integrity pin for the CI-built runtime, produced by the reviewed
 # build-xodus.yml run of this branch. Empty means "never published", and the
 # launcher then reports the missing library instead of installing unverified
 # bytes -- publish .github/workflows/build-xodus.yml and pin the SHA-256 it
 # prints. One line, like every pin here: the build and CI checks read it with
 # grep + cut, and a continuation makes them compare the variable name.
-XODUS_WEBVIEW_SHA256 = "a9b04506446ba57fe40bae9e731857e681da230ce4db20e6613ae558441a0c6e"
+XODUS_WEBVIEW_SHA256 = ""
 # The compiled-in directory WebKitGTK spawns its helper processes from. Modern
 # builds drop the WEBKIT_EXEC_PATH override (it is developer-mode only), so the
 # bundled library carries this literal and the launcher rewrites it in place.
