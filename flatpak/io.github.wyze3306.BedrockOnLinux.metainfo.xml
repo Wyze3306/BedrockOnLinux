@@ -77,6 +77,30 @@
   </supports>
 
   <releases>
+    <release version="2.2.9" date="2026-10-09">
+      <description>
+        <p>Worlds are backed up before another Minecraft version opens them,
+           the graphics card can be chosen, the .deb and .rpm update
+           themselves, and fullscreen starts, the Microsoft sign-in and new
+           installs are fixed.</p>
+        <ul>
+          <li>backs up your worlds before a different Minecraft version opens
+              them, restores any backup, and offers Preview a copy of them</li>
+          <li>lets you choose the graphics card Minecraft renders on</li>
+          <li>updates the .deb and .rpm packages by itself</li>
+          <li>adds a BetterRTX preset manager and opens Bedrock Editor</li>
+          <li>no longer stretches a fullscreen start, switches a game that came
+              up windowed, and clears the screen when the game is minimized</li>
+          <li>draws the Microsoft sign-in on systems whose EGL cannot open a
+              display or whose WebKitGTK has no TLS support</li>
+          <li>finds its online-login components on a new install again</li>
+          <li>checks third-party DLLs and its own updates against pinned
+              SHA-256 sums</li>
+          <li>explains a launch without a network connection, and what an ARM
+              computer needs to run x86-64 programs</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.8" date="2026-10-04">
       <description>
         <p>Exports work, the mouse wheel no longer closes the game under the

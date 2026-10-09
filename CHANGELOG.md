@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 2.2.9 — 2026-10-09
+
+Your worlds are now backed up before another Minecraft version opens
+them, the graphics card the game runs on can be chosen, and the `.deb` and
+`.rpm` update themselves. Fullscreen starts are no longer stretched, the
+Microsoft sign-in draws on systems without a usable EGL, and a new install
+finds its online-login components again.
 
 ### Added
 
@@ -48,7 +54,7 @@
   Store builds included: the URI follows the decrypted executable.
 
 - **Your worlds, settings and servers follow you from one Minecraft version
-  to the next, and can be had back.** Every Minecraft build already opened the
+  to the next, and can be restored.** Every Minecraft build already opened the
   same data, but nothing showed it, and a version change could leave it looking
   lost. Three things are fixed:
   - **Automatic backups.** Before a version other than the last one opens your
@@ -128,8 +134,8 @@
   Users folder in its place, and the next restore deleted the player's data
   as a leftover. PLAY now finishes or undoes an interrupted swap before the
   game opens the folder. The player's data goes back, and anything the game
-  saved in the fresh folder is kept as a backup that says so. The test that
-  reproduces it lost the world on the old code.
+  saved in the fresh folder is kept as a backup that says so. On the
+  previous code, the test that reproduces this loses the world.
 
 - **A program that crashed no longer reads as a GPU fault.** The kernel
   reports a crashed program as "traps: wineserver[4242] general protection
@@ -153,7 +159,7 @@
 
 - **Versions with a three-digit minor are named right.** The game's
   manifest writes 1.21.120.4 as `1.21.12004.0`, and the launcher read
-  1.21.12.4 out of it. The patch is the last two digits.
+  1.21.12.4 out of it. The patch number is its last two digits.
 
 - **`BOL_FRAME_RATE=inf` means no cap** instead of failing the launch with
   an OverflowError.
@@ -212,11 +218,11 @@
   social and Realms services. It wrote them into the game's folder, where
   nobody looks for a log and where the file grew with every session. Each
   session's `xcurl.log` now moves to the logs folder when the game closes, next
-  to `minecraft.log`. That is the file that tells a Realms Hub upload which
-  "checks the internet connection"
-  ([#163](https://github.com/Wyze3306/BedrockOnLinux/issues/163)) or greyed-out
-  Realms ([#313](https://github.com/Wyze3306/BedrockOnLinux/issues/313)) apart
-  from a request the service refused.
+  to `minecraft.log`. It is the file that tells a Realms Hub upload failing
+  with "check your internet connection"
+  ([#163](https://github.com/Wyze3306/BedrockOnLinux/issues/163)), or Realms
+  greyed out ([#313](https://github.com/Wyze3306/BedrockOnLinux/issues/313)),
+  apart from a request the service refused.
 
 - **Started in fullscreen, Minecraft is no longer stretched and the mouse
   lines up** ([#283](https://github.com/Wyze3306/BedrockOnLinux/issues/283)).
