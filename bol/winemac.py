@@ -46,10 +46,13 @@ section of the README.
 
 import fcntl
 import getpass
+import hashlib
 import os
 import re
 import shutil
 import subprocess
+import tarfile
+import urllib.request
 from pathlib import Path
 
 from .log import BolError, die, info, ok, warn
@@ -536,6 +539,128 @@ def wine_user_name(prefix):
     if expected in names or not names:
         return expected
     return names[0]
+
+
+# ------------------------------------------------------------ GDK runtime
+#
+# Minecraft for Windows is a GDK game. The moment it starts it loads
+# xgameruntime.dll -- the Gaming Runtime that Windows gets with Gaming
+# Services -- and when there is none it quits, with exit code 0 and nothing
+# on screen. No macOS Wine ships one: CrossOver 26.3 has gameinput.dll and
+# nothing else of the GDK. So on a Mac the game closed by itself right after
+# PLAY ("Game closed (exit 0)", no known cause).
+#
+# WineGDK's xgameruntime, from the engine the Linux launcher runs, is a plain
+# PE that imports only ordinary Windows DLLs (advapi32, bcrypt, combase,
+# crypt32, kernel32, ucrtbase, winhttp, and two common ntdll exports) -- no
+# Wine internals -- so any Wine can load it. The Mac installs that one DLL,
+# pinned by its SHA-256 from the engine's own manifest.
+
+# Where it sits in the engine tree, and therefore in the engine archive.
+_XGAMERUNTIME_MEMBER = "files/lib/wine/x86_64-windows/xgameruntime.dll"
+# Every Wine builtin carries this right after its DOS header. A Wine that
+# sees it takes the file for one of its own builtins and looks for the
+# matching one in its own tree, which no macOS Wine has; cleared, the DLL is
+# loaded as what it is there, a native DLL.
+_BUILTIN_MARKER = b"Wine builtin DLL"
+_BUILTIN_MARKER_AT = 0x40
+# A bound on what is read out of the archive for one 1.5 MB DLL.
+_XGAMERUNTIME_MAX = 16 * 1024 * 1024
+
+
+def _sha256_file(path):
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _xgameruntime_candidates():
+    """Where a verified copy can already be, best first."""
+    from .config import CACHE, WINEGDK_OUT, WINEGDK_XGAMERUNTIME_SHA256
+    return (
+        # Inside BedrockOnLinux.app: Contents/Resources/winegdk, beside bol/.
+        Path(__file__).resolve().parent.parent / "winegdk" / "xgameruntime.dll",
+        CACHE / f"xgameruntime-{WINEGDK_XGAMERUNTIME_SHA256[:12]}.dll",
+        # The Linux engine itself, on the machine that builds the bundle.
+        WINEGDK_OUT / _XGAMERUNTIME_MEMBER,
+    )
+
+
+def _stream_archive_member(url, member, limit):
+    """The bytes of ``member`` in the .tar.gz at ``url``, read as it arrives.
+
+    The engine archive is 860 MB and this DLL is 570 MB into it; reading it
+    as a stream stops there, and keeps nothing else on disk.
+    """
+    request = urllib.request.Request(url, headers={"User-Agent": "BedrockOnLinux"})
+    with urllib.request.urlopen(request, timeout=60) as response, \
+            tarfile.open(fileobj=response, mode="r|gz") as archive:
+        for entry in archive:
+            if not entry.name.endswith("/" + member):
+                continue
+            if not entry.isfile() or entry.size > limit:
+                break
+            stream = archive.extractfile(entry)
+            return stream.read() if stream else None
+    return None
+
+
+def xgameruntime_dll():
+    """A verified copy of WineGDK's xgameruntime.dll, fetched once."""
+    from .config import (CACHE, WINEGDK_BUILD_REV, WINEGDK_PREBUILT_REPO,
+                         WINEGDK_XGAMERUNTIME_SHA256 as pin)
+    candidates = _xgameruntime_candidates()
+    for candidate in candidates:
+        if candidate.is_file() and _sha256_file(candidate) == pin:
+            return candidate
+    cached = candidates[1]
+    url = (f"https://github.com/{WINEGDK_PREBUILT_REPO}/releases/download/"
+           f"engine-{WINEGDK_BUILD_REV}/GDK-Proton-xuser-"
+           f"{WINEGDK_BUILD_REV}.tar.gz")
+    info("Downloading the GDK runtime Minecraft needs to start (one time: "
+         "it is read out of the game engine archive, about 570 MB) …")
+    try:
+        data = _stream_archive_member(url, _XGAMERUNTIME_MEMBER,
+                                      _XGAMERUNTIME_MAX)
+    except (OSError, tarfile.TarError, EOFError) as exc:
+        raise BolError(
+            f"Could not download the GDK runtime Minecraft needs ({exc}). "
+            "Check the network connection and click PLAY again.") from exc
+    if not data or hashlib.sha256(data).hexdigest() != pin:
+        raise BolError(
+            "The GDK runtime in the game engine archive is not the one this "
+            "launcher was released with, so it was not installed.")
+    CACHE.mkdir(parents=True, exist_ok=True)
+    staged = cached.with_name(cached.name + ".part")
+    staged.write_bytes(data)
+    staged.replace(cached)
+    return cached
+
+
+def install_xgameruntime(prefix):
+    """Put WineGDK's xgameruntime.dll in ``prefix``'s system32, as native.
+
+    Returns the installed path. Rewritten only when it differs, so it costs a
+    file comparison at every PLAY.
+    """
+    data = bytearray(Path(xgameruntime_dll()).read_bytes())
+    end = _BUILTIN_MARKER_AT + len(_BUILTIN_MARKER)
+    if bytes(data[_BUILTIN_MARKER_AT:end]) == _BUILTIN_MARKER:
+        data[_BUILTIN_MARKER_AT:end] = bytes(len(_BUILTIN_MARKER))
+    target = Path(prefix) / "drive_c" / "windows" / "system32" / \
+        "xgameruntime.dll"
+    try:
+        if target.read_bytes() == data:
+            return target
+    except OSError:
+        pass
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged = target.with_name(target.name + ".bol-new")
+    staged.write_bytes(data)
+    staged.replace(target)
+    ok("GDK runtime installed in the Wine prefix.")
+    return target
 
 
 # ------------------------------------------------------------------ setup

@@ -104,13 +104,11 @@ def doctor(acknowledge_gpu_crash=False):
     hint = pm_hint()
     miss = []
     print(f"  {'python3':12} : {sys.version.split()[0]}")
-    # The game, the engine and xodus-cli are x86-64 programs (#250). A Mac
-    # runs them through Rosetta, which the Windows runtime line checks.
-    if not IS_MAC:
-        print(f"  {'cpu':12} : {hostarch.summary()}")
-        arch_problem = hostarch.problem()
-        if arch_problem:
-            warn(arch_problem)
+    # The game, the engine and xodus-cli are x86-64 programs (#250).
+    print(f"  {'cpu':12} : {hostarch.summary()}")
+    arch_problem = hostarch.problem()
+    if arch_problem:
+        warn(arch_problem)
     # zstd is only needed to unpack the Linux engine and payloads; a Mac that
     # never downloads them should not be told to install it.
     tools = (("tar", "tar"), ("curl", "curl"))

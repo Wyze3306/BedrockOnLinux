@@ -932,5 +932,132 @@ class MacWindowTests(unittest.TestCase):
         self.assertIn("first time it starts", told.call_args[0][1])
 
 
+class MacGdkRuntimeTests(unittest.TestCase):
+    """Minecraft quits with exit code 0 when no xgameruntime.dll is there,
+    and no macOS Wine ships one: the Mac takes WineGDK's, as a native DLL."""
+
+    _DLL = (b"MZ" + b"\0" * 0x3e + b"Wine builtin DLL" + b"\0" * 0x30
+            + b"PE\0\0rest of the image")
+
+    def _pin(self, data=None):
+        import hashlib
+        return hashlib.sha256(data or self._DLL).hexdigest()
+
+    def _config(self, directory, data=None):
+        from bol import config
+        return mock.patch.multiple(
+            config, CACHE=Path(directory) / "cache",
+            WINEGDK_OUT=Path(directory) / "engine",
+            WINEGDK_XGAMERUNTIME_SHA256=self._pin(data))
+
+    def test_it_is_installed_as_a_native_dll(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "xgameruntime.dll"
+            source.write_bytes(self._DLL)
+            prefix = Path(directory) / "pfx"
+            with mock.patch.object(winemac, "xgameruntime_dll",
+                                   return_value=source), \
+                    mock.patch.object(winemac, "ok"):
+                target = winemac.install_xgameruntime(prefix)
+                installed = target.read_bytes()
+                # Unchanged the second time, and not rewritten.
+                before = target.stat().st_mtime_ns
+                winemac.install_xgameruntime(prefix)
+                self.assertEqual(target.stat().st_mtime_ns, before)
+        self.assertEqual(target, prefix / "drive_c/windows/system32/"
+                                          "xgameruntime.dll")
+        self.assertNotIn(b"Wine builtin DLL", installed)
+        self.assertEqual(len(installed), len(self._DLL))
+        self.assertTrue(installed.startswith(b"MZ"))
+        self.assertIn(b"PE\0\0rest of the image", installed)
+
+    def test_the_engine_on_this_machine_is_used_when_it_matches(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self._config(directory):
+            engine = (Path(directory) / "engine" /
+                      winemac._XGAMERUNTIME_MEMBER)
+            engine.parent.mkdir(parents=True)
+            engine.write_bytes(self._DLL)
+            with mock.patch.object(winemac, "_stream_archive_member") as fetch:
+                self.assertEqual(winemac.xgameruntime_dll(), engine)
+            fetch.assert_not_called()
+
+    def test_a_copy_that_does_not_match_the_pin_is_not_used(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self._config(directory):
+            engine = (Path(directory) / "engine" /
+                      winemac._XGAMERUNTIME_MEMBER)
+            engine.parent.mkdir(parents=True)
+            engine.write_bytes(b"MZ another build")
+            with mock.patch.object(winemac, "_stream_archive_member",
+                                   return_value=self._DLL), \
+                    mock.patch.object(winemac, "info"):
+                found = winemac.xgameruntime_dll()
+            self.assertEqual(found.read_bytes(), self._DLL)
+            self.assertEqual(found.parent, Path(directory) / "cache")
+
+    def test_bytes_from_the_archive_that_do_not_match_are_refused(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self._config(directory):
+            with mock.patch.object(winemac, "_stream_archive_member",
+                                   return_value=b"MZ tampered"), \
+                    mock.patch.object(winemac, "info"):
+                with self.assertRaises(winemac.BolError):
+                    winemac.xgameruntime_dll()
+            self.assertEqual(list((Path(directory) / "cache").glob("*.dll"))
+                             if (Path(directory) / "cache").exists() else [],
+                             [])
+
+    def test_the_dll_is_read_out_of_the_archive_as_a_stream(self):
+        import io
+        import tarfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "engine.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                for name, data in (
+                        ("GDK-Proton-xuser/proton", b"#!/bin/sh\n"),
+                        ("GDK-Proton-xuser/" + winemac._XGAMERUNTIME_MEMBER,
+                         self._DLL)):
+                    info = tarfile.TarInfo(name)
+                    info.size = len(data)
+                    tar.addfile(info, io.BytesIO(data))
+            found = winemac._stream_archive_member(
+                archive.as_uri(), winemac._XGAMERUNTIME_MEMBER, 1 << 20)
+            self.assertEqual(found, self._DLL)
+            self.assertIsNone(winemac._stream_archive_member(
+                archive.as_uri(), winemac._XGAMERUNTIME_MEMBER, 10))
+
+    def test_the_pin_is_the_engines_own(self):
+        """The pin has to move with WINEGDK_BUILD_REV; an engine of that
+        revision on this machine says what it should be."""
+        import json
+        from bol import config
+
+        manifest = config.WINEGDK_OUT / "engine-manifest.json"
+        try:
+            payload = json.loads(manifest.read_text())
+        except (OSError, ValueError):
+            self.skipTest("no engine installed here")
+        if payload.get("build_rev") != config.WINEGDK_BUILD_REV:
+            self.skipTest("the installed engine is another revision")
+        self.assertEqual(
+            payload["critical_files"][winemac._XGAMERUNTIME_MEMBER],
+            config.WINEGDK_XGAMERUNTIME_SHA256)
+
+
+class MacArchitectureTests(unittest.TestCase):
+    def test_apple_silicon_is_not_told_to_install_an_emulator(self):
+        """Rosetta runs x86-64 there, not binfmt_misc (#250 is Linux's)."""
+        from bol import hostarch
+
+        with mock.patch.object(hostarch, "IS_MAC", True), \
+                mock.patch.object(hostarch, "machine", return_value="arm64"), \
+                mock.patch.object(hostarch.platform, "machine",
+                                  return_value="arm64"):
+            self.assertIsNone(hostarch.problem())
+            self.assertIn("Rosetta", hostarch.summary())
+
+
 if __name__ == "__main__":
     unittest.main()

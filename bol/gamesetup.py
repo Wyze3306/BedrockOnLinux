@@ -160,6 +160,9 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
             "installing GameInput. Check "
             f"{LOGS / 'native-login.log'} and re-run 'Install / Update'."
         )
+    if IS_MAC:
+        from .winemac import install_xgameruntime
+        install_xgameruntime(active_prefix())
     install_gameinput(active_prefix(), gd)
     hide_signin_button(gd)
     if IS_MAC:
