@@ -202,7 +202,7 @@ WEBKIT_DRAWS_WITHOUT_EGL = (2, 54)
 # bytes -- publish .github/workflows/build-xodus.yml and pin the SHA-256 it
 # prints. One line, like every pin here: the build and CI checks read it with
 # grep + cut, and a continuation makes them compare the variable name.
-XODUS_WEBVIEW_SHA256 = ""
+XODUS_WEBVIEW_SHA256 = "9685289ff178beaa74a6e8f1eea78e55c202176eadf25445d2e1670c8220064f"
 # The compiled-in directory WebKitGTK spawns its helper processes from. Modern
 # builds drop the WEBKIT_EXEC_PATH override (it is developer-mode only), so the
 # bundled library carries this literal and the launcher rewrites it in place.
