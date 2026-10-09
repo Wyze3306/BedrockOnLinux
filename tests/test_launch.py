@@ -121,6 +121,9 @@ class ReadyLaunchHarness:
             # Nor the player's real worlds: a backup is a copy of them.
             mock.patch.object(launch.saves, "before_launch",
                               side_effect=self._before_launch),
+            # Nor the real game's resource pack cache.
+            mock.patch.object(launch.packcache, "prune",
+                              return_value=(0, 0)),
             mock.patch.object(launch.saves, "ran_signed_out",
                               return_value=signed_out),
             mock.patch.object(launch, "diagnose",

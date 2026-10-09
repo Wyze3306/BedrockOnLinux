@@ -89,6 +89,18 @@ finds its online-login components again.
   release, and so do the Microsoft Store downloader and its WebKitGTK
   runtime, which were next in line.
 
+- **Old versions of server resource packs no longer pile up.** Every pack
+  version a server sends stays unpacked in the prefix's
+  `Temp/Minecraft Bedrock/minecraftpe/packcache`. On Windows the system's
+  cleanup of temporary files keeps that in check; under Wine nothing does.
+  After a week of play, one prefix held 4.8 GB in 300,000 files, 28 versions
+  of a single server's UI pack among them. Before each launch, the launcher
+  now removes a pack version when a newer version of the same pack is cached
+  and the old one has not been written to for 7 days, the age Windows gives
+  temporary files. The newest version of every pack stays, so nothing a
+  server sends today is lost. On that prefix this frees 4.2 GB once the
+  week has passed.
+
 - **A game set to fullscreen that comes up windowed is switched to
   fullscreen** ([#316](https://github.com/Wyze3306/BedrockOnLinux/issues/316)).
   Sometimes Minecraft reached its menu in its windowed mode although its

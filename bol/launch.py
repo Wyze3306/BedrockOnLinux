@@ -24,6 +24,7 @@ from .auth import (
 from . import (
     discord,
     fullscreen_fix,
+    packcache,
     presence as xbl_presence,
     saves,
     supervision,
@@ -961,6 +962,17 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         edition = None
         warn(f"Your worlds and settings could not be backed up before this "
              f"launch ({type(exc).__name__}: {exc}).")
+    # Server resource packs left behind by newer versions of themselves: the
+    # prefix's Temp is never cleaned under Wine. The game is not running yet.
+    try:
+        removed, freed = packcache.prune(active_prefix())
+        if removed:
+            info(f"Removed {removed} outdated server resource pack "
+                 f"version{'s' if removed != 1 else ''} "
+                 f"({freed / 2 ** 20:.0f} MB) from the game's cache.")
+    except Exception as exc:
+        warn(f"The game's resource pack cache could not be tidied "
+             f"({type(exc).__name__}: {exc}).")
     if frame_limit:
         _set_aside_game_frame_limit()
     else:
