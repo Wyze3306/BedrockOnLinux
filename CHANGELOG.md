@@ -73,6 +73,19 @@
 
 ### Fixed
 
+- **A game set to fullscreen that comes up windowed is switched to
+  fullscreen** ([#316](https://github.com/Wyze3306/BedrockOnLinux/issues/316)).
+  Sometimes Minecraft reached its menu in its windowed mode although its
+  settings asked for fullscreen, its framed window as large as the screen. The
+  window manager's title bar and border then showed as a strip along the top
+  and the left, the rest of the picture ran off the screen, and the game
+  behaved as a window. Once the menu is up, the helper that already resizes a
+  fullscreen start (#283) now recognises that frame and presses F11 for the
+  player. The game's own switch then resizes its picture. Checked on a
+  virtual display: a windowed game sized to the screen went fullscreen and
+  reallocated its picture at 1600×900. A window that the window manager keeps
+  below its own title bar, as a normal maximized window is, is left alone.
+
 - **The AppImage starts Store builds without a Python on the system.** Every
   Minecraft from the Store starts through a small script between xodus-cli
   and Wine. It began with `#!/usr/bin/env python3`, which looks for the

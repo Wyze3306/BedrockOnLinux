@@ -16,6 +16,13 @@ whatever has the keyboard. Measured: "Reallocating swapchain (1600 x 899)"
 then "(1600 x 900)", and the picture is no longer stretched. A window that
 does not cover its monitor is left alone, so a session started windowed, or
 already resized, is not touched. BOL_FULLSCREEN_NUDGE=0 turns it off.
+
+Sometimes the game reaches its menu still in its windowed mode, with its
+framed window as large as the screen: the window manager's title bar and
+border show along the top and left and the rest runs off the screen (#316).
+The helper then asks the game to switch with F11, as a player would, and the
+game's own switch resizes its buffers. Measured: a windowed game sized to
+the screen went fullscreen, reallocating its swap chain at 1600 x 900.
 """
 # SPDX-License-Identifier: MIT
 
