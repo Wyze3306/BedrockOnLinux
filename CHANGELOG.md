@@ -26,7 +26,10 @@
   untouched; an encrypted Store package is refused by name rather than handed
   to Wine as ciphertext. With **CrossOver**, whose `bin/wine` runs bottles
   and ignores `WINEPREFIX`, the launcher's prefix is handed over as a bottle
-  of its own, by path, so no `default` bottle is needed. And **Xbox
+  of its own, by path, so no `default` bottle is needed. Minecraft is a GDK
+  game and quits at once without a Gaming Runtime, which no macOS Wine
+  ships: the launcher installs WineGDK's `xgameruntime.dll` into the prefix
+  as a native DLL, the one its Linux engine pins. And **Xbox
   Live sign-in** cannot happen: that is the WineGDK XUser fork compiled into
   GDK-Proton, which has no macOS build, so the game runs offline and on the
   LAN and the launcher warns once at PLAY rather than spending a round of

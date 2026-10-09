@@ -140,6 +140,11 @@ WINEGDK_BUILD_REV = "wow64-archs-native20"
 WINEGDK_ARCHIVE_SHA256 = "2f30533b249954438bf6b425631539c8d8036261ce25cffa0d1ea5d30f1d3e27"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "e76d21e706dec9775a41b176b48e69dade034a8248b6f4b9a169dc4c336e2600"
+# The engine's own x86_64 xgameruntime.dll, as its engine-manifest.json pins
+# it under critical_files. macOS runs no engine, and no macOS Wine ships an
+# xgameruntime, so a Mac takes this one DLL (bol.winemac); it moves with
+# WINEGDK_BUILD_REV.
+WINEGDK_XGAMERUNTIME_SHA256 = "f1d5569ce40ab9b973336a5f3cf2e65b367dc535029d243e3850748b16ceb47e"
 
 SELF_REPO = WINEGDK_PREBUILT_REPO
 

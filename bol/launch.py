@@ -858,7 +858,12 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     if not boot_prefix():
         die("Could not initialise the managed Wine prefix safely.")
     wine_apply_winegdk_prereqs()
-    if not IS_MAC:
+    if IS_MAC:
+        # The GDK runtime the game quits without (bol.winemac); GDK-Proton
+        # carries its own on Linux.
+        from .winemac import install_xgameruntime
+        install_xgameruntime(active_prefix())
+    else:
         # GDK-Proton's advapi32 forwards RtlGenRandom to a cryptbase.dll the
         # prefix has to provide (#144); a macOS Wine has its own.
         _install_cryptbase_in_prefix()
@@ -940,7 +945,10 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     # cryptbase there would only point it at a file nobody installed.
     overrides = ["vrclient=", "vrclient_x64=", "openvr_api=",
                  "wineopenxr=", "amd_ags_x64="]
-    if not IS_MAC:
+    if IS_MAC:
+        # WineGDK's, installed above, over any stub a Wine might add later.
+        overrides.insert(0, "xgameruntime=n,b")
+    else:
         overrides.insert(0, "cryptbase=n,b")
     cur = os.environ.get("WINEDLLOVERRIDES", "")
     if cur:

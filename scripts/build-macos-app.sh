@@ -99,6 +99,34 @@ CHECK
 rm -rf "$APP/Contents/Resources/bin"
 find "$APP/Contents/Resources" -name __pycache__ -type d -prune -exec rm -rf {} +
 
+# WineGDK's xgameruntime.dll: Minecraft quits at once without a Gaming
+# Runtime, and no macOS Wine ships one (bol/winemac.py). Taken from the engine
+# this launcher pins and checked against WINEGDK_XGAMERUNTIME_SHA256 -- from
+# the engine installed on this machine when it is that one, otherwise read
+# out of the engine release archive.
+WINEGDK_DIR="$APP/Contents/Resources/winegdk"
+mkdir -p "$WINEGDK_DIR"
+"$PYTHON" - "$SRC" "$WINEGDK_DIR" <<'XGAMERUNTIME'
+import shutil
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from bol.config import WINEGDK_BUILD_REV  # noqa: E402
+from bol.winemac import xgameruntime_dll  # noqa: E402
+
+target = Path(sys.argv[2])
+shutil.copyfile(xgameruntime_dll(), target / "xgameruntime.dll")
+(target / "NOTICE").write_text(
+    "xgameruntime.dll is part of WineGDK (https://github.com/Weather-OS/"
+    "WineGDK), licensed under the GNU LGPL 2.1 or later, as built into the "
+    f"BedrockOnLinux game engine {WINEGDK_BUILD_REV}. That engine, its "
+    "build provenance and the WineGDK patches it carries are published at "
+    "https://github.com/Wyze3306/BedrockOnLinux (release "
+    f"engine-{WINEGDK_BUILD_REV}, and third_party/ in the repository).\n")
+print("bundled WineGDK xgameruntime.dll")
+XGAMERUNTIME
+
 # The icon. On a Mac, iconutil wants a full .iconset and sips does the
 # resizing; elsewhere scripts/png2icns.py writes the same container directly.
 if (( NATIVE )); then
