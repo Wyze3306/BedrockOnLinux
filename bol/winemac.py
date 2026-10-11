@@ -550,22 +550,40 @@ def wine_user_name(prefix):
 # nothing else of the GDK. So on a Mac the game closed by itself right after
 # PLAY ("Game closed (exit 0)", no known cause).
 #
-# WineGDK's xgameruntime, from the engine the Linux launcher runs, is a plain
-# PE that imports only ordinary Windows DLLs (advapi32, bcrypt, combase,
-# crypt32, kernel32, ucrtbase, winhttp, and two common ntdll exports) -- no
-# Wine internals -- so any Wine can load it. The Mac installs that one DLL,
-# pinned by its SHA-256 from the engine's own manifest.
+# The Linux engine's runtime is two files, and the Mac takes both, each
+# pinned by the SHA-256 the engine's own manifest gives it:
+#
+# xgameruntime.dll
+#     WineGDK's: a plain PE that imports only ordinary Windows DLLs (advapi32,
+#     bcrypt, combase, crypt32, kernel32, ucrtbase, winhttp, and two common
+#     ntdll exports) -- no Wine internals -- so any Wine can load it.
+# xgameruntime.dll.threading
+#     Microsoft's own Gaming Runtime, as GDK-Proton redistributes it, which
+#     WineGDK loads by that name and hands XThreading to: the task queues and
+#     async calls the game runs everything through. Without it the game's
+#     first task queue fails, and Minecraft dies on the C++ exception it
+#     raises for that (exit 99, 0xe06d7363).
 
-# Where it sits in the engine tree, and therefore in the engine archive.
-_XGAMERUNTIME_MEMBER = "files/lib/wine/x86_64-windows/xgameruntime.dll"
+# Where both sit in the engine tree, and therefore in the engine archive.
+_ENGINE_DLL_DIR = "files/lib/wine/x86_64-windows"
 # Every Wine builtin carries this right after its DOS header. A Wine that
 # sees it takes the file for one of its own builtins and looks for the
 # matching one in its own tree, which no macOS Wine has; cleared, the DLL is
 # loaded as what it is there, a native DLL.
 _BUILTIN_MARKER = b"Wine builtin DLL"
 _BUILTIN_MARKER_AT = 0x40
-# A bound on what is read out of the archive for one 1.5 MB DLL.
-_XGAMERUNTIME_MAX = 16 * 1024 * 1024
+# A bound on what is read out of the archive for one of these files.
+_GDK_RUNTIME_MAX = 16 * 1024 * 1024
+
+
+def _gdk_runtime_pins():
+    """``{file name: SHA-256}`` for the files the Mac installs."""
+    from .config import (WINEGDK_XGAMERUNTIME_SHA256,
+                         WINEGDK_XGAMERUNTIME_THREADING_SHA256)
+    return {
+        "xgameruntime.dll": WINEGDK_XGAMERUNTIME_SHA256,
+        "xgameruntime.dll.threading": WINEGDK_XGAMERUNTIME_THREADING_SHA256,
+    }
 
 
 def _sha256_file(path):
@@ -575,92 +593,118 @@ def _sha256_file(path):
         return None
 
 
-def _xgameruntime_candidates():
-    """Where a verified copy can already be, best first."""
-    from .config import CACHE, WINEGDK_OUT, WINEGDK_XGAMERUNTIME_SHA256
+def _gdk_runtime_candidates(name, pin):
+    """Where a verified copy of ``name`` can already be, best first."""
+    from .config import CACHE, WINEGDK_OUT
     return (
         # Inside BedrockOnLinux.app: Contents/Resources/winegdk, beside bol/.
-        Path(__file__).resolve().parent.parent / "winegdk" / "xgameruntime.dll",
-        CACHE / f"xgameruntime-{WINEGDK_XGAMERUNTIME_SHA256[:12]}.dll",
+        Path(__file__).resolve().parent.parent / "winegdk" / name,
+        CACHE / f"{name}-{pin[:12]}",
         # The Linux engine itself, on the machine that builds the bundle.
-        WINEGDK_OUT / _XGAMERUNTIME_MEMBER,
+        WINEGDK_OUT / _ENGINE_DLL_DIR / name,
     )
 
 
-def _stream_archive_member(url, member, limit):
-    """The bytes of ``member`` in the .tar.gz at ``url``, read as it arrives.
+def _stream_archive_members(url, members, limit):
+    """``{member: bytes}`` for ``members`` of the .tar.gz at ``url``.
 
-    The engine archive is 860 MB and this DLL is 570 MB into it; reading it
-    as a stream stops there, and keeps nothing else on disk.
+    The engine archive is 860 MB and these files are 570 MB into it; reading
+    it as a stream stops once every one of them has gone by, and keeps
+    nothing else on disk.
     """
+    wanted = set(members)
+    found = {}
     request = urllib.request.Request(url, headers={"User-Agent": "BedrockOnLinux"})
     with urllib.request.urlopen(request, timeout=60) as response, \
             tarfile.open(fileobj=response, mode="r|gz") as archive:
         for entry in archive:
-            if not entry.name.endswith("/" + member):
+            member = next((name for name in wanted
+                           if entry.name.endswith("/" + name)), None)
+            if member is None:
                 continue
-            if not entry.isfile() or entry.size > limit:
+            if entry.isfile() and entry.size <= limit:
+                stream = archive.extractfile(entry)
+                if stream is not None:
+                    found[member] = stream.read()
+            wanted.discard(member)
+            if not wanted:
                 break
-            stream = archive.extractfile(entry)
-            return stream.read() if stream else None
-    return None
+    return found
 
 
-def xgameruntime_dll():
-    """A verified copy of WineGDK's xgameruntime.dll, fetched once."""
-    from .config import (CACHE, WINEGDK_BUILD_REV, WINEGDK_PREBUILT_REPO,
-                         WINEGDK_XGAMERUNTIME_SHA256 as pin)
-    candidates = _xgameruntime_candidates()
-    for candidate in candidates:
-        if candidate.is_file() and _sha256_file(candidate) == pin:
-            return candidate
-    cached = candidates[1]
+def gdk_runtime_files():
+    """Verified copies of the GDK runtime, ``{file name: path}``.
+
+    Fetched once, out of the game engine archive, when neither the bundle,
+    the cache nor an installed engine has them.
+    """
+    from .config import WINEGDK_BUILD_REV, WINEGDK_PREBUILT_REPO
+    found, missing = {}, {}
+    for name, pin in _gdk_runtime_pins().items():
+        candidates = _gdk_runtime_candidates(name, pin)
+        hit = next((candidate for candidate in candidates
+                    if candidate.is_file() and _sha256_file(candidate) == pin),
+                   None)
+        if hit is not None:
+            found[name] = hit
+        else:
+            missing[name] = (pin, candidates[1])
+    if not missing:
+        return found
     url = (f"https://github.com/{WINEGDK_PREBUILT_REPO}/releases/download/"
            f"engine-{WINEGDK_BUILD_REV}/GDK-Proton-xuser-"
            f"{WINEGDK_BUILD_REV}.tar.gz")
     info("Downloading the GDK runtime Minecraft needs to start (one time: "
          "it is read out of the game engine archive, about 570 MB) …")
     try:
-        data = _stream_archive_member(url, _XGAMERUNTIME_MEMBER,
-                                      _XGAMERUNTIME_MAX)
+        data = _stream_archive_members(
+            url, [f"{_ENGINE_DLL_DIR}/{name}" for name in missing],
+            _GDK_RUNTIME_MAX)
     except (OSError, tarfile.TarError, EOFError) as exc:
         raise BolError(
             f"Could not download the GDK runtime Minecraft needs ({exc}). "
             "Check the network connection and click PLAY again.") from exc
-    if not data or hashlib.sha256(data).hexdigest() != pin:
-        raise BolError(
-            "The GDK runtime in the game engine archive is not the one this "
-            "launcher was released with, so it was not installed.")
-    CACHE.mkdir(parents=True, exist_ok=True)
-    staged = cached.with_name(cached.name + ".part")
-    staged.write_bytes(data)
-    staged.replace(cached)
-    return cached
+    for name, (pin, cached) in missing.items():
+        blob = data.get(f"{_ENGINE_DLL_DIR}/{name}")
+        if not blob or hashlib.sha256(blob).hexdigest() != pin:
+            raise BolError(
+                f"The {name} in the game engine archive is not the one this "
+                "launcher was released with, so it was not installed.")
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        staged = cached.with_name(cached.name + ".part")
+        staged.write_bytes(blob)
+        staged.replace(cached)
+        found[name] = cached
+    return found
 
 
-def install_xgameruntime(prefix):
-    """Put WineGDK's xgameruntime.dll in ``prefix``'s system32, as native.
+def install_gdk_runtime(prefix):
+    """Put the GDK runtime in ``prefix``'s system32, as native DLLs.
 
-    Returns the installed path. Rewritten only when it differs, so it costs a
-    file comparison at every PLAY.
+    Returns the system32 folder. A file is rewritten only when it differs, so
+    this costs a comparison at every PLAY.
     """
-    data = bytearray(Path(xgameruntime_dll()).read_bytes())
+    system32 = Path(prefix) / "drive_c" / "windows" / "system32"
     end = _BUILTIN_MARKER_AT + len(_BUILTIN_MARKER)
-    if bytes(data[_BUILTIN_MARKER_AT:end]) == _BUILTIN_MARKER:
-        data[_BUILTIN_MARKER_AT:end] = bytes(len(_BUILTIN_MARKER))
-    target = Path(prefix) / "drive_c" / "windows" / "system32" / \
-        "xgameruntime.dll"
-    try:
-        if target.read_bytes() == data:
-            return target
-    except OSError:
-        pass
-    target.parent.mkdir(parents=True, exist_ok=True)
-    staged = target.with_name(target.name + ".bol-new")
-    staged.write_bytes(data)
-    staged.replace(target)
-    ok("GDK runtime installed in the Wine prefix.")
-    return target
+    changed = False
+    for name, source in gdk_runtime_files().items():
+        data = bytearray(Path(source).read_bytes())
+        if bytes(data[_BUILTIN_MARKER_AT:end]) == _BUILTIN_MARKER:
+            data[_BUILTIN_MARKER_AT:end] = bytes(len(_BUILTIN_MARKER))
+        target = system32 / name
+        try:
+            if target.read_bytes() == data:
+                continue
+        except OSError:
+            pass
+        system32.mkdir(parents=True, exist_ok=True)
+        staged = target.with_name(target.name + ".bol-new")
+        staged.write_bytes(data)
+        staged.replace(target)
+        changed = True
+    if changed:
+        ok("GDK runtime installed in the Wine prefix.")
+    return system32
 
 
 # ------------------------------------------------------------------ setup

@@ -2,28 +2,6 @@
 
 ## Unreleased
 
-### Fixed
-
-- **Old versions of server resource packs no longer pile up.** Every pack
-  version a server sends stays unpacked in the prefix's
-  `Temp/Minecraft Bedrock/minecraftpe/packcache`. On Windows the system's
-  cleanup of temporary files keeps that in check; under Wine nothing does.
-  After a week of play, one prefix held 4.8 GB in 300,000 files, 28 versions
-  of a single server's UI pack among them. Before each launch, the launcher
-  now removes a pack version when a newer version of the same pack is cached
-  and the old one has not been written to for 7 days, the age Windows gives
-  temporary files. The newest version of every pack stays, so nothing a
-  server sends today is lost. On that prefix this frees 4.2 GB once the
-  week has passed.
-
-## 2.2.9 — 2026-10-09
-
-Your worlds are now backed up before another Minecraft version opens
-them, the graphics card the game runs on can be chosen, and the `.deb` and
-`.rpm` update themselves. Fullscreen starts are no longer stretched, the
-Microsoft sign-in draws on systems without a usable EGL, and a new install
-finds its online-login components again.
-
 ### Added
 
 - **macOS: the launcher runs natively, on a native Wine** (`macos` branch).
@@ -50,8 +28,10 @@ finds its online-login components again.
   and ignores `WINEPREFIX`, the launcher's prefix is handed over as a bottle
   of its own, by path, so no `default` bottle is needed. Minecraft is a GDK
   game and quits at once without a Gaming Runtime, which no macOS Wine
-  ships: the launcher installs WineGDK's `xgameruntime.dll` into the prefix
-  as a native DLL, the one its Linux engine pins. And **Xbox
+  ships: the launcher installs the Linux engine's own runtime into the
+  prefix, WineGDK's `xgameruntime.dll` and the
+  `xgameruntime.dll.threading` it hands XThreading to, both checked
+  against the engine's pins. And **Xbox
   Live sign-in** cannot happen: that is the WineGDK XUser fork compiled into
   GDK-Proton, which has no macOS build, so the game runs offline and on the
   LAN and the launcher warns once at PLAY rather than spending a round of
@@ -59,6 +39,30 @@ finds its online-login components again.
   runtime it found and marks every Linux-only check *not applicable on macOS*
   instead of inventing an answer for it. Build the application bundle with
   `scripts/build-macos-app.sh`.
+
+### Fixed
+
+- **Old versions of server resource packs no longer pile up.** Every pack
+  version a server sends stays unpacked in the prefix's
+  `Temp/Minecraft Bedrock/minecraftpe/packcache`. On Windows the system's
+  cleanup of temporary files keeps that in check; under Wine nothing does.
+  After a week of play, one prefix held 4.8 GB in 300,000 files, 28 versions
+  of a single server's UI pack among them. Before each launch, the launcher
+  now removes a pack version when a newer version of the same pack is cached
+  and the old one has not been written to for 7 days, the age Windows gives
+  temporary files. The newest version of every pack stays, so nothing a
+  server sends today is lost. On that prefix this frees 4.2 GB once the
+  week has passed.
+
+## 2.2.9 — 2026-10-09
+
+Your worlds are now backed up before another Minecraft version opens
+them, the graphics card the game runs on can be chosen, and the `.deb` and
+`.rpm` update themselves. Fullscreen starts are no longer stretched, the
+Microsoft sign-in draws on systems without a usable EGL, and a new install
+finds its online-login components again.
+
+### Added
 
 - **The `.deb` and `.rpm` update themselves**
   ([#294](https://github.com/Wyze3306/BedrockOnLinux/issues/294)). **Update
@@ -942,27 +946,6 @@ finds its online-login components again.
   in silence.
 
 ### Fixed
-
-- **A download Microsoft refuses because the account is out of Store devices
-  now says so, and opens the page that gives one back**
-  ([#198](https://github.com/Wyze3306/BedrockOnLinux/issues/198),
-  [#242](https://github.com/Wyze3306/BedrockOnLinux/issues/242)). Microsoft
-  licenses Store content to a device and lets an account hold ten of them; the
-  eleventh download is refused outright, and there is no way to give a device
-  back except a page on account.microsoft.com. What arrived instead of that
-  sentence was "The Minecraft download installed no game and printed no reason
-  for it", twice over, with the launcher moving on to another Microsoft mirror
-  that was never the problem — one person worked out what it meant by
-  themselves. The refusal is printed onto the same stream three progress bars
-  are being redrawn on, so it lands in the middle of a frame; half a frame is
-  kept out of the error message by dropping the whole line it is in, and the
-  sentence went with it. Anything the launcher can name a cause from is now
-  read out of the line before the bars are stripped, and kept for the whole
-  download instead of only in its last forty lines, so no reason can be lost
-  to what happened to be drawn around it. When the reason is the device limit,
-  the launcher offers the device list, opens it, and starts the download again
-  once you are back; `bedrock-on-linux setup` prints the page and the command
-  to run after it.
 
 - **Your Xbox friends can see you again while you play**
   ([#238](https://github.com/Wyze3306/BedrockOnLinux/issues/238),

@@ -219,11 +219,12 @@ repository alone:
   servers, no Marketplace, no Friends.
 
 Minecraft for Windows is a GDK game: it quits as soon as it starts without
-a Gaming Runtime (`xgameruntime.dll`), and no macOS Wine ships one. The
-launcher installs WineGDK's into its prefix, the same file its Linux engine
-uses, checked against the engine's own SHA-256. The `.app` carries it; run
-from a checkout instead, the launcher reads it once out of the engine release
-archive (about 570 MB of download).
+a Gaming Runtime, and no macOS Wine ships one. The launcher installs its Linux
+engine's runtime into the prefix: WineGDK's `xgameruntime.dll` and the
+`xgameruntime.dll.threading` it hands XThreading to, both checked against the
+engine's own SHA-256. The `.app` carries them; run from a checkout instead,
+the launcher reads them once out of the engine release archive (about 570 MB
+of download).
 
 What that leaves working is a real thing — a Mac running Bedrock's own Windows
 build, on a prefix the launcher prepares, with the GameInput controller stack,

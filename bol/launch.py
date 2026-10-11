@@ -862,8 +862,8 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     if IS_MAC:
         # The GDK runtime the game quits without (bol.winemac); GDK-Proton
         # carries its own on Linux.
-        from .winemac import install_xgameruntime
-        install_xgameruntime(active_prefix())
+        from .winemac import install_gdk_runtime
+        install_gdk_runtime(active_prefix())
     else:
         # GDK-Proton's advapi32 forwards RtlGenRandom to a cryptbase.dll the
         # prefix has to provide (#144); a macOS Wine has its own.

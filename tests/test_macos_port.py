@@ -934,81 +934,115 @@ class MacWindowTests(unittest.TestCase):
 
 class MacGdkRuntimeTests(unittest.TestCase):
     """Minecraft quits with exit code 0 when no xgameruntime.dll is there,
-    and no macOS Wine ships one: the Mac takes WineGDK's, as a native DLL."""
+    and dies on a C++ exception (exit 99) when WineGDK's has no threading
+    sidecar to hand XThreading to. No macOS Wine ships either: the Mac takes
+    both files of the Linux engine's runtime."""
 
     _DLL = (b"MZ" + b"\0" * 0x3e + b"Wine builtin DLL" + b"\0" * 0x30
             + b"PE\0\0rest of the image")
+    _THREADING = b"MZ\x90\0Microsoft's own Gaming Runtime" + b"\0" * 64
+    _NAMES = ("xgameruntime.dll", "xgameruntime.dll.threading")
 
-    def _pin(self, data=None):
+    @staticmethod
+    def _pin(data):
         import hashlib
-        return hashlib.sha256(data or self._DLL).hexdigest()
+        return hashlib.sha256(data).hexdigest()
 
-    def _config(self, directory, data=None):
+    def _config(self, directory, dll=None, threading=None):
         from bol import config
         return mock.patch.multiple(
             config, CACHE=Path(directory) / "cache",
             WINEGDK_OUT=Path(directory) / "engine",
-            WINEGDK_XGAMERUNTIME_SHA256=self._pin(data))
+            WINEGDK_XGAMERUNTIME_SHA256=self._pin(dll or self._DLL),
+            WINEGDK_XGAMERUNTIME_THREADING_SHA256=self._pin(
+                threading or self._THREADING))
 
-    def test_it_is_installed_as_a_native_dll(self):
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "xgameruntime.dll"
-            source.write_bytes(self._DLL)
+    def _engine(self, directory, dll=None, threading=None):
+        folder = Path(directory) / "engine" / winemac._ENGINE_DLL_DIR
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "xgameruntime.dll").write_bytes(dll or self._DLL)
+        (folder / "xgameruntime.dll.threading").write_bytes(
+            threading or self._THREADING)
+        return folder
+
+    def test_both_files_are_installed_and_only_wines_is_unmarked(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self._config(directory):
+            self._engine(directory)
             prefix = Path(directory) / "pfx"
-            with mock.patch.object(winemac, "xgameruntime_dll",
-                                   return_value=source), \
-                    mock.patch.object(winemac, "ok"):
-                target = winemac.install_xgameruntime(prefix)
-                installed = target.read_bytes()
+            with mock.patch.object(winemac, "ok") as said:
+                system32 = winemac.install_gdk_runtime(prefix)
+                runtime = (system32 / "xgameruntime.dll").read_bytes()
+                threading = (system32 / "xgameruntime.dll.threading").read_bytes()
                 # Unchanged the second time, and not rewritten.
-                before = target.stat().st_mtime_ns
-                winemac.install_xgameruntime(prefix)
-                self.assertEqual(target.stat().st_mtime_ns, before)
-        self.assertEqual(target, prefix / "drive_c/windows/system32/"
-                                          "xgameruntime.dll")
-        self.assertNotIn(b"Wine builtin DLL", installed)
-        self.assertEqual(len(installed), len(self._DLL))
-        self.assertTrue(installed.startswith(b"MZ"))
-        self.assertIn(b"PE\0\0rest of the image", installed)
+                before = [(system32 / name).stat().st_mtime_ns
+                          for name in self._NAMES]
+                winemac.install_gdk_runtime(prefix)
+                after = [(system32 / name).stat().st_mtime_ns
+                         for name in self._NAMES]
+        self.assertEqual(system32, prefix / "drive_c/windows/system32")
+        self.assertNotIn(b"Wine builtin DLL", runtime)
+        self.assertEqual(len(runtime), len(self._DLL))
+        self.assertIn(b"PE\0\0rest of the image", runtime)
+        # Microsoft's file is not a Wine builtin, and goes in byte for byte.
+        self.assertEqual(threading, self._THREADING)
+        self.assertEqual(before, after)
+        self.assertEqual(said.call_count, 1)
 
     def test_the_engine_on_this_machine_is_used_when_it_matches(self):
         with tempfile.TemporaryDirectory() as directory, \
                 self._config(directory):
-            engine = (Path(directory) / "engine" /
-                      winemac._XGAMERUNTIME_MEMBER)
-            engine.parent.mkdir(parents=True)
-            engine.write_bytes(self._DLL)
-            with mock.patch.object(winemac, "_stream_archive_member") as fetch:
-                self.assertEqual(winemac.xgameruntime_dll(), engine)
+            folder = self._engine(directory)
+            with mock.patch.object(winemac, "_stream_archive_members") as fetch:
+                found = winemac.gdk_runtime_files()
             fetch.assert_not_called()
+        self.assertEqual(found, {name: folder / name for name in self._NAMES})
+
+    def test_only_the_file_that_is_missing_is_read_from_the_archive(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self._config(directory):
+            folder = self._engine(directory)
+            (folder / "xgameruntime.dll.threading").unlink()
+            member = f"{winemac._ENGINE_DLL_DIR}/xgameruntime.dll.threading"
+            with mock.patch.object(
+                    winemac, "_stream_archive_members",
+                    return_value={member: self._THREADING}) as fetch, \
+                    mock.patch.object(winemac, "info"):
+                found = winemac.gdk_runtime_files()
+            self.assertEqual(fetch.call_args[0][1], [member])
+            self.assertEqual(found["xgameruntime.dll"],
+                             folder / "xgameruntime.dll")
+            self.assertEqual(found["xgameruntime.dll.threading"].read_bytes(),
+                             self._THREADING)
+            self.assertEqual(found["xgameruntime.dll.threading"].parent,
+                             Path(directory) / "cache")
 
     def test_a_copy_that_does_not_match_the_pin_is_not_used(self):
         with tempfile.TemporaryDirectory() as directory, \
                 self._config(directory):
-            engine = (Path(directory) / "engine" /
-                      winemac._XGAMERUNTIME_MEMBER)
-            engine.parent.mkdir(parents=True)
-            engine.write_bytes(b"MZ another build")
-            with mock.patch.object(winemac, "_stream_archive_member",
-                                   return_value=self._DLL), \
+            self._engine(directory, dll=b"MZ another build")
+            member = f"{winemac._ENGINE_DLL_DIR}/xgameruntime.dll"
+            with mock.patch.object(winemac, "_stream_archive_members",
+                                   return_value={member: self._DLL}), \
                     mock.patch.object(winemac, "info"):
-                found = winemac.xgameruntime_dll()
-            self.assertEqual(found.read_bytes(), self._DLL)
-            self.assertEqual(found.parent, Path(directory) / "cache")
+                found = winemac.gdk_runtime_files()
+            self.assertEqual(found["xgameruntime.dll"].read_bytes(), self._DLL)
 
     def test_bytes_from_the_archive_that_do_not_match_are_refused(self):
         with tempfile.TemporaryDirectory() as directory, \
                 self._config(directory):
-            with mock.patch.object(winemac, "_stream_archive_member",
-                                   return_value=b"MZ tampered"), \
+            members = {f"{winemac._ENGINE_DLL_DIR}/{name}": b"MZ tampered"
+                       for name in self._NAMES}
+            with mock.patch.object(winemac, "_stream_archive_members",
+                                   return_value=members), \
                     mock.patch.object(winemac, "info"):
                 with self.assertRaises(winemac.BolError):
-                    winemac.xgameruntime_dll()
-            self.assertEqual(list((Path(directory) / "cache").glob("*.dll"))
-                             if (Path(directory) / "cache").exists() else [],
-                             [])
+                    winemac.gdk_runtime_files()
+            cache = Path(directory) / "cache"
+            self.assertEqual(list(cache.glob("xgameruntime*"))
+                             if cache.exists() else [], [])
 
-    def test_the_dll_is_read_out_of_the_archive_as_a_stream(self):
+    def test_both_files_are_read_out_of_the_archive_in_one_pass(self):
         import io
         import tarfile
 
@@ -1017,20 +1051,26 @@ class MacGdkRuntimeTests(unittest.TestCase):
             with tarfile.open(archive, "w:gz") as tar:
                 for name, data in (
                         ("GDK-Proton-xuser/proton", b"#!/bin/sh\n"),
-                        ("GDK-Proton-xuser/" + winemac._XGAMERUNTIME_MEMBER,
-                         self._DLL)):
+                        ("GDK-Proton-xuser/" + winemac._ENGINE_DLL_DIR
+                         + "/xgameruntime.dll", self._DLL),
+                        ("GDK-Proton-xuser/" + winemac._ENGINE_DLL_DIR
+                         + "/xgameruntime.dll.threading", self._THREADING)):
                     info = tarfile.TarInfo(name)
                     info.size = len(data)
                     tar.addfile(info, io.BytesIO(data))
-            found = winemac._stream_archive_member(
-                archive.as_uri(), winemac._XGAMERUNTIME_MEMBER, 1 << 20)
-            self.assertEqual(found, self._DLL)
-            self.assertIsNone(winemac._stream_archive_member(
-                archive.as_uri(), winemac._XGAMERUNTIME_MEMBER, 10))
+            members = [f"{winemac._ENGINE_DLL_DIR}/{name}"
+                       for name in self._NAMES]
+            found = winemac._stream_archive_members(
+                archive.as_uri(), members, 1 << 20)
+            self.assertEqual(found, {members[0]: self._DLL,
+                                     members[1]: self._THREADING})
+            # A member past the size bound is not read.
+            self.assertEqual(winemac._stream_archive_members(
+                archive.as_uri(), members, 10), {})
 
-    def test_the_pin_is_the_engines_own(self):
-        """The pin has to move with WINEGDK_BUILD_REV; an engine of that
-        revision on this machine says what it should be."""
+    def test_the_pins_are_the_engines_own(self):
+        """The pins move with WINEGDK_BUILD_REV; an engine of that revision
+        on this machine says what they should be."""
         import json
         from bol import config
 
@@ -1041,9 +1081,10 @@ class MacGdkRuntimeTests(unittest.TestCase):
             self.skipTest("no engine installed here")
         if payload.get("build_rev") != config.WINEGDK_BUILD_REV:
             self.skipTest("the installed engine is another revision")
-        self.assertEqual(
-            payload["critical_files"][winemac._XGAMERUNTIME_MEMBER],
-            config.WINEGDK_XGAMERUNTIME_SHA256)
+        for name, pin in winemac._gdk_runtime_pins().items():
+            self.assertEqual(
+                payload["critical_files"][f"{winemac._ENGINE_DLL_DIR}/{name}"],
+                pin, name)
 
 
 class MacArchitectureTests(unittest.TestCase):
