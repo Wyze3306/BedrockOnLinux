@@ -170,7 +170,7 @@ XODUS_SOURCE_COMMIT = "64d39eb87a56c7d0d7e7fde0b233654ac5477b0f"
 # way, so adding a patch there and forgetting this makes the build produce an
 # archive the workflow's assert cannot find -- which is the intended failure,
 # not a silent replacement of a published one.
-XODUS_REV = "64d39eb87a56-p7"
+XODUS_REV = "64d39eb87a56-p5"
 # Integrity pin for the CI-built xodus-cli archive, produced by the reviewed
 # build-xodus.yml run of this branch. The workflow refuses any archive that
 # does not reproduce these bytes.
