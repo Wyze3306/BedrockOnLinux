@@ -187,6 +187,7 @@ def _nested_gamescope_session(env: Mapping[str, str], atom_probe=None) -> bool:
 
     if (env.get("GAMESCOPE_WAYLAND_DISPLAY") or "").strip():
         return True
+
     for key in ("XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP",
                 "DESKTOP_SESSION"):
         value = (env.get(key) or "").strip().lower()
@@ -194,6 +195,13 @@ def _nested_gamescope_session(env: Mapping[str, str], atom_probe=None) -> bool:
         if any(part == "gamescope" or part.startswith("gamescope-")
                for part in parts):
             return True
+
+    # Root-window atoms are only useful for identifying a Gamescope-owned
+    # X11 display. A Wayland desktop can expose unrelated GAMESCOPE_* atoms
+    # on its Xwayland root window; don't mistake those for Gamescope.
+    if not _x11_session(env):
+        return False
+
     probe = _gamescope_root_atoms if atom_probe is None else atom_probe
     return bool(probe(env))
 

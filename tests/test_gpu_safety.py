@@ -309,6 +309,24 @@ class GraphicsSafetyTests(unittest.TestCase):
         self.assertFalse(gpu_safety._gamescope_root_atoms({}))
         self.assertFalse(gpu_safety._gamescope_root_atoms({"DISPLAY": "  "}))
 
+    def test_wayland_session_does_not_use_x11_root_atom_fallback(self):
+        def must_not_run(_env):
+            raise AssertionError(
+                "Wayland sessions must not use the X11 root-atom fallback"
+            )
+
+        self.assertFalse(gpu_safety._nested_gamescope_session(
+            {
+                "DISPLAY": ":1",
+                "WAYLAND_DISPLAY": "wayland-1",
+                "XDG_SESSION_TYPE": "wayland",
+                "XDG_CURRENT_DESKTOP": "Hyprland",
+                "XDG_SESSION_DESKTOP": "Hyprland",
+                "DESKTOP_SESSION": "hyprland",
+            },
+            atom_probe=must_not_run,
+        ))
+
     def test_gamescope_only_exempts_a_parsed_zero_provider_result(self):
         def failed(*_args, **_kwargs):
             return result(returncode=1)
