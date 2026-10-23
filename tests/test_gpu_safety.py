@@ -305,6 +305,23 @@ class GraphicsSafetyTests(unittest.TestCase):
             atom_probe=must_not_run,
         ))
 
+    def test_wayland_session_skips_x11_atom_probe(self):
+        env = {
+            "DISPLAY": ":1",
+            "WAYLAND_DISPLAY": "wayland-1",
+            "XDG_SESSION_TYPE": "wayland",
+            "XDG_CURRENT_DESKTOP": "GNOME",
+        }
+
+        def unexpected_probe(_env):
+            raise AssertionError("X11 atom probe should not run on Wayland")
+
+        self.assertFalse(
+            gpu_safety._nested_gamescope_session(
+                env, atom_probe=unexpected_probe
+            )
+        )
+
     def test_root_atom_probe_needs_a_display(self):
         self.assertFalse(gpu_safety._gamescope_root_atoms({}))
         self.assertFalse(gpu_safety._gamescope_root_atoms({"DISPLAY": "  "}))
