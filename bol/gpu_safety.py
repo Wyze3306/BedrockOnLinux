@@ -194,6 +194,11 @@ def _nested_gamescope_session(env: Mapping[str, str], atom_probe=None) -> bool:
         if any(part == "gamescope" or part.startswith("gamescope-")
                for part in parts):
             return True
+    # Wayland sessions may expose DISPLAY through XWayland. That does not
+    # make an X11 root-window probe appropriate for session detection.
+    if (env.get("XDG_SESSION_TYPE") or "").strip().lower() == "wayland":
+        return False
+
     probe = _gamescope_root_atoms if atom_probe is None else atom_probe
     return bool(probe(env))
 
