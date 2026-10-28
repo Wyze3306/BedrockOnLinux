@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **PLAY from the launcher works on Python 3.15** (#356). Python 3.15 imports
+  parts of its standard library lazily, and once PySide6 had replaced the
+  import function those names never resolved: PLAY stopped on
+  `'lazy_import' object is not callable`. The launcher now turns lazy
+  imports off before it imports anything, as Python 3.14 behaved.
+- **The in-game sign-in patches apply to Minecraft 1.26.60 and Preview
+  1.26.70 again.** Their UI bundle calls its hooks directly, which moved it
+  past both anchors: the Servers tab went back to "You need a Microsoft
+  account", the in-game Sign-in link to "Failed to log in", and `doctor`
+  said `sign-in ui: NOT PATCHED`.
+
 ## 2.2.10 — 2026-10-27
 
 Minecraft starts and downloads again after Microsoft changed its sign-in
