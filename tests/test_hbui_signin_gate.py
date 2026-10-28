@@ -46,6 +46,22 @@ _LINK_OLD = (
     '[a,e]);return r.createElement(sx,{role:"noticeTint"},'
     'r.createElement(sx.Link,{onClick:l},"login"))}'
 )
+# The shape shipped by 1.26.60: hooks are called directly (`k(` for
+# useFacetMap) and a lone arrow function lost its parentheses.
+_GATE_DIRECT = (
+    'function mle(){return k((e,t)=>{'
+    'const{isSignedInPlatformNetwork:n,isLoggedInWithMicrosoftAccount:a,'
+    'hasPremiumNetworkAccess:r}=e,l=oW(t.platform),o=rW(t.platform);'
+    'return a&&!n&&l?"platform-guest-nintendo":!a&&n&&o&&!r?'
+    '"msa-guest-playstation":"not-signed-in"},[],[Fo(WD),Fo(ci)])}'
+)
+_LINK_DIRECT = (
+    'function ple({location:e}){const{t:n}=zu("notLoggedInWarning"),a=_(),'
+    'r=pB(),l=(0,t.useCallback)(()=>{r({screen:`${fle(e)}`,button:"SignIn"}),'
+    'a.push(`/sign-in?signInSource=${fle(e)}_NotLoggedInWarning_OreUI`)},'
+    '[r,a,e]);return t.createElement(SX,{role:"noticeTint"},'
+    't.createElement(SX.Link,{onClick:l},n(".loginLink")))}'
+)
 # A zero-argument facet hook that reads none of the account state, sitting
 # right before the real one: the marks leak into an unbounded look-ahead.
 _DECOY = ('function p3(){return(0,r.useFacetMap)((e=>e.thirdPartyServers),'
@@ -81,6 +97,17 @@ class HbuiPatchTests(unittest.TestCase):
         self.assertTrue(applied)
         self.assertIn('function wB(){return"";return(0,l.useFacetMap)', out)
         self.assertIn('[a,e]);return null;return r.createElement(sx,', out)
+
+    def test_patches_the_directly_called_hooks_of_1_26_60(self):
+        applied, gd, _js, out = self._run(_GATE_DIRECT + _LINK_DIRECT)
+        self.assertTrue(applied)
+        self.assertIn('function mle(){return"";return k(', out)
+        self.assertIn('[r,a,e]);return null;return t.createElement(SX,', out)
+        with mock.patch.object(fixups, "ok"), mock.patch.object(fixups, "warn"):
+            self.assertTrue(fixups._patch_hbui_signin_gate(gd))
+        self.assertEqual(
+            fixups.hbui_signin_gate_status(str(gd))[0],
+            "OK (gate + link patched)")
 
     def test_is_idempotent(self):
         _applied, gd, js, once = self._run(_GATE_NEW + _LINK_NEW)

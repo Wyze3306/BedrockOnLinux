@@ -114,7 +114,11 @@ def install_gdk_xbox_dlls(game_dir: Path):
 # from `l.` to `r.` and every local name changed with it), and because the
 # patch skipped quietly, setup kept reporting success while the Servers tab
 # stayed blocked and the dead in-game "Sign in" link came back (#227/#228/#229).
-_HBUI_GATE = re.compile(r'(function\s+\w+\(\)\{)(return\(0,\w+\.useFacetMap\))')
+# 1.26.60 went further: its bundler calls the imported hooks directly, so
+# `(0,r.useFacetMap)(` became `k(`, and it drops the parentheses around a
+# lone arrow function, so `(0,t.useCallback)((()=>{...}),[...])` lost a `)`.
+_HBUI_FACET_MAP = r'(?:\(0,\w+\.useFacetMap\)|\s[\w$]+)\('
+_HBUI_GATE = re.compile(r'(function\s+\w+\(\)\{)(return' + _HBUI_FACET_MAP + ')')
 # The facet wanted is the one deriving the Play screen's guest/sign-in state,
 # recognised by what it reads out of the account facet and by the states it
 # returns -- none of which minification touches.
@@ -125,11 +129,11 @@ _HBUI_GATE_MARKS = (
     '"msa-guest-playstation"',
 )
 _HBUI_GATE_DONE = re.compile(
-    r'function\s+\w+\(\)\{return"";return\(0,\w+\.useFacetMap\)')
-_HBUI_LINK = re.compile(r'(_NotLoggedInWarning_OreUI`\)\}\),\[[^\]]*\]\);)'
+    r'function\s+\w+\(\)\{return"";return' + _HBUI_FACET_MAP)
+_HBUI_LINK = re.compile(r'(_NotLoggedInWarning_OreUI`\)\}\)?,\[[^\]]*\]\);)'
                         r'(return \w+\.createElement\(\w+,)')
 _HBUI_LINK_DONE = re.compile(
-    r'_NotLoggedInWarning_OreUI`\)\}\),\[[^\]]*\]\);return null;')
+    r'_NotLoggedInWarning_OreUI`\)\}\)?,\[[^\]]*\]\);return null;')
 
 
 def _hbui_gate_patch(data):
