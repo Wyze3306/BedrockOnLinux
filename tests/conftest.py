@@ -23,6 +23,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # planted here would mask that.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# bol/__init__.py turns Python 3.15's lazy imports off, but pytest has already
+# imported concurrent.futures and others by then, and their lazy names would
+# stay unresolvable once a GUI test imports PySide6 (#356). Resolve them now,
+# while builtins.__import__ is still Python's own.
+_lazy = getattr(__import__("types"), "LazyImportType", None)
+if _lazy is not None:
+    sys.set_lazy_imports_filter(lambda *_: False)
+    for _module in list(sys.modules.values()):
+        _names = getattr(_module, "__dict__", None)
+        if isinstance(_names, dict):
+            for _name in [k for k, v in list(_names.items())
+                          if isinstance(v, _lazy)]:
+                try:
+                    getattr(_module, _name)
+                except Exception:
+                    pass
+
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "gui: mark test as a GUI test")
