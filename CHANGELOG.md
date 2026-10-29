@@ -24,6 +24,13 @@
   never added the default servers to Preview's list. Each folder is also seen
   once now, not twice through Proton's `users/<login>` link.
 
+- **The online-multiplayer safety warning stays off for signed-in players.**
+  The launcher only switched it off in the signed-out profile's settings,
+  while a signed-in game reads its account's own file, so the warning kept
+  coming back. Every profile's file is patched now, Preview's included.
+  Worlds, packs and skins imported from the launcher while Preview is
+  selected also go to Preview's folder rather than the stable game's.
+
 - **PLAY from the launcher works on Python 3.15** (#356). Python 3.15 imports
   parts of its standard library lazily, and once PySide6 had replaced the
   import function those names never resolved: PLAY stopped on

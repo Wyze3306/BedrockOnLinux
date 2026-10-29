@@ -235,6 +235,12 @@ def _launched_edition():
         return None
 
 
+def game_data_folder(edition=None):
+    """The Roaming folder name of ``edition``, by default the one PLAY starts."""
+    edition = edition or _launched_edition() or "release"
+    return _ROAMING_FOLDERS.get(edition, _ROAMING_FOLDERS["release"])
+
+
 def find_options_file(prefix, edition=None):
     """The most recently written options.txt of the edition PLAY starts.
 

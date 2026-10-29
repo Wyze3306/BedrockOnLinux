@@ -31,7 +31,11 @@ _PER_ACCOUNT_SUBS = frozenset({
 
 
 def _mojang_dir(prefix=None):
-    return (prefix or active_prefix()) / COM_MOJANG_REL
+    """Users/Shared of the edition PLAY starts: Preview keeps its own."""
+    from .perfcheck import game_data_folder
+    rel = COM_MOJANG_REL.replace("/Minecraft Bedrock/",
+                                 "/%s/" % game_data_folder(), 1)
+    return (prefix or active_prefix()) / rel
 
 
 def _active_mojang_dir(prefix=None):

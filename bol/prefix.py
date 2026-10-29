@@ -1246,14 +1246,20 @@ def patch_options(prefix_idle=None):
     really gone first: two processes truncating and rewriting the same
     settings file is precisely how one ends up cut in half (#175).
     """
-    opt = PFX / OPTIONS_REL
-    data = _read_bytes(opt)
-    if not _options_intact(data):
-        return
-    updated = _set_option_line(data, _MULTIPLAYER_WARNING_KEY, b"1")
-    if updated is None or not _prefix_is_idle(prefix_idle):
-        return
-    if _write_file_atomically(opt, updated):
+    # Every settings file, not only the signed-out one: a signed-in game
+    # reads its account's own, and Preview keeps a folder of its own.
+    changed = False
+    for opt in _options_files(PFX) or [PFX / OPTIONS_REL]:
+        data = _read_bytes(opt)
+        if not _options_intact(data):
+            continue
+        updated = _set_option_line(data, _MULTIPLAYER_WARNING_KEY, b"1")
+        if updated is None:
+            continue
+        if not _prefix_is_idle(prefix_idle):
+            return
+        changed = _write_file_atomically(opt, updated) or changed
+    if changed:
         ok("Multiplayer warning disabled")
 
 
