@@ -32,6 +32,11 @@ def setUpModule():
                                 return_value=True)
     patcher.start()
     unittest.addModuleCleanup(patcher.stop)
+    # Nor which edition this machine's own settings would launch.
+    edition = mock.patch.object(perfcheck, "_launched_edition",
+                                return_value=None)
+    edition.start()
+    unittest.addModuleCleanup(edition.stop)
 
 _OPTIONS_RELATIVE = (
     "drive_c/users/steamuser/AppData/Roaming/Minecraft Bedrock/Users/"
@@ -156,6 +161,37 @@ class GameOptionsTests(unittest.TestCase):
             self.assertIsNotNone(found)
             self.assertEqual(
                 perfcheck.read_game_options(found)["gfx_vsync"], "1")
+
+    def test_preview_reads_its_own_settings_not_the_stable_games(self):
+        preview = _OPTIONS_RELATIVE.replace(
+            "/Minecraft Bedrock/", "/Minecraft Bedrock Preview/")
+        self.assertNotEqual(preview, _OPTIONS_RELATIVE)
+        with tempfile.TemporaryDirectory() as td:
+            _prefix(td, relative=preview, gfx_max_framerate="60")
+            prefix = _prefix(td, gfx_max_framerate="144")
+            # The stable file is the newer one, as after a stable session.
+            stable = perfcheck.find_options_file(prefix, "release")
+            os.utime(stable, (stable.stat().st_mtime + 60,) * 2)
+            self.assertEqual(perfcheck.read_game_options(
+                perfcheck.find_options_file(prefix, "preview"))
+                ["gfx_max_framerate"], "60")
+            self.assertEqual(perfcheck.read_game_options(
+                perfcheck.find_options_file(prefix))["gfx_max_framerate"],
+                "144")
+            with mock.patch.object(perfcheck, "_launched_edition",
+                                   return_value="preview"):
+                self.assertEqual(perfcheck.read_game_options(
+                    perfcheck.find_options_file(prefix))
+                    ["gfx_max_framerate"], "60")
+            self.assertEqual(len(perfcheck.find_options_files(prefix)), 2)
+            self.assertEqual(len(perfcheck.find_game_data_dirs(prefix)), 2)
+
+    def test_the_login_link_to_steamuser_is_not_a_second_profile(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = _prefix(td)
+            os.symlink("steamuser", prefix / "drive_c/users/player")
+            self.assertEqual(len(perfcheck.find_options_files(prefix)), 1)
+            self.assertEqual(len(perfcheck.find_game_data_dirs(prefix)), 1)
 
     def test_a_prefix_before_the_first_launch_is_silent(self):
         with tempfile.TemporaryDirectory() as td:

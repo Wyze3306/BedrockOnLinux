@@ -66,14 +66,30 @@ _ALWAYS_COMPOSITED_DESKTOPS = (
 # Minecraft has kept its settings in the Roaming path since the GDK build; the
 # Local/Packages path is where a UWP-layout install of the same game puts it.
 # The Users/* wildcard matters: the game keeps one settings file per signed-in
-# account, plus a shared one for playing signed out.
-_OPTIONS_GLOBS = (
-    "drive_c/users/*/AppData/Roaming/Minecraft Bedrock/Users/*/games/"
-    "com.mojang/minecraftpe/options.txt",
-    "drive_c/users/*/AppData/Local/Packages/"
-    "Microsoft.MinecraftUWP_8wekyb3d8bbwe/LocalState/games/com.mojang/"
-    "minecraftpe/options.txt",
-)
+# account, plus a shared one for playing signed out. Preview keeps a Roaming
+# folder of its own in the same prefix (see bol.saves.DATA_FOLDERS).
+_ROAMING_FOLDERS = {
+    "release": "Minecraft Bedrock",
+    "preview": "Minecraft Bedrock Preview",
+}
+_ROAMING_OPTIONS = ("drive_c/users/*/AppData/Roaming/%s/Users/*/games/"
+                    "com.mojang/minecraftpe/options.txt")
+_UWP_OPTIONS = ("drive_c/users/*/AppData/Local/Packages/"
+                "Microsoft.MinecraftUWP_8wekyb3d8bbwe/LocalState/games/"
+                "com.mojang/minecraftpe/options.txt")
+
+
+def _options_globs(edition=None):
+    """The settings-file patterns of one edition, or of both when None."""
+    if edition is None:
+        return tuple(_ROAMING_OPTIONS % folder
+                     for folder in _ROAMING_FOLDERS.values()) + (_UWP_OPTIONS,)
+    folder = _ROAMING_FOLDERS.get(edition, _ROAMING_FOLDERS["release"])
+    globs = (_ROAMING_OPTIONS % folder,)
+    return globs + (_UWP_OPTIONS,) if edition != "preview" else globs
+
+
+_OPTIONS_GLOBS = _options_globs()
 
 _SILENCE = "Silence this notice with BOL_SKIP_PERF_CHECK=1."
 
@@ -156,23 +172,39 @@ def free_disk_problem(path, threshold_mib=LOW_DISK_MIB):
         % (free_mib, path, used_percent, _SILENCE))
 
 
-def find_options_files(prefix):
+def _unique(paths):
+    """``paths`` without the second sight of a folder through Proton's
+    users/<login> -> steamuser link, which every users/* glob crosses."""
+    seen, unique = set(), []
+    for path in paths:
+        try:
+            key = path.resolve()
+        except OSError:
+            key = path
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
+def find_options_files(prefix, edition=None):
     """Every Minecraft options.txt inside a prefix, in no particular order.
 
     A prefix holds one per account the player has signed in with, and code
     that guards the files rather than reading a setting has to see all of
     them: the game picks which one it uses at sign-in time, not at launch.
+    Both editions' files unless ``edition`` names one.
     """
     if not prefix:
         return []
     root = Path(prefix)
     found = []
-    for pattern in _OPTIONS_GLOBS:
+    for pattern in _options_globs(edition):
         try:
             found.extend(item for item in root.glob(pattern) if item.is_file())
         except OSError:
             continue
-    return found
+    return _unique(found)
 
 
 def find_game_data_dirs(prefix):
@@ -192,16 +224,29 @@ def find_game_data_dirs(prefix):
             found.extend(item for item in root.glob(folder) if item.is_dir())
         except OSError:
             continue
-    return found
+    return _unique(found)
 
 
-def find_options_file(prefix):
-    """The most recently written Minecraft options.txt inside a prefix.
+def _launched_edition():
+    try:
+        from .saves import launched_build
+        return launched_build()[0]
+    except Exception:
+        return None
 
-    Returns None when the game has never written one, which is the normal
-    state before the first launch and must stay silent.
+
+def find_options_file(prefix, edition=None):
+    """The most recently written options.txt of the edition PLAY starts.
+
+    Stable and Preview share the prefix but not their settings: reading the
+    other edition's file capped Preview at the stable game's Max Framerate,
+    and set aside the wrong file's limit. ``edition`` defaults to the one
+    PLAY starts, and to the stable game when that is unknown. Returns None
+    when the game has never written one, which is the normal state before
+    the first launch and must stay silent.
     """
-    found = find_options_files(prefix)
+    edition = edition or _launched_edition() or "release"
+    found = find_options_files(prefix, edition)
     if not found:
         return None
     try:

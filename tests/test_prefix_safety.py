@@ -1944,13 +1944,13 @@ class GameFrameLimitHandoverTests(unittest.TestCase):
             self.assertFalse(self._sidecar(path).exists())
 
     def test_the_proton_login_symlink_puts_the_value_back_once(self):
-        # Proton links drive_c/users/<login> to steamuser, so the lookup
-        # sees every settings file twice; the second sighting must find
-        # nothing left to do rather than a value to apply again.
+        # Proton links drive_c/users/<login> to steamuser, so a users/* glob
+        # crosses every settings file twice; the lookup keeps one, and the
+        # value goes back exactly once.
         with tempfile.TemporaryDirectory() as td:
             path = _write_options(td, self._LIMITED)
             (Path(td) / "drive_c/users/user").symlink_to("steamuser")
-            self.assertEqual(len(prefix._options_files(td)), 2)
+            self.assertEqual(len(prefix._options_files(td)), 1)
             prefix.set_aside_game_frame_limit(path, prefix_idle=True)
             restored = prefix.restore_game_frame_limits(td, prefix_idle=True)
             self.assertEqual(len(restored), 1)

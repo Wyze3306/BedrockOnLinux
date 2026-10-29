@@ -15,6 +15,15 @@
   transient service failures do not sign the player out. Relinking retires
   only the refused online-play session; the Store/download account is kept.
 
+- **Minecraft Preview reads its own settings, not the stable game's.** Both
+  editions share one Wine prefix, but the launcher only ever looked in the
+  stable game's folder. Launching Preview capped it at the stable game's Max
+  Framerate, set that file's limit aside instead of Preview's (leaving
+  Preview's own limiter to hold a CPU core), decided the display cap and
+  fullscreen fix from the stable game's vsync and fullscreen settings, and
+  never added the default servers to Preview's list. Each folder is also seen
+  once now, not twice through Proton's `users/<login>` link.
+
 - **PLAY from the launcher works on Python 3.15** (#356). Python 3.15 imports
   parts of its standard library lazily, and once PySide6 had replaced the
   import function those names never resolved: PLAY stopped on
