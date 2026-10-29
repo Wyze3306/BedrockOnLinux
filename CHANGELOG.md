@@ -4,7 +4,8 @@
 
 ### Fixed
 
-- **A revoked online-play sign-in is no longer shown as signed in.** The
+- **A revoked online-play sign-in is no longer shown as signed in** (#331,
+  #360). The
   background Xbox warm-up refreshed Microsoft's token but discarded its
   rotated replacement, leaving a revoked token on disk while the account row
   stayed green. Minecraft then opened without an Xbox user and its broken
