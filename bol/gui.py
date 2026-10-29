@@ -617,6 +617,7 @@ class AuthBridge(QObject):
     auth = Signal(str, str)
     online = Signal()
     refreshed = Signal()
+    refused = Signal()
 
 
 # ======================================================================
@@ -1146,6 +1147,7 @@ class MainWindow(QMainWindow):
         self._auth_bridge.auth.connect(self._on_auth)
         self._auth_bridge.online.connect(self._on_online)
         self._auth_bridge.refreshed.connect(self._on_refreshed)
+        self._auth_bridge.refused.connect(self._on_refused)
 
         self.setWindowTitle(PRETTY)
         self.resize(1000, 660)
@@ -1829,7 +1831,9 @@ class MainWindow(QMainWindow):
         """Record where the online sign-in stands, then redraw both places
         that show it. Kept as the single entry point the auth callbacks and
         the sign-in flow already call."""
-        self._acct_mode = {"in": "out", "auth": "cancel"}.get(phase, "in")
+        self._acct_mode = {
+            "in": "out", "auth": "cancel", "refused": "relink",
+        }.get(phase, "in")
         if phase != "auth":
             self._acct_confirm = False
         self._refresh_accounts()
@@ -1851,6 +1855,10 @@ class MainWindow(QMainWindow):
             return (self.theme.gold, "Waiting for the sign-in to finish…",
                     "Cancel?" if self._acct_confirm else "Cancel",
                     red if self._acct_confirm else None)
+        if mode == "relink":
+            return (self.theme.gold,
+                    "Microsoft refused the saved sign-in",
+                    "Sign in again", None)
         return self.theme.sub, "Not signed in", "Sign in", None
 
     def _store_state(self):
@@ -1890,9 +1898,11 @@ class MainWindow(QMainWindow):
         else:
             pill_dot = self.theme.sub
         self.acct_dot.setStyleSheet(f"color:{pill_dot};")
-        gt = msa_gamertag() if getattr(self, "_acct_mode", "in") == "out" else None
-        self.acct_text.setText(gt or ("Signing in…" if pill_dot == self.theme.gold
-                                       and online_dot == self.theme.gold else "Sign in"))
+        mode = getattr(self, "_acct_mode", "in")
+        gt = msa_gamertag() if mode == "out" else None
+        self.acct_text.setText(
+            gt or ("Signing in…" if mode in ("loading", "cancel")
+                   else "Sign in"))
         self.acct_card.setToolTip(
             f"Play online: {online_status}\nDownload Minecraft: {store_status}")
 
@@ -1962,6 +1972,17 @@ class MainWindow(QMainWindow):
                 self._acct_confirm = True
                 self._refresh_accounts()
         else:
+            if mode == "relink":
+                # The token file exists but Microsoft has rejected the token
+                # inside it. NativeAuth deliberately refuses to start over an
+                # existing token, so retire that account generation before
+                # asking for a fresh device code. The Store/download account
+                # is separate and is not touched here.
+                try:
+                    msa_logout()
+                except BolError as exc:
+                    warn(str(exc))
+                    return
             self._acct_mode = "loading"
             self._refresh_accounts()
             threading.Thread(
@@ -2250,6 +2271,12 @@ class MainWindow(QMainWindow):
             return
         self._refresh_account_row("in")
 
+    def _on_refused(self):
+        """Show that a present token is not necessarily a usable sign-in."""
+        if not _alive(self):
+            return
+        self._refresh_account_row("refused")
+
     def _warm_xbox_preauth(self):
         """Mint the Xbox token chain now rather than at PLAY.
 
@@ -2262,16 +2289,30 @@ class MainWindow(QMainWindow):
         """
         def work():
             from .auth import (
-                msa_load, msa_refresh, xbl_preauth, _account_cache_epoch)
-            from .config import DATA
+                account_epoch_is_current, msa_refresh_result,
+                msa_save_for_account_epoch, msa_session_snapshot, xbl_preauth)
             try:
-                token = msa_load()
+                token, epoch = msa_session_snapshot()
                 if not token:
                     return
-                fresh = msa_refresh(token.get("refresh_token"))
-                if not (fresh and fresh.get("access_token")):
+                fresh, error = msa_refresh_result(token.get("refresh_token"))
+                if not fresh:
+                    # A transport failure raises and follows the best-effort
+                    # path below. Only Microsoft's explicit invalid_grant
+                    # means this account needs a fresh device-code sign-in;
+                    # transient service errors must not sign the player out.
+                    if (error == "invalid_grant"
+                            and account_epoch_is_current(epoch)):
+                        self._auth_bridge.refused.emit()
                     return
-                epoch = _account_cache_epoch(DATA / "winegdk-preauth")
+                # Microsoft may rotate refresh tokens. The old warm-up threw
+                # that replacement away, so a later launch could find only a
+                # revoked token even though the GUI still looked signed in.
+                # Save it under the same logout generation before continuing.
+                if not msa_save_for_account_epoch(
+                        {"refresh_token": fresh["refresh_token"],
+                         "obtained": int(time.time())}, epoch):
+                    return
                 if xbl_preauth(fresh.get("access_token"), epoch):
                     # Runs on the raw worker thread started below, which has
                     # no Qt event loop -- go through AuthBridge rather than

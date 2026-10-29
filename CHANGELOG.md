@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **A revoked online-play sign-in is no longer shown as signed in.** The
+  background Xbox warm-up refreshed Microsoft's token but discarded its
+  rotated replacement, leaving a revoked token on disk while the account row
+  stayed green. Minecraft then opened without an Xbox user and its broken
+  in-game sign-in ended at an error such as *Drowned*. The replacement token
+  is now saved atomically, and an explicit `invalid_grant` response marks the
+  account as needing attention and offers **Sign in again**. Network and
+  transient service failures do not sign the player out. Relinking retires
+  only the refused online-play session; the Store/download account is kept.
+
 - **PLAY from the launcher works on Python 3.15** (#356). Python 3.15 imports
   parts of its standard library lazily, and once PySide6 had replaced the
   import function those names never resolved: PLAY stopped on

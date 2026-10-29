@@ -25,6 +25,23 @@ class _Response:
         return self._payload
 
 
+class MsaRefreshResultTests(unittest.TestCase):
+    def test_invalid_grant_is_preserved_for_the_gui(self):
+        with mock.patch.object(auth, "http_post_form", return_value={
+                "error": "invalid_grant",
+                "error_description": "refresh token was revoked",
+        }):
+            self.assertEqual(auth.msa_refresh_result("old"),
+                             (None, "invalid_grant"))
+
+    def test_success_keeps_the_rotated_refresh_token(self):
+        response = {"access_token": "access", "refresh_token": "new"}
+        with mock.patch.object(auth, "http_post_form",
+                               return_value=response):
+            self.assertEqual(auth.msa_refresh_result("old"),
+                             (response, None))
+
+
 class PreauthFailureDiagnosticTests(unittest.TestCase):
     access_secret = "msa-access-token-must-not-leak"
     response_secret = "xbox-response-token-must-not-leak"
