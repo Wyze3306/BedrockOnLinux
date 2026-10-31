@@ -1,0 +1,319 @@
+From 02a8f82f5c04291f4f51dc1b0c3289e3eb4d0115 Mon Sep 17 00:00:00 2001
+From: Wyze3306 <contact.wyze3306@gmail.com>
+Date: Sat, 31 Oct 2026 20:17:25 +0100
+Subject: [PATCH] login: finish on a ServerData short of an unused field, and
+ say why not
+
+A sign-in hands its tokens back as ServerData, which the IPC handler reads
+as a DAProperty with seven required strings. When one of them is missing
+the payload falls through to HostBridgeMessage, whose fields are all
+optional, so every JSON object parses as one -- and a token bag that is not
+a getContext invoke is dropped without a word. The page stays on "Please
+wait" with its OK button greyed out, nothing is printed, and the process
+never exits.
+
+Two of those fields are never needed. sDASessionKey is not read anywhere,
+and sSTSInlineFlowToken is already an Option for exchange_user_token, which
+leaves it out of the request when there is none; the leg after an
+inline-auth fault is exactly the one that may no longer carry it. Both now
+default, and K is read whether Microsoft sends it as a string or a number.
+
+The hang also needs to be diagnosable when the cause is elsewhere, so the
+handler now says, on stderr:
+
+* which required fields a token bag lacks (names only, never values);
+* which host method the page invoked that this host does not answer --
+  the page waits on that callback, and getContext is the only one handled;
+* every page that finishes loading, without its query string, so a log
+  shows whether the sign-in ever reached ppsecure/post.srf.
+
+Reported downstream as
+https://github.com/Wyze3306/BedrockOnLinux/issues/366.
+---
+ crates/xodus-cli/src/commands/login.rs |   4 +-
+ crates/xodus-cli/src/webview.rs        |  56 ++++++++++-
+ crates/xodus/src/models/live.rs        | 126 ++++++++++++++++++++++++-
+ 3 files changed, 178 insertions(+), 8 deletions(-)
+
+diff --git a/crates/xodus-cli/src/commands/login.rs b/crates/xodus-cli/src/commands/login.rs
+index 281ef9c..7a0ce75 100644
+--- a/crates/xodus-cli/src/commands/login.rs
++++ b/crates/xodus-cli/src/commands/login.rs
+@@ -77,7 +77,7 @@ impl LoginHandler {
+         let device_token = self.device.clone();
+         let client_id = self.client_id.clone();
+         let username = prop.username;
+-        let inline_ft = prop.sts_inline_flow_token;
++        let inline_ft = prop.sts_inline_flow_token.filter(|token| !token.is_empty());
+         let user_token = xodus::models::secrets::LegacyToken {
+             key_name: None,
+             token: prop.da_token,
+@@ -106,7 +106,7 @@ impl LoginHandler {
+                     user_token,
+                     username,
+                     device_token,
+-                    Some(inline_ft),
++                    inline_ft,
+                     None,
+                     client_id,
+                     &scopes,
+diff --git a/crates/xodus-cli/src/webview.rs b/crates/xodus-cli/src/webview.rs
+index 7f7241a..0c72506 100644
+--- a/crates/xodus-cli/src/webview.rs
++++ b/crates/xodus-cli/src/webview.rs
+@@ -367,6 +367,14 @@ fn create_session<T: SessionHandler>(
+                     {
+                         eprintln!("Failed to dispatch IPC token callback event");
+                     }
++                } else if let Some(missing) = unusable_token_bag(body) {
++                    // Any JSON object parses as a HostBridgeMessage, so this
++                    // used to be dropped in silence with the page left on
++                    // "Please wait".
++                    eprintln!(
++                        "Sign-in page returned its tokens without {}; cannot finish the sign-in",
++                        missing.join(", ")
++                    );
+                 } else {
+                     match serde_json::from_str::<HostBridgeMessage>(body) {
+                         Ok(message) => {
+@@ -380,6 +388,9 @@ fn create_session<T: SessionHandler>(
+                             {
+                                 eprintln!("Failed to dispatch host context event");
+                             }
++                            if let Some(name) = message.unanswered_invoke() {
++                                eprintln!("Sign-in page is waiting on {name}, which this host does not answer");
++                            }
+                         }
+                         Err(_) => {
+                             eprintln!("Ignoring unsupported IPC payload");
+@@ -388,8 +399,14 @@ fn create_session<T: SessionHandler>(
+                 }
+             })
+             .with_on_page_load_handler(move |event, url| {
+-                if matches!(event, PageLoadEvent::Finished) && url.starts_with("https://login.live.com/ppsecure/post.srf")
+-                {
++                if !matches!(event, PageLoadEvent::Finished) {
++                    return;
++                }
++                // Where a sign-in stopped is the first question about one
++                // that hangs, and nothing else answers it. The path only: a
++                // query string here can carry a flow token.
++                eprintln!("Sign-in page loaded: {}", page_without_query(&url));
++                if url.starts_with("https://login.live.com/ppsecure/post.srf") {
+                     proxy.send_event(CustomEvent::Finish(session_id)).ok();
+                 }
+             });
+@@ -408,6 +425,22 @@ fn create_session<T: SessionHandler>(
+     Ok(())
+ }
+ 
++/// The missing fields of a `ServerData` that carries sign-in tokens but not
++/// all the ones the exchange needs; None for any other payload.
++fn unusable_token_bag(body: &str) -> Option<Vec<&'static str>> {
++    let value = serde_json::from_str::<serde_json::Value>(body).ok()?;
++    if !DAProperty::is_token_bag(&value) {
++        return None;
++    }
++    let missing = DAProperty::missing(&value);
++    // Every field present and still unreadable: a type Microsoft changed.
++    Some(if missing.is_empty() { vec!["fields of the expected type"] } else { missing })
++}
++
++fn page_without_query(url: &str) -> &str {
++    url.split(['?', '#']).next().unwrap_or(url)
++}
++
+ fn remove_session<T: SessionHandler>(state: &mut RuntimeState<T>, session_id: SessionId) {
+     if state.active_session == Some(session_id) {
+         state.active_session = None;
+@@ -419,6 +452,25 @@ fn remove_session<T: SessionHandler>(state: &mut RuntimeState<T>, session_id: Se
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn a_page_is_logged_without_its_query() {
++        assert_eq!(
++            page_without_query("https://login.live.com/ppsecure/post.srf?uaid=x&ft=secret"),
++            "https://login.live.com/ppsecure/post.srf"
++        );
++        assert_eq!(page_without_query("https://login.live.com/a#b"), "https://login.live.com/a");
++    }
++
++    #[test]
++    fn a_token_bag_short_of_a_field_is_named_and_others_are_not() {
++        assert_eq!(
++            unusable_token_bag(r#"{"sDAToken":"t","sSigninName":"u","K":"1"}"#),
++            Some(vec!["sDAStartTime", "sDAExpires"])
++        );
++        assert_eq!(unusable_token_bag(r#"{"type":"invoke","value":{}}"#), None);
++        assert_eq!(unusable_token_bag("not json"), None);
++    }
++
+     /// Every leg of the sign-in has to look like the same host, or the leg
+     /// that does not never finishes.
+     #[test]
+diff --git a/crates/xodus/src/models/live.rs b/crates/xodus/src/models/live.rs
+index 4dbacab..0c0ad96 100644
+--- a/crates/xodus/src/models/live.rs
++++ b/crates/xodus/src/models/live.rs
+@@ -2,24 +2,64 @@ use serde::{Deserialize, Serialize};
+ 
+ use crate::models::soap;
+ 
++/// The tokens login.live.com leaves in `ServerData` once a sign-in is done.
++///
++/// Only the fields the token exchange cannot do without are required. The
++/// session key is never read, and the inline flow token is what a sign-in
++/// that has already been through its inline-auth leg may no longer carry:
++/// requiring either turned such a `ServerData` into a payload nobody
++/// recognised, and the page sat on "Please wait" for ever.
+ #[derive(Serialize, Deserialize, Debug, Clone)]
+ pub struct DAProperty {
+     #[serde(rename = "sDAToken")]
+     pub da_token: String,
+-    #[serde(rename = "sDASessionKey")]
++    #[serde(rename = "sDASessionKey", default)]
+     pub da_session_key: String,
+     #[serde(rename = "sDAStartTime")]
+     pub da_start_time: String,
+     #[serde(rename = "sDAExpires")]
+     pub da_expires: String,
+-    #[serde(rename = "sSTSInlineFlowToken")]
+-    pub sts_inline_flow_token: String,
++    #[serde(rename = "sSTSInlineFlowToken", default)]
++    pub sts_inline_flow_token: Option<String>,
+     #[serde(rename = "sSigninName")]
+     pub username: String,
+-    #[serde(rename = "K")]
++    #[serde(rename = "K", deserialize_with = "string_or_number")]
+     pub puid: String,
+ }
+ 
++impl DAProperty {
++    /// The fields `ServerData` has to carry for this to be a finished sign-in.
++    pub const REQUIRED: [&'static str; 5] =
++        ["sDAToken", "sDAStartTime", "sDAExpires", "sSigninName", "K"];
++
++    /// Whether `value` is a `ServerData` that carries sign-in tokens at all.
++    pub fn is_token_bag(value: &serde_json::Value) -> bool {
++        value.get("sDAToken").is_some()
++    }
++
++    /// The required fields `value` lacks, by name only: the values are
++    /// credentials and are never worth printing.
++    pub fn missing(value: &serde_json::Value) -> Vec<&'static str> {
++        Self::REQUIRED
++            .into_iter()
++            .filter(|name| value.get(name).is_none_or(serde_json::Value::is_null))
++            .collect()
++    }
++}
++
++fn string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
++where
++    D: serde::Deserializer<'de>,
++{
++    match serde_json::Value::deserialize(deserializer)? {
++        serde_json::Value::String(text) => Ok(text),
++        serde_json::Value::Number(number) => Ok(number.to_string()),
++        other => Err(serde::de::Error::custom(format!(
++            "expected a string or a number, got {other}"
++        ))),
++    }
++}
++
+ #[derive(Deserialize, Debug)]
+ pub struct HostBridgeMessage {
+     #[serde(rename = "type")]
+@@ -34,6 +74,18 @@ pub struct HostBridgeValue {
+ }
+ 
+ impl HostBridgeMessage {
++    /// The host method the page is waiting on, when it is one this host does
++    /// not answer. The page shows "Please wait" until its callback comes back,
++    /// so an invoke that is dropped without a word is a sign-in that hangs with
++    /// nothing in the log to say why.
++    pub fn unanswered_invoke(&self) -> Option<&str> {
++        let value = self.value.as_ref()?;
++        if self.message_type.as_deref() != Some("invoke") || self.get_context_invoke().is_some() {
++            return None;
++        }
++        Some(value.name.as_deref().unwrap_or("<unnamed>"))
++    }
++
+     pub fn get_context_invoke(&self) -> Option<&str> {
+         let value = self.value.as_ref()?;
+         if self.message_type.as_deref() == Some("invoke")
+@@ -51,3 +103,69 @@ pub enum ExchangeUserTokenOutcome {
+     Issued(soap::BodyContent),
+     Fault(Option<soap::PP>),
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++
++    fn server_data() -> serde_json::Value {
++        json!({
++            "sDAToken": "t", "sDASessionKey": "s", "sDAStartTime": "a",
++            "sDAExpires": "b", "sSTSInlineFlowToken": "f", "sSigninName": "u",
++            "K": "1", "urlPost": "https://login.live.com/ppsecure/post.srf",
++        })
++    }
++
++    #[test]
++    fn server_data_with_every_field_is_a_finished_sign_in() {
++        let data: DAProperty = serde_json::from_value(server_data()).unwrap();
++        assert_eq!(data.sts_inline_flow_token.as_deref(), Some("f"));
++        assert_eq!(data.puid, "1");
++    }
++
++    /// The leg after an inline-auth fault: no flow token and no session key.
++    /// Required, they made this payload unrecognisable and the sign-in hung.
++    #[test]
++    fn server_data_without_the_inline_flow_token_still_finishes() {
++        let mut value = server_data();
++        let bag = value.as_object_mut().unwrap();
++        bag.remove("sSTSInlineFlowToken");
++        bag.remove("sDASessionKey");
++        let data: DAProperty = serde_json::from_value(value).unwrap();
++        assert_eq!(data.sts_inline_flow_token, None);
++        assert_eq!(data.da_session_key, "");
++    }
++
++    #[test]
++    fn a_numeric_puid_is_read_as_its_digits() {
++        let mut value = server_data();
++        value["K"] = json!(1234567890123u64);
++        let data: DAProperty = serde_json::from_value(value).unwrap();
++        assert_eq!(data.puid, "1234567890123");
++    }
++
++    #[test]
++    fn missing_names_the_fields_and_not_their_values() {
++        let mut value = server_data();
++        value.as_object_mut().unwrap().remove("sDAExpires");
++        value["K"] = serde_json::Value::Null;
++        assert!(DAProperty::is_token_bag(&value));
++        assert_eq!(DAProperty::missing(&value), ["sDAExpires", "K"]);
++        assert!(!DAProperty::is_token_bag(&json!({"urlPost": "x"})));
++    }
++
++    #[test]
++    fn only_invokes_other_than_get_context_are_reported() {
++        let parse = |v: serde_json::Value| serde_json::from_value::<HostBridgeMessage>(v).unwrap();
++        let context = parse(json!({"type": "invoke", "value": {
++            "name": "CloudExperienceHost.getContext", "context": "c"}}));
++        assert_eq!(context.unanswered_invoke(), None);
++        let event = parse(json!({"type": "event", "value": {
++            "name": "CloudExperienceHost.visible", "data": true}}));
++        assert_eq!(event.unanswered_invoke(), None);
++        let other = parse(json!({"type": "invoke", "value": {
++            "name": "CloudExperienceHost.done", "context": "d"}}));
++        assert_eq!(other.unanswered_invoke(), Some("CloudExperienceHost.done"));
++    }
++}
+-- 
+2.47.3
+

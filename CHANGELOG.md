@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **The Microsoft Store sign-in no longer hangs silently after the
+  password** (#366). When Microsoft's page handed back its tokens without
+  a field xodus-cli never uses, the reply was dropped and the window sat on
+  *Please wait* for ever. Those fields are optional now, and
+  `logs/store-login.log` records each sign-in page that loads and any reply
+  it could not use, so a sign-in that still stops says where.
+
 - **A revoked online-play sign-in is no longer shown as signed in** (#331,
   #360). The
   background Xbox warm-up refreshed Microsoft's token but discarded its
