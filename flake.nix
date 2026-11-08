@@ -24,7 +24,7 @@
     {
       packages.x86_64-linux.default = pkgs.stdenv.mkDerivation {
         pname = "bedrock-on-linux";
-        version = "2.2.10";
+        version = "2.3.0";
 
         src = ./.;
 

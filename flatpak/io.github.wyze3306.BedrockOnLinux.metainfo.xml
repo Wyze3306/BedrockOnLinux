@@ -77,6 +77,22 @@
   </supports>
 
   <releases>
+    <release version="2.3.0" date="2026-11-08">
+      <description>
+        <p>Signing in works again on the current Minecraft, and Minecraft keeps
+           starting two months after the Microsoft Store sign-in.</p>
+        <ul>
+          <li>applies the in-game sign-in fixes to Minecraft 1.26.60 and later
+              again</li>
+          <li>renews the Microsoft Store sessions the game's licence is fetched
+              with, instead of failing after about two months</li>
+          <li>keeps the online-play sign-in when Microsoft rotates its token</li>
+          <li>no longer changes the graphics card when Settings is scrolled</li>
+          <li>reads Minecraft Preview's own settings</li>
+          <li>works on Python 3.15</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.10" date="2026-10-27">
       <description>
         <p>Minecraft starts and downloads again, Minecraft Preview 1.26.70

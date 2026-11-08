@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 2.3.0 — 2026-11-08
+
+Signing in works again on the current Minecraft, and the downloader keeps its
+Microsoft sessions alive instead of stopping two months after the Store
+sign-in. The in-game sign-in patches apply to Minecraft 1.26.60 and later, a
+rotated online-play token is no longer thrown away, and scrolling Settings no
+longer moves the game to another graphics card. Python 3.15 is supported.
 
 ### Fixed
 
