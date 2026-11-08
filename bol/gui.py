@@ -658,6 +658,43 @@ def btn(text, cmd=None, kind="ghost", w=None, h=32, tip=None, parent=None) -> QP
     return b
 
 
+class SettingComboBox(QComboBox):
+    """A drop-down that a wheel turn on the way past leaves alone (#363).
+
+    The Settings tabs scroll, and Qt hands a wheel turn to whichever combo
+    box is under the pointer, focused or not, as a new choice. The graphics
+    card choice is saved on every change, so scrolling the Advanced tab could
+    move the game onto the processor's iGPU without anyone seeing it happen,
+    and the next PLAY crawled. Unfocused, the turn goes to the page, which is
+    what the player meant; clicked or tabbed into, the wheel works as before.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class SettingSpinBox(QSpinBox):
+    """A number field that a wheel turn on the way past leaves alone, as
+    :class:`SettingComboBox`."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
 def tool_row(text, cmd, tip=None, danger=False) -> QPushButton:
     """A full-width, left-aligned action row for Settings ▸ Tools."""
     return btn(text, cmd, kind="toolrow-danger" if danger else "toolrow", h=44, tip=tip)
@@ -3179,7 +3216,7 @@ class MainWindow(QMainWindow):
                "the discrete card to play on it.")
         label.setToolTip(tip)
         row.addWidget(label)
-        combo = QComboBox()
+        combo = SettingComboBox()
         combo.setToolTip(tip)
         combo.addItem("Automatic (system default)", gpus.AUTO)
         try:
@@ -3465,7 +3502,7 @@ class MainWindow(QMainWindow):
         mode_label.setToolTip("Choose whether to inject a local DLL or download one from a URL.")
         mode_layout.addWidget(mode_label)
 
-        self.dll_mode_combo = QComboBox()
+        self.dll_mode_combo = SettingComboBox()
         self.dll_mode_combo.addItem("File", "file")
         self.dll_mode_combo.addItem("Download", "url")
         current_mode = self.settings.get("injector_dll_type", "file")
@@ -3498,7 +3535,7 @@ class MainWindow(QMainWindow):
             "into a game that has not opened yet.")
         delay_layout.addWidget(delay_label)
 
-        self.delay_spin = QSpinBox()
+        self.delay_spin = SettingSpinBox()
         self.delay_spin.setRange(0, 60)
         self.delay_spin.setValue(int(self.settings.get("injector_delay", 5)))
         self.delay_spin.valueChanged.connect(lambda val: self._save_setting("injector_delay", val))

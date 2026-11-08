@@ -27,6 +27,14 @@
   or a Rust panic. Without a connection, PLAY still says that a connection
   is what is missing.
 
+- **Scrolling Settings no longer changes the graphics card on the way past**
+  ([#363](https://github.com/Wyze3306/BedrockOnLinux/issues/363)). A wheel
+  turn over the *Graphics card* list while scrolling the Advanced tab picked
+  the next card and saved it, so a desktop with an NVIDIA card could start
+  Minecraft on the processor's integrated GPU, at single-digit frame rates,
+  with nothing to say why. The lists and number fields in Settings now take
+  the wheel only once clicked; otherwise it scrolls the page.
+
 - **A revoked online-play sign-in is no longer shown as signed in** (#331,
   #360). The
   background Xbox warm-up refreshed Microsoft's token but discarded its
