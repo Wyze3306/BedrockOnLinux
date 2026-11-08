@@ -1256,6 +1256,12 @@ class RefusedLicenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
             self._play([LICENCE_UNREACHABLE])
         self.assertEqual(str(raised.exception), LICENCE_UNREACHABLE)
 
+    def test_a_refused_store_session_ends_the_launch_too(self):
+        from bol.gamesetup import STORE_SESSION_REFUSED
+        with self.assertRaises(launch.BolError) as raised:
+            self._play([STORE_SESSION_REFUSED])
+        self.assertEqual(str(raised.exception), STORE_SESSION_REFUSED)
+
     def test_a_licence_the_service_refused_ends_the_launch(self):
         from bol.gamesetup import LICENCE_SERVICE_REFUSED
         hit = LICENCE_SERVICE_REFUSED + " (HTTP 401). Link it again."

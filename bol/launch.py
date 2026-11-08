@@ -43,7 +43,7 @@ from .fixups import (
 )
 from .gameinput import install_gameinput
 from .gamesetup import (LICENCE_REFUSED, LICENCE_SERVICE_REFUSED,
-                        LICENCE_UNREACHABLE, diagnose)
+                        LICENCE_UNREACHABLE, STORE_SESSION_REFUSED, diagnose)
 from .gpu_safety import (
     acknowledge_gpu_crash_command,
     arm_gpu_launch,
@@ -1274,6 +1274,8 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         raise BolError(LICENCE_REFUSED)
     if LICENCE_UNREACHABLE in hits:
         raise BolError(LICENCE_UNREACHABLE)
+    if STORE_SESSION_REFUSED in hits:
+        raise BolError(STORE_SESSION_REFUSED)
     refused = next((h for h in hits
                     if h.startswith(LICENCE_SERVICE_REFUSED)), None)
     if refused:

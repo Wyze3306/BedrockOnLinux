@@ -14,14 +14,18 @@
 - **Minecraft starts and downloads again after about two months of use**
   ([#367](https://github.com/Wyze3306/BedrockOnLinux/issues/367)). PLAY and
   downloads stopped on `not implemented: Exchange token supports only singular
-  token right now Fault(Fault)`. The downloader keeps a sign-in for this
-  device that Microsoft issues for 60 days, and it never looked at that date,
-  so once it passed Microsoft refused every request it signed, and the
-  downloader crashed on the refusal. It now signs the device in again when
-  that sign-in has expired, and if Microsoft refuses it anyway it signs the
-  device in afresh and tries once more. Your Microsoft account stays signed
-  in; an account sign-in that has itself expired asks you to sign in again
-  instead of failing.
+  token right now Fault(Fault)`. The downloader keeps two Microsoft sign-ins
+  from the Store sign-in, one for this computer that Microsoft issues for 60
+  days and one for the account, for 90, and it renewed neither: once the
+  computer's ran out, Microsoft refused every request it signed and the
+  downloader crashed on the refusal. The computer's is now signed in again
+  when it has expired, or when Microsoft refuses it anyway, and the request
+  tried once more; the account's is renewed in its last week without a new
+  sign-in. Neither registers another device. If Microsoft still refuses, or
+  the account's sign-in ran out unused, the launcher says so and asks you to
+  sign in to the Microsoft Store account again, instead of "No known cause"
+  or a Rust panic. Without a connection, PLAY still says that a connection
+  is what is missing.
 
 - **A revoked online-play sign-in is no longer shown as signed in** (#331,
   #360). The

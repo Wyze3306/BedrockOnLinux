@@ -168,6 +168,58 @@ class GameCrashDiagnosisTests(unittest.TestCase):
         self.assertFalse(any(hit.startswith("Microsoft sign-in failed")
                              for hit in hits), hits)
 
+    def test_an_unreachable_licence_is_named_without_a_panic(self):
+        # xodus-cli from -p9 on reports the exchange it could not make instead
+        # of panicking; this is what it printed with no network namespace.
+        hits = self._diagnose(
+            "could not exchange this device's Microsoft session: Error making "
+            "a request reqwest::Error { kind: Request, url: \"https://login."
+            "live.com/RST2.srf\", source: hyper_util::client::legacy::Error("
+            "Connect, ConnectError(\"dns error\", Custom { kind: "
+            "Uncategorized, error: \"failed to lookup address information: "
+            "Temporary failure in name resolution\" })) }\n")
+        self.assertIn(gamesetup.LICENCE_UNREACHABLE, hits)
+        self.assertNotIn(gamesetup.STORE_SESSION_REFUSED, hits)
+
+    def test_a_device_session_microsoft_refused_is_named(self):
+        # minecraft.log of every PLAY about sixty days after the Store sign-in,
+        # with xodus-cli up to -p8 (#367). It read "No known cause".
+        hits = self._diagnose(
+            "resources.pri: 73756672 1192\n\n"
+            "thread 'main' (4736) panicked at "
+            "crates/xodus/src/api/live/mod.rs:79:14:\n"
+            "not implemented: Exchange token supports only singular token "
+            "right now Fault(Fault)\n"
+            "note: run with `RUST_BACKTRACE=1` environment variable to "
+            "display a backtrace\n")
+        self.assertIn(gamesetup.STORE_SESSION_REFUSED, hits)
+        self.assertIn("sign out", gamesetup.STORE_SESSION_REFUSED)
+        self.assertNotIn(gamesetup.LICENCE_UNREACHABLE, hits)
+
+    def test_a_session_refused_even_signed_in_afresh_is_named(self):
+        hits = self._diagnose(
+            "this device's Microsoft session was refused again after signing "
+            "it in afresh: login.live.com refused the token request with a "
+            "SOAP Fault (reqstatus: 0x80048821)\n")
+        self.assertIn(gamesetup.STORE_SESSION_REFUSED, hits)
+        self.assertFalse(any(hit.startswith("Microsoft sign-in failed")
+                             for hit in hits), hits)
+
+    def test_an_account_session_that_ran_out_is_named(self):
+        hits = self._diagnose(
+            "not logged in: the Microsoft account's session token in the "
+            "keyring has expired (entry expired at 2026-11-24T03:09:36Z); "
+            "sign in again\n")
+        self.assertIn(gamesetup.STORE_SESSION_REFUSED, hits)
+
+    def test_a_refused_licence_request_is_not_a_refused_session(self):
+        # #322: the licensing service refused the ticket, not Live the
+        # session. Signing out again changes nothing there.
+        hits = self._diagnose(
+            "the licensing service refused the request (HTTP 401): "
+            "InvalidMsaTicketFormat\n")
+        self.assertNotIn(gamesetup.STORE_SESSION_REFUSED, hits)
+
     def test_other_xodus_panics_are_not_called_offline(self):
         hits = self._diagnose(
             "thread 'main' panicked at crates/xodus-cli/src/run.rs:133:58:\n"

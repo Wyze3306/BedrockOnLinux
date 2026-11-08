@@ -104,11 +104,43 @@ LICENCE_UNREACHABLE = (
     "stays encrypted on disk, and Microsoft hands out the key that decrypts "
     "it each time it starts, so it needs an internet connection to start, "
     "single-player included. Connect to the internet and click PLAY again.")
+# From 64d39eb87a56-p9 on, the exchange that needs the network first reports
+# it instead of panicking:
+#   could not exchange this device's Microsoft session: Error making a request
+#   reqwest::Error { kind: Request, url: "https://login.live.com/RST2.srf",
+#   source: … ConnectError("dns error", …
 _LICENCE_UNREACHABLE = (
-    r"panicked at [^\n]*license\.rs[^\n]*\n[^\n]*"
+    r"(?:panicked at [^\n]*license\.rs[^\n]*\n|"
+    r"could not exchange this device's Microsoft session: |"
+    r"Microsoft session was refused again after signing it in afresh: )"
+    r"[^\n]*"
     r"(?:dns error|failed to lookup address|ConnectError|Connect,|"
     r"timed out|Connection refused|Network is unreachable|"
     r"error sending request)")
+
+
+# The licence request is signed with two Microsoft sessions the Store sign-in
+# left in xodus-cli's keyring: this computer's, which Microsoft issues for 60
+# days, and the account's, for 90. xodus-cli up to 64d39eb87a56-p8 renewed
+# neither, and a refused device session ended in a panic before the game
+# started (#367), which read "No known cause":
+#   thread 'main' panicked at crates/xodus/src/api/live/mod.rs:79:14:
+#   not implemented: Exchange token supports only singular token right now
+#   Fault(Fault)
+# Patches 0009 and 0010 renew both. What is left is a device session Microsoft
+# refuses even freshly signed in, or an account session that ran out before
+# the game was played in its last week, and the Store sign-in replaces both.
+# Signing out keeps the device, so it does not cost one of the account's ten.
+STORE_SESSION_REFUSED = (
+    "Minecraft could not start because Microsoft no longer accepts the "
+    "Microsoft Store sign-in the game's licence is fetched with at every "
+    "start. Open the account menu, sign out of the Microsoft Store account "
+    "(Download Minecraft), sign in again, then click PLAY.")
+_STORE_SESSION_REFUSED = (
+    r"Exchange token supports only singular token[^\n]*Fault|"
+    r"Microsoft session was refused again after signing it in afresh|"
+    r"not logged in: [^\n]*(?:in the keyring has expired|"
+    r"is missing from the keyring)")
 
 
 # The licensing service answered, and the answer was not a licence (#345).
@@ -212,6 +244,7 @@ _DIAG_RULES = [
     # Store devices, and where they are given back is not in the message.
     (r"Device group is full", LICENCE_REFUSED),
     (_LICENCE_UNREACHABLE, LICENCE_UNREACHABLE),
+    (_STORE_SESSION_REFUSED, STORE_SESSION_REFUSED),
     (r"\bInitialConnection[-_: ]*13(?!\d)",
      "LAN InitialConnection-13 — check that the host firewall allows "
      "Minecraft's inbound RakNet UDP 19132 and, on Windows, that the host "
@@ -287,9 +320,13 @@ def diagnose():
     # The game never ran: xodus-cli died fetching the licence, and its panic
     # names login.live.com right before "failed to lookup address", which
     # the in-game sign-in rule reads as a failed sign-in (#308).
-    if LICENCE_UNREACHABLE in hits:
+    if LICENCE_UNREACHABLE in hits or STORE_SESSION_REFUSED in hits:
         hits = [h for h in hits if not h.startswith(
             "Microsoft sign-in failed in-game")]
+    # No answer at all is not a refusal: signing in again needs the network
+    # that is missing.
+    if LICENCE_UNREACHABLE in hits:
+        hits = [h for h in hits if h != STORE_SESSION_REFUSED]
     # A full device group is refused through the same service, and that
     # message already says what to do about it.
     refusal = _licence_service_refusal(text)

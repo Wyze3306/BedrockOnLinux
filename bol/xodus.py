@@ -90,6 +90,25 @@ _NO_CREDENTIALS = re.compile(
     r"unable to initialize credentials|invalid sts token|"
     r"no user token|not logged in|didn't log in|"
     r"un(sup|sp)ported (user )?token|failed to get exchange ms token", re.I)
+# This computer's Microsoft Store session, refused (#367). xodus-cli up to
+# 64d39eb87a56-p8 panicked on the refusal ("Exchange token supports only
+# singular token right now Fault(Fault)"); later ones sign the device in
+# again and try once more, and report the second refusal. Signing out of the
+# Store account drops that session and keeps the device, so the next sign-in
+# starts a new one without using up one of the account's ten devices.
+_SESSION_REFUSED = re.compile(
+    r"Exchange token supports only singular token[^\n]*Fault|"
+    r"Microsoft session was refused again after signing it in afresh", re.I)
+# A second attempt that got no answer at all is the network's, not a refusal.
+_NO_NETWORK = re.compile(
+    r"Error making a request|error sending request|dns error|"
+    r"failed to lookup address|Connection refused|Network is unreachable",
+    re.I)
+_SESSION_REFUSED_MESSAGE = (
+    "Microsoft no longer accepts this computer's Microsoft Store session, "
+    "which the download is signed with. Open the account menu, sign out of "
+    "the Microsoft Store account (Download Minecraft), sign in again, then "
+    "try again.")
 # Out of room, said outright: "not enough free disk space on /home: need
 # 2182632068 bytes, have 4096 bytes (files: 2182632068)". xodus-cli prints it
 # and returns -- exiting 0 -- before a single game file is written.
@@ -1113,6 +1132,8 @@ def _raise_unretryable(text, dest=None, needed=0):
         raise NotOwned(
             "The linked Microsoft account does not own this edition of "
             "Minecraft. Buy or redeem it on the same account, then try again.")
+    if _SESSION_REFUSED.search(text) and not _NO_NETWORK.search(text):
+        raise XodusError(_SESSION_REFUSED_MESSAGE)
     if _NO_CREDENTIALS.search(text):
         raise NotSignedIn(
             "The Microsoft session for the download expired. Sign in again.")

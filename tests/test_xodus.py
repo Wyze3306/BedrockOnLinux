@@ -913,6 +913,36 @@ class InstallRoomTests(unittest.TestCase):
                 size=3 * self.GIB, free=40 * self.GIB)
         self.assertIsInstance(exc, xodus.NotSignedIn)
 
+    def test_a_refused_store_session_says_to_sign_out_and_in(self):
+        # #367: what the download ended on with xodus-cli up to -p8, and what
+        # a later one says when the session is refused even signed in afresh.
+        for line in (
+                "not implemented: Exchange token supports only singular "
+                "token right now Fault(Fault)",
+                "this device's Microsoft session was refused again after "
+                "signing it in afresh: login.live.com refused the token "
+                "request with a SOAP Fault (reqstatus: none)"):
+            with self.subTest(line=line), tempfile.TemporaryDirectory() as tmp:
+                calls, exc = self._install(
+                    Path(tmp) / "1.26.44.3", [lambda d, line=line: (1, [line])],
+                    size=3 * self.GIB, free=40 * self.GIB)
+                self.assertNotIsInstance(exc, xodus.NotSignedIn)
+                self.assertIn("sign out of the Microsoft Store account",
+                              str(exc))
+                # Every mirror is signed with the same session.
+                self.assertEqual(len(calls), 1)
+
+    def test_a_second_attempt_without_network_is_not_a_refusal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, exc = self._install(
+                Path(tmp) / "1.26.44.3",
+                [lambda d: (1, ["this device's Microsoft session was refused "
+                                "again after signing it in afresh: Error "
+                                "making a request reqwest::Error { kind: "
+                                "Request }"])] * 3,
+                size=3 * self.GIB, free=40 * self.GIB)
+        self.assertNotIn("sign out of the Microsoft Store account", str(exc))
+
     def test_a_download_that_installed_nothing_repeats_what_it_printed(self):
         with tempfile.TemporaryDirectory() as tmp:
             _, exc = self._install(
