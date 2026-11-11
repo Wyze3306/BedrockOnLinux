@@ -10,14 +10,16 @@ from .config import LOGS
 from .deps import ensure_login_deps
 from .fixups import fix_curl_ssl, hide_signin_button, install_gdk_xbox_dlls
 from .gameinput import install_gameinput
+from .config import GAMES
 from .games import (
     _auto_selection,
     _game_root,
     install_game,
+    list_versions,
     prune_legacy_game_archives,
     use_game_dir,
 )
-from .log import BolError, info, ok, warn
+from .log import BolError, desktop_notify, info, ok, warn
 from .prefix import (
     active_prefix,
     boot_prefix,
@@ -37,6 +39,51 @@ def do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
             prefix_operation_lock("install or update BedrockOnLinux"):
         return _do_setup(game_dir, mc_edition, mc_version, proton_tag,
                          force, progress)
+
+
+# Off unless asked for: a server that has not updated yet refuses a newer
+# client, so moving to a new build stays the player's decision by default.
+AUTO_UPDATE_SETTING = "auto_update_game"
+
+
+def update_game_before_play(always=False, setup=None, versions=None):
+    """Move to the newest build of the edition being played (#328).
+
+    For a start with no launcher window -- a desktop or Steam shortcut --
+    where nobody is shown that a new build is out. Does nothing unless the
+    setting is on or ``always`` is. Returns the build switched to, or None
+    when the installed one is kept: it is already the newest, it is a copy
+    from outside the managed folder, or the update could not be made. Never
+    raises: whatever stops the update, the build already installed still
+    starts.
+    """
+    settings = load_settings()
+    if not (always or settings.get(AUTO_UPDATE_SETTING, False)):
+        return None
+    game_dir = settings.get("game_dir")
+    try:
+        managed = bool(game_dir) and Path(game_dir).resolve().is_relative_to(
+            GAMES.resolve())
+    except OSError:
+        managed = False
+    if not managed:
+        return None
+    try:
+        edition, current = _auto_selection(settings)
+        listed = (versions or list_versions)(edition["id"], offline_ok=False)
+        newest = listed[0]["version"] if listed else None
+        if not newest or newest == current:
+            return None
+        message = (f"Updating {edition['name']} from {current or '?'} to "
+                   f"{newest} before it starts …")
+        info(message)
+        desktop_notify(message)
+        (setup or do_setup)(mc_edition=edition, mc_version=newest)
+    except Exception as exc:
+        warn(f"Could not update Minecraft ({exc}); starting the build "
+             "already installed.")
+        return None
+    return newest
 
 
 def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,

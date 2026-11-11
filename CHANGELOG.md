@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- **A shortcut can keep Minecraft up to date.** With **Settings ▸ General ▸
+  Update Minecraft when started from a shortcut** on, a direct launch
+  shortcut (or `bedrock-on-linux play`) installs the newest build of the
+  edition you play before starting it, instead of staying on the build picked
+  in the launcher. `bedrock-on-linux play --update` does it once. It is off
+  by default, because a server that has not updated yet refuses a newer game,
+  and if the update cannot be made the installed build starts as usual (#328).
+
 ### Fixed
 
 - **Closing Minecraft ends the session again.** A couple of minutes into a

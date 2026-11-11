@@ -2724,6 +2724,15 @@ class MainWindow(QMainWindow):
         close_row.toggled.connect(lambda on: self._save_setting("close_on_launch", on))
         startup.addWidget(close_row)
 
+        update_row = self._switch(
+            "Update Minecraft when started from a shortcut",
+            self.settings.get("auto_update_game", False),
+            "A direct launch shortcut installs the newest build before the "
+            "game starts, instead of staying on the one picked here. Off by "
+            "default: a server that has not updated yet refuses a newer game.")
+        update_row.toggled.connect(lambda on: self._save_setting("auto_update_game", on))
+        startup.addWidget(update_row)
+
         controller = card_section(v, "Controller",
             "Move a highlight around the launcher with a gamepad, for Steam "
             "Game Mode and any other couch setup with no mouse in reach.")
