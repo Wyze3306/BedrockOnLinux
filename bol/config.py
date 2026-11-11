@@ -151,13 +151,32 @@ WINEGDK_BUILD_REV = "wow64-archs-native22"
 WINEGDK_ARCHIVE_SHA256 = "e98512e74b1c3f930fdd213b24ac4a01abfa3a6336276076a509530c540b2b13"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "06510f8fd802f6c8663c56221983d1f1fbd2d80dbece4818fe83692fa5040ab4"
-# The engine's own x86_64 GDK runtime -- WineGDK's xgameruntime.dll and the
-# xgameruntime.dll.threading it hands XThreading to -- as its
-# engine-manifest.json pins them under critical_files. macOS runs no engine,
-# and no macOS Wine ships a GDK runtime, so a Mac takes these two files
-# (bol.winemac); they move with WINEGDK_BUILD_REV.
-WINEGDK_XGAMERUNTIME_SHA256 = "f1d5569ce40ab9b973336a5f3cf2e65b367dc535029d243e3850748b16ceb47e"
-WINEGDK_XGAMERUNTIME_THREADING_SHA256 = "4c3e3faf5bcd86779e4a69677902dd8b36a16e1136a5901e616c36d8a02b68f6"
+# What a Mac takes from the Linux engine (bol.winemac): macOS runs no engine,
+# and no macOS Wine ships a GDK runtime. The engine release these files are
+# read out of, and the SHA-256 each has in it -- pinned here rather than
+# following WINEGDK_BUILD_REV, so a Mac never waits on, or downloads, an
+# engine whose only changes are to the Linux side.
+#
+# xgameruntime.dll and the xgameruntime.dll.threading it hands XThreading to
+# are the runtime itself, as the engine's manifest pins them under
+# critical_files. The other four are WineGDK's builds of WinRT libraries the
+# game activates classes from at startup, which the Wine of a CrossOver
+# bottle only stubs.
+MAC_GDK_RUNTIME_REV = "wow64-archs-native21"
+MAC_GDK_RUNTIME_SHA256 = {
+    "xgameruntime.dll":
+        "c10640da818033598d67a5548b124ee810da153c716614f41cd43c10c0c9c344",
+    "xgameruntime.dll.threading":
+        "4c3e3faf5bcd86779e4a69677902dd8b36a16e1136a5901e616c36d8a02b68f6",
+    "twinapi.appcore.dll":
+        "bcc1462a6ed1808956a4b4378ac8b0cbc678cb115f027b43ed0ae2a859379048",
+    "wintypes.dll":
+        "28d7a7a351e5ced75e7528b566487fe198d90dc4712b4241c262ff0e02dc93f5",
+    "windows.ui.core.textinput.dll":
+        "cbd1eb4c7ce8b41de83cd4f315a5570be3d8559096c979d2d88b469c9a09f085",
+    "windows.ui.dll":
+        "6ccbeb8be4985a21596126cf63434f0110932d533a7485e832ee2e33b6477a10",
+}
 
 SELF_REPO = WINEGDK_PREBUILT_REPO
 

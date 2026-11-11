@@ -58,6 +58,7 @@ from pathlib import Path
 from .log import BolError, die, info, ok, warn
 from .platform import IS_MAC, mac_arm
 from .util import load_settings, save_settings
+from .wine_registry import reg_dword, reg_sz, update_prefix_registry
 
 # CrossOver's bottled Wine on a stock install, and dragged into the user's
 # own Applications folder instead.
@@ -563,8 +564,30 @@ def wine_user_name(prefix):
 #     async calls the game runs everything through. Without it the game's
 #     first task queue fails, and Minecraft dies on the C++ exception it
 #     raises for that (exit 99, 0xe06d7363).
+#
+# With both in place the game gets as far as activating WinRT classes, and
+# dies on the same exception (exit 99 again) when one is refused. A CrossOver
+# bottle refuses four of the ones Minecraft asks for at startup: its registry
+# has no ActivatableClassId entry for them (0x80040154, class not
+# registered), and the Wine libraries that would serve them are stubs without
+# those classes (0x80040111, class not available). So the Mac also takes the
+# engine's builds of the libraries that do have them -- plain PEs again,
+# importing only combase, kernel32, ntdll, ucrtbase and, for two of them,
+# advapi32 and user32 -- and says in the registry where each class lives:
+#
+# twinapi.appcore.dll
+#     Windows.ApplicationModel.DataTransfer.DataTransferManager
+# windows.ui.core.textinput.dll
+#     Windows.UI.Text.Core.CoreTextServicesManager
+#     Windows.UI.ViewManagement.Core.CoreInputView
+# wintypes.dll
+#     Windows.Foundation.Metadata.ApiInformation
+# windows.ui.dll
+#     The engine's build of the Windows.UI classes the three above work
+#     with. Nothing is registered for it here: whatever the bottle already
+#     registers under that file name keeps resolving to it.
 
-# Where both sit in the engine tree, and therefore in the engine archive.
+# Where they all sit in the engine tree, and therefore in the engine archive.
 _ENGINE_DLL_DIR = "files/lib/wine/x86_64-windows"
 # Every Wine builtin carries this right after its DOS header. A Wine that
 # sees it takes the file for one of its own builtins and looks for the
@@ -576,14 +599,58 @@ _BUILTIN_MARKER_AT = 0x40
 _GDK_RUNTIME_MAX = 16 * 1024 * 1024
 
 
+# Where each class the bottle refuses lives, among the libraries installed.
+_GDK_WINRT_CLASSES = {
+    "Windows.ApplicationModel.DataTransfer.DataTransferManager":
+        "twinapi.appcore.dll",
+    "Windows.UI.Text.Core.CoreTextServicesManager":
+        "windows.ui.core.textinput.dll",
+    "Windows.UI.ViewManagement.Core.CoreInputView":
+        "windows.ui.core.textinput.dll",
+    "Windows.Foundation.Metadata.ApiInformation": "wintypes.dll",
+}
+_ACTIVATABLE_CLASSES = r"Software\Microsoft\WindowsRuntime\ActivatableClassId"
+# The copies in system32 are native DLLs to Wine once unmarked, and a bottle
+# may prefer its own builtin of the same name: ask for the native one first.
+_GDK_NATIVE_FIRST = ("twinapi.appcore", "wintypes",
+                     "windows.ui.core.textinput", "windows.ui")
+
+
 def _gdk_runtime_pins():
     """``{file name: SHA-256}`` for the files the Mac installs."""
-    from .config import (WINEGDK_XGAMERUNTIME_SHA256,
-                         WINEGDK_XGAMERUNTIME_THREADING_SHA256)
-    return {
-        "xgameruntime.dll": WINEGDK_XGAMERUNTIME_SHA256,
-        "xgameruntime.dll.threading": WINEGDK_XGAMERUNTIME_THREADING_SHA256,
-    }
+    from .config import MAC_GDK_RUNTIME_SHA256
+    return dict(MAC_GDK_RUNTIME_SHA256)
+
+
+def as_native_dll(data):
+    """``data`` without Wine's builtin marker; the same bytes otherwise.
+
+    The image is not touched anywhere else and keeps its length, and a file
+    that never had the marker, or has already lost it, comes back as it is.
+    """
+    end = _BUILTIN_MARKER_AT + len(_BUILTIN_MARKER)
+    if bytes(data[_BUILTIN_MARKER_AT:end]) != _BUILTIN_MARKER:
+        return bytes(data)
+    return (bytes(data[:_BUILTIN_MARKER_AT]) + bytes(len(_BUILTIN_MARKER))
+            + bytes(data[end:]))
+
+
+def gdk_registry_changes():
+    """``(machine, user)`` registry values the installed libraries need.
+
+    Each class the bottle refuses, pointed at the library that has it, and
+    the load order that makes Wine take the copies in system32.
+    """
+    machine = []
+    for name, library in _GDK_WINRT_CLASSES.items():
+        key = _ACTIVATABLE_CLASSES + "\\" + name
+        machine.append(reg_sz(key, "DllPath",
+                              "C:\\windows\\system32\\" + library))
+        # 0: served in-process, from the DLL named.
+        machine.append(reg_dword(key, "ActivationType", 0))
+    user = [reg_sz(r"Software\Wine\DllOverrides", library, "native,builtin")
+            for library in _GDK_NATIVE_FIRST]
+    return machine, user
 
 
 def _sha256_file(path):
@@ -638,7 +705,7 @@ def gdk_runtime_files():
     Fetched once, out of the game engine archive, when neither the bundle,
     the cache nor an installed engine has them.
     """
-    from .config import WINEGDK_BUILD_REV, WINEGDK_PREBUILT_REPO
+    from .config import MAC_GDK_RUNTIME_REV, WINEGDK_PREBUILT_REPO
     found, missing = {}, {}
     for name, pin in _gdk_runtime_pins().items():
         candidates = _gdk_runtime_candidates(name, pin)
@@ -652,8 +719,8 @@ def gdk_runtime_files():
     if not missing:
         return found
     url = (f"https://github.com/{WINEGDK_PREBUILT_REPO}/releases/download/"
-           f"engine-{WINEGDK_BUILD_REV}/GDK-Proton-xuser-"
-           f"{WINEGDK_BUILD_REV}.tar.gz")
+           f"engine-{MAC_GDK_RUNTIME_REV}/GDK-Proton-xuser-"
+           f"{MAC_GDK_RUNTIME_REV}.tar.gz")
     info("Downloading the GDK runtime Minecraft needs to start (one time: "
          "it is read out of the game engine archive, about 570 MB) …")
     try:
@@ -681,16 +748,15 @@ def gdk_runtime_files():
 def install_gdk_runtime(prefix):
     """Put the GDK runtime in ``prefix``'s system32, as native DLLs.
 
-    Returns the system32 folder. A file is rewritten only when it differs, so
-    this costs a comparison at every PLAY.
+    Returns the system32 folder. The engine's files are only read: what
+    changes is the copy. A file is rewritten only when it differs, and the
+    registry only when a value does, so this costs a comparison at every
+    PLAY.
     """
     system32 = Path(prefix) / "drive_c" / "windows" / "system32"
-    end = _BUILTIN_MARKER_AT + len(_BUILTIN_MARKER)
     changed = False
     for name, source in gdk_runtime_files().items():
-        data = bytearray(Path(source).read_bytes())
-        if bytes(data[_BUILTIN_MARKER_AT:end]) == _BUILTIN_MARKER:
-            data[_BUILTIN_MARKER_AT:end] = bytes(len(_BUILTIN_MARKER))
+        data = as_native_dll(Path(source).read_bytes())
         target = system32 / name
         try:
             if target.read_bytes() == data:
@@ -702,6 +768,15 @@ def install_gdk_runtime(prefix):
         staged.write_bytes(data)
         staged.replace(target)
         changed = True
+    machine, user = gdk_registry_changes()
+    try:
+        changed = update_prefix_registry(
+            prefix, machine=machine, user=user) or changed
+    except Exception as exc:
+        # Never fatal: the files are in, and the next PLAY tries again.
+        warn("Could not register the GDK runtime's classes in the Wine "
+             f"prefix ({type(exc).__name__}: {exc}); Minecraft may close "
+             "right after it starts.")
     if changed:
         ok("GDK runtime installed in the Wine prefix.")
     return system32

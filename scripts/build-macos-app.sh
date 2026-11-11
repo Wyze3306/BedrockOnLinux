@@ -100,11 +100,12 @@ rm -rf "$APP/Contents/Resources/bin"
 find "$APP/Contents/Resources" -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # The GDK runtime: Minecraft quits at once without one, and no macOS Wine
-# ships one (bol/winemac.py). WineGDK's xgameruntime.dll and the
-# xgameruntime.dll.threading it hands XThreading to, taken from the engine
-# this launcher pins and checked against the pins in bol/config.py -- from the
-# engine installed on this machine when it is that one, otherwise read out of
-# the engine release archive.
+# ships one (bol/winemac.py). WineGDK's xgameruntime.dll, the
+# xgameruntime.dll.threading it hands XThreading to, and the WinRT libraries
+# the game activates classes from at startup, taken from the engine release
+# bol/config.py names for the Mac and checked against the pins there -- from
+# the engine installed on this machine when it is that one, otherwise read
+# out of the engine release archive.
 WINEGDK_DIR="$APP/Contents/Resources/winegdk"
 mkdir -p "$WINEGDK_DIR"
 "$PYTHON" - "$SRC" "$WINEGDK_DIR" <<'GDKRUNTIME'
@@ -113,7 +114,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
-from bol.config import WINEGDK_BUILD_REV  # noqa: E402
+from bol.config import MAC_GDK_RUNTIME_REV  # noqa: E402
 from bol.winemac import gdk_runtime_files  # noqa: E402
 
 target = Path(sys.argv[2])
@@ -121,12 +122,14 @@ for name, source in sorted(gdk_runtime_files().items()):
     shutil.copyfile(source, target / name)
     print(f"bundled {name}")
 (target / "NOTICE").write_text(
-    "xgameruntime.dll is part of WineGDK (https://github.com/Weather-OS/"
-    "WineGDK), licensed under the GNU LGPL 2.1 or later, as built into the "
-    f"BedrockOnLinux game engine {WINEGDK_BUILD_REV}. That engine, its "
+    "xgameruntime.dll, twinapi.appcore.dll, wintypes.dll, "
+    "windows.ui.core.textinput.dll and windows.ui.dll are part of WineGDK "
+    "(https://github.com/Weather-OS/WineGDK), a fork of Wine, licensed "
+    "under the GNU LGPL 2.1 or later, as built into the "
+    f"BedrockOnLinux game engine {MAC_GDK_RUNTIME_REV}. That engine, its "
     "build provenance and the WineGDK patches it carries are published at "
     "https://github.com/Wyze3306/BedrockOnLinux (release "
-    f"engine-{WINEGDK_BUILD_REV}, and third_party/ in the repository).\n\n"
+    f"engine-{MAC_GDK_RUNTIME_REV}, and third_party/ in the repository).\n\n"
     "xgameruntime.dll.threading is Microsoft's Gaming Runtime, as "
     "GDK-Proton (https://github.com/Weather-OS/GDK-Proton) redistributes it "
     "and the same engine carries it.\n")

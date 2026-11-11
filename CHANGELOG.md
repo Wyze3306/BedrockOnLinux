@@ -1,21 +1,6 @@
 # Changelog
 
-## 2.3.1 — 2026-11-11
-
-Other players keep their own skins on servers, the Realms button of the title
-screen works again, and closing Minecraft ends the session. A shortcut can now
-update Minecraft before starting it, and Linesia is listed under Featured
-Servers.
-
-### Added
-
-- **A shortcut can keep Minecraft up to date.** With **Settings ▸ General ▸
-  Update Minecraft when started from a shortcut** on, a direct launch
-  shortcut (or `bedrock-on-linux play`) installs the newest build of the
-  edition you play before starting it, instead of staying on the build picked
-  in the launcher. `bedrock-on-linux play --update` does it once. It is off
-  by default, because a server that has not updated yet refuses a newer game,
-  and if the update cannot be made the installed build starts as usual (#328).
+## macOS port — `macos` branch, not released
 
 ### Added
 
@@ -54,6 +39,49 @@ Servers.
   runtime it found and marks every Linux-only check *not applicable on macOS*
   instead of inventing an answer for it. Build the application bundle with
   `scripts/build-macos-app.sh`.
+
+### Fixed
+
+- **macOS: Minecraft no longer closes right after PLAY with exit code 99.**
+  With the Gaming Runtime in place the game got as far as asking Windows for
+  four WinRT classes, and died on the C++ exception it raises when one is
+  refused. A CrossOver bottle refuses all four: its registry has no entry
+  for them (`0x80040154`, class not registered) and the Wine libraries that
+  would serve them are stubs without those classes (`0x80040111`, class not
+  available). The launcher now installs the Linux engine's builds of
+  `twinapi.appcore.dll`, `wintypes.dll`, `windows.ui.core.textinput.dll` and
+  `windows.ui.dll` into the bottle next to the runtime. Each copy has Wine's
+  `Wine builtin DLL` marker cleared, because a Wine that sees it takes the
+  file for one of its own builtins and loads its stub instead; the engine's
+  own files are only read. `DataTransferManager`, `CoreTextServicesManager`,
+  `CoreInputView` and `ApiInformation` are registered with the library that
+  has them, and the four libraries are set to `native,builtin`. All of it is
+  checked at every PLAY and written only when something differs. Linux is
+  unchanged.
+
+- **macOS: the Gaming Runtime no longer follows the Linux engine.** Its files
+  were read out of whichever engine release the launcher pins for Linux, so
+  a launcher prepared for an engine that was not published yet could not
+  fetch them at all. A Mac now names the engine release its files come from
+  (`native21`) and the SHA-256 of each of the six, independently of the
+  Linux pin.
+
+## 2.3.1 — 2026-11-11
+
+Other players keep their own skins on servers, the Realms button of the title
+screen works again, and closing Minecraft ends the session. A shortcut can now
+update Minecraft before starting it, and Linesia is listed under Featured
+Servers.
+
+### Added
+
+- **A shortcut can keep Minecraft up to date.** With **Settings ▸ General ▸
+  Update Minecraft when started from a shortcut** on, a direct launch
+  shortcut (or `bedrock-on-linux play`) installs the newest build of the
+  edition you play before starting it, instead of staying on the build picked
+  in the launcher. `bedrock-on-linux play --update` does it once. It is off
+  by default, because a server that has not updated yet refuses a newer game,
+  and if the update cannot be made the installed build starts as usual (#328).
 
 ### Fixed
 

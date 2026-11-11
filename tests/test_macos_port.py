@@ -327,9 +327,11 @@ class MacSetupTests(unittest.TestCase):
                     mock.patch.object(gamesetup, "ensure_winegdk") as winegdk, \
                     mock.patch.object(gamesetup, "ensure_proton") as proton, \
                     mock.patch.object(gamesetup, "ensure_umu") as umu, \
+                    mock.patch.object(winemac, "install_gdk_runtime") as gdk, \
                     mock.patch.object(winemac, "ensure_wine") as wine:
                 gamesetup._do_setup()
         wine.assert_called_once()
+        gdk.assert_called_once_with(Path(directory))
         winegdk.assert_not_called()
         proton.assert_not_called()
         umu.assert_not_called()
@@ -953,9 +955,10 @@ class MacGdkRuntimeTests(unittest.TestCase):
         return mock.patch.multiple(
             config, CACHE=Path(directory) / "cache",
             WINEGDK_OUT=Path(directory) / "engine",
-            WINEGDK_XGAMERUNTIME_SHA256=self._pin(dll or self._DLL),
-            WINEGDK_XGAMERUNTIME_THREADING_SHA256=self._pin(
-                threading or self._THREADING))
+            MAC_GDK_RUNTIME_SHA256={
+                "xgameruntime.dll": self._pin(dll or self._DLL),
+                "xgameruntime.dll.threading": self._pin(
+                    threading or self._THREADING)})
 
     def _engine(self, directory, dll=None, threading=None):
         folder = Path(directory) / "engine" / winemac._ENGINE_DLL_DIR
@@ -970,7 +973,9 @@ class MacGdkRuntimeTests(unittest.TestCase):
                 self._config(directory):
             self._engine(directory)
             prefix = Path(directory) / "pfx"
-            with mock.patch.object(winemac, "ok") as said:
+            with mock.patch.object(winemac, "ok") as said, \
+                    mock.patch.object(winemac, "update_prefix_registry",
+                                      return_value=False):
                 system32 = winemac.install_gdk_runtime(prefix)
                 runtime = (system32 / "xgameruntime.dll").read_bytes()
                 threading = (system32 / "xgameruntime.dll.threading").read_bytes()
@@ -1069,8 +1074,8 @@ class MacGdkRuntimeTests(unittest.TestCase):
                 archive.as_uri(), members, 10), {})
 
     def test_the_pins_are_the_engines_own(self):
-        """The pins move with WINEGDK_BUILD_REV; an engine of that revision
-        on this machine says what they should be."""
+        """An engine of the pinned revision on this machine says what the
+        pins should be: its manifest for the runtime, its files for all."""
         import json
         from bol import config
 
@@ -1079,12 +1084,241 @@ class MacGdkRuntimeTests(unittest.TestCase):
             payload = json.loads(manifest.read_text())
         except (OSError, ValueError):
             self.skipTest("no engine installed here")
-        if payload.get("build_rev") != config.WINEGDK_BUILD_REV:
+        if payload.get("build_rev") != config.MAC_GDK_RUNTIME_REV:
             self.skipTest("the installed engine is another revision")
+        folder = config.WINEGDK_OUT / winemac._ENGINE_DLL_DIR
         for name, pin in winemac._gdk_runtime_pins().items():
-            self.assertEqual(
-                payload["critical_files"][f"{winemac._ENGINE_DLL_DIR}/{name}"],
-                pin, name)
+            critical = payload["critical_files"].get(
+                f"{winemac._ENGINE_DLL_DIR}/{name}")
+            if critical is not None:
+                self.assertEqual(critical, pin, name)
+            if (folder / name).is_file():
+                self.assertEqual(winemac._sha256_file(folder / name), pin,
+                                 name)
+
+    def test_the_pinned_revision_is_a_published_engine_name(self):
+        from bol import config
+
+        self.assertRegex(config.MAC_GDK_RUNTIME_REV,
+                         r"^wow64-archs-native\d+$")
+        for name, pin in config.MAC_GDK_RUNTIME_SHA256.items():
+            self.assertRegex(pin, r"^[0-9a-f]{64}$", name)
+
+
+class MacWinRtLibrariesTests(unittest.TestCase):
+    """Minecraft dies on a C++ exception (exit 99) when a WinRT class it
+    activates at startup is refused. A CrossOver bottle neither registers
+    nor implements four of them: the Mac takes the engine's libraries that
+    do, as native DLLs, and registers each class with the one that has it."""
+
+    _CLASSES = {
+        "Windows.ApplicationModel.DataTransfer.DataTransferManager":
+            "twinapi.appcore.dll",
+        "Windows.UI.Text.Core.CoreTextServicesManager":
+            "windows.ui.core.textinput.dll",
+        "Windows.UI.ViewManagement.Core.CoreInputView":
+            "windows.ui.core.textinput.dll",
+        "Windows.Foundation.Metadata.ApiInformation": "wintypes.dll",
+    }
+    _LIBRARIES = ("twinapi.appcore.dll", "wintypes.dll",
+                  "windows.ui.core.textinput.dll", "windows.ui.dll")
+    _SYSTEM_REG = ("WINE REGISTRY Version 2\n;; All keys relative to "
+                   "\\\\Machine\n\n#arch=win64\n\n")
+    _USER_REG = ("WINE REGISTRY Version 2\n;; All keys relative to "
+                 "\\\\User\\\\S-1-5-21-0-0-0-1000\n\n#arch=win64\n\n")
+
+    @staticmethod
+    def _builtin(body):
+        return (b"MZ" + b"\0" * 0x3e + b"Wine builtin DLL" + b"\0" * 0x30
+                + b"PE\0\0" + body)
+
+    # -- the marker
+
+    def test_the_marker_is_cleared_and_nothing_else_changes(self):
+        image = self._builtin(b"twinapi")
+        native = winemac.as_native_dll(image)
+        self.assertEqual(len(native), len(image))
+        self.assertEqual(native[:0x40], image[:0x40])
+        self.assertEqual(native[0x40:0x50], bytes(16))
+        self.assertEqual(native[0x50:], image[0x50:])
+        self.assertNotIn(b"Wine builtin DLL", native)
+
+    def test_clearing_the_marker_twice_changes_nothing_more(self):
+        native = winemac.as_native_dll(self._builtin(b"wintypes"))
+        self.assertEqual(winemac.as_native_dll(native), native)
+
+    def test_a_file_without_the_marker_is_left_alone(self):
+        for image in (b"MZ\x90\0" + b"This program cannot be run" * 8,
+                      b"MZ", b"",
+                      # The words elsewhere in the file are not the marker.
+                      b"MZ" + b"\0" * 0x60 + b"Wine builtin DLL"):
+            self.assertEqual(winemac.as_native_dll(image), image)
+
+    def test_the_marker_is_the_one_the_engines_libraries_carry(self):
+        from bol import config
+
+        folder = config.WINEGDK_OUT / winemac._ENGINE_DLL_DIR
+        seen = 0
+        for name in self._LIBRARIES + ("xgameruntime.dll",):
+            try:
+                with (folder / name).open("rb") as image:
+                    head = image.read(0x50)
+            except OSError:
+                continue
+            seen += 1
+            self.assertEqual(head[0x40:], b"Wine builtin DLL", name)
+        if not seen:
+            self.skipTest("no engine installed here")
+
+    # -- what is installed
+
+    def test_every_library_is_pinned(self):
+        from bol import config
+
+        for name in self._LIBRARIES + ("xgameruntime.dll",
+                                       "xgameruntime.dll.threading"):
+            self.assertIn(name, config.MAC_GDK_RUNTIME_SHA256)
+        for library in self._CLASSES.values():
+            self.assertIn(library, config.MAC_GDK_RUNTIME_SHA256)
+
+    def test_each_class_is_in_the_engine_library_it_is_registered_with(self):
+        from bol import config
+
+        folder = config.WINEGDK_OUT / winemac._ENGINE_DLL_DIR
+        seen = 0
+        for name, library in winemac._GDK_WINRT_CLASSES.items():
+            try:
+                image = (folder / library).read_bytes()
+            except OSError:
+                continue
+            seen += 1
+            self.assertIn(name.encode("utf-16-le"), image, name)
+        if not seen:
+            self.skipTest("no engine installed here")
+
+    def _prefix(self, directory):
+        prefix = Path(directory) / "pfx"
+        prefix.mkdir()
+        (prefix / "system.reg").write_text(self._SYSTEM_REG)
+        (prefix / "user.reg").write_text(self._USER_REG)
+        return prefix
+
+    def _install(self, directory, prefix, images):
+        from bol import config, prefix as prefix_module
+
+        engine = Path(directory) / "engine" / winemac._ENGINE_DLL_DIR
+        engine.mkdir(parents=True, exist_ok=True)
+        for name, data in images.items():
+            (engine / name).write_bytes(data)
+        pins = {name: MacGdkRuntimeTests._pin(data)
+                for name, data in images.items()}
+        with mock.patch.multiple(config, CACHE=Path(directory) / "cache",
+                                 WINEGDK_OUT=Path(directory) / "engine",
+                                 MAC_GDK_RUNTIME_SHA256=pins), \
+                mock.patch.object(prefix_module, "require_prefix_idle"), \
+                mock.patch.object(winemac, "_stream_archive_members") as fetch, \
+                mock.patch.object(winemac, "ok") as said:
+            system32 = winemac.install_gdk_runtime(prefix)
+        fetch.assert_not_called()
+        return engine, system32, said
+
+    def test_the_copies_are_native_and_the_engines_files_are_untouched(self):
+        images = {name: self._builtin(name.encode())
+                  for name in self._LIBRARIES}
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = self._prefix(directory)
+            engine, system32, said = self._install(directory, prefix, images)
+            for name, image in images.items():
+                installed = (system32 / name).read_bytes()
+                self.assertEqual(installed, winemac.as_native_dll(image), name)
+                self.assertNotIn(b"Wine builtin DLL", installed, name)
+                # Hash-pinned, and read only.
+                self.assertEqual((engine / name).read_bytes(), image, name)
+            self.assertEqual(said.call_count, 1)
+            # The second PLAY rewrites neither the files nor the registry.
+            before = [(path, path.stat().st_mtime_ns) for path in
+                      [system32 / name for name in images]
+                      + [prefix / "system.reg", prefix / "user.reg"]]
+            _engine, _system32, said = self._install(directory, prefix, images)
+            self.assertEqual(before,
+                             [(path, path.stat().st_mtime_ns)
+                              for path, _stamp in before])
+            said.assert_not_called()
+
+    # -- the registry
+
+    def test_each_class_is_registered_with_the_library_that_has_it(self):
+        machine, _user = winemac.gdk_registry_changes()
+        root = "Software\\Microsoft\\WindowsRuntime\\ActivatableClassId\\"
+        paths = {change.key: change.value for change in machine
+                 if change.name == "DllPath"}
+        self.assertEqual(paths, {
+            root + name: "C:\\windows\\system32\\" + library
+            for name, library in self._CLASSES.items()})
+        types = {change.key: (change.kind, change.value) for change in machine
+                 if change.name == "ActivationType"}
+        self.assertEqual(types, {root + name: ("dword", 0)
+                                 for name in self._CLASSES})
+        self.assertEqual(len(machine), 2 * len(self._CLASSES))
+
+    def test_the_installed_libraries_are_asked_for_native_first(self):
+        _machine, user = winemac.gdk_registry_changes()
+        self.assertEqual(
+            {(change.key, change.name, change.kind, change.value)
+             for change in user},
+            {("Software\\Wine\\DllOverrides", library, "string",
+              "native,builtin")
+             for library in ("twinapi.appcore", "wintypes",
+                             "windows.ui.core.textinput", "windows.ui")})
+
+    def test_the_values_land_in_the_bottles_registry_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = self._prefix(directory)
+            self._install(directory, prefix,
+                          {"wintypes.dll": self._builtin(b"wintypes")})
+            system = (prefix / "system.reg").read_text()
+            user = (prefix / "user.reg").read_text()
+        for name, library in self._CLASSES.items():
+            section = system.split(
+                "[Software\\\\Microsoft\\\\WindowsRuntime\\\\"
+                "ActivatableClassId\\\\" + name + "]", 1)
+            self.assertEqual(len(section), 2, name)
+            body = section[1].split("\n[", 1)[0]
+            self.assertIn('"DllPath"="C:\\\\windows\\\\system32\\\\'
+                          + library + '"', body)
+            self.assertIn('"ActivationType"=dword:00000000', body)
+        overrides = user.split("[Software\\\\Wine\\\\DllOverrides]", 1)[1]
+        for library in ("twinapi.appcore", "wintypes",
+                        "windows.ui.core.textinput", "windows.ui"):
+            self.assertIn(f'"{library}"="native,builtin"', overrides)
+
+    def test_a_registry_that_cannot_be_written_does_not_stop_the_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / "pfx"   # no registry files at all
+            from bol import config
+            with mock.patch.multiple(config, CACHE=Path(directory) / "cache",
+                                     WINEGDK_OUT=Path(directory) / "engine",
+                                     MAC_GDK_RUNTIME_SHA256={}), \
+                    mock.patch.object(winemac, "update_prefix_registry",
+                                      side_effect=OSError("busy")), \
+                    mock.patch.object(winemac, "warn") as warned:
+                winemac.install_gdk_runtime(prefix)
+        self.assertIn("register", warned.call_args[0][0])
+
+    def test_linux_installs_none_of_it(self):
+        """Only bol.winemac knows these libraries, and Linux never calls it:
+        GDK-Proton serves its own builtins."""
+        from bol import auth, fixups, launch, prefix as prefix_module
+
+        for module in (auth, fixups, prefix_module):
+            source = Path(module.__file__).read_text()
+            self.assertNotIn("twinapi.appcore", source, module.__name__)
+            self.assertNotIn("install_gdk_runtime", source, module.__name__)
+        launch_source = Path(launch.__file__).read_text()
+        guard = launch_source.index("if IS_MAC:\n            # The GDK runtime")
+        call = launch_source.index("install_gdk_runtime(active_prefix())")
+        self.assertLess(guard, call)
+        self.assertLess(call - guard, 400)
 
 
 class MacArchitectureTests(unittest.TestCase):

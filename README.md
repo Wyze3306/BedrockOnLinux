@@ -144,8 +144,11 @@ repository alone:
 Minecraft for Windows is a GDK game: it quits as soon as it starts without
 a Gaming Runtime, and no macOS Wine ships one. The launcher installs its Linux
 engine's runtime into the prefix: WineGDK's `xgameruntime.dll` and the
-`xgameruntime.dll.threading` it hands XThreading to, both checked against the
-engine's own SHA-256. The `.app` carries them; run from a checkout instead,
+`xgameruntime.dll.threading` it hands XThreading to, and the engine's builds
+of four WinRT libraries (`twinapi.appcore`, `wintypes`,
+`windows.ui.core.textinput`, `windows.ui`) whose classes the game asks for at
+startup and a CrossOver bottle only stubs. Each is checked against a pinned
+SHA-256, and the classes are registered in the prefix. The `.app` carries them; run from a checkout instead,
 the launcher reads them once out of the engine release archive (about 570 MB
 of download).
 
