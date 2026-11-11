@@ -32,6 +32,7 @@ from . import (
     virtual_desktop,
     xodus,
 )
+from .branding import apply_branding
 from .config import CONTENT, DATA, HOME, LOGS, WINEGDK_BUILD_REV
 from .deps import ensure_login_deps
 from .dgc import dgc_warning_message, intel_dgpus_on_legacy_driver
@@ -859,6 +860,10 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     if not encrypted_exe:
         bump_stack_reserve(Path(exe))
     hide_signin_button(Path(gd))
+    # Linux splashes on the title screen, partner servers under Featured
+    # Servers: re-applied each launch, since a game update brings the
+    # vanilla files back.
+    apply_branding(Path(gd))
     cmd, env = proton_umu_cmd(exe)
     # Required by the menu's indirect root-CBV updates (#27/#29/#30).
     _require_vkd3d_config(env, "force_raw_va_cbv")

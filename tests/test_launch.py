@@ -93,6 +93,7 @@ class ReadyLaunchHarness:
             mock.patch.object(launch, "xbl_preauth", return_value=preauth),
             mock.patch.object(launch, "bump_stack_reserve"),
             mock.patch.object(launch, "hide_signin_button"),
+            mock.patch.object(launch, "apply_branding"),
             mock.patch.object(launch, "proton_umu_cmd",
                               return_value=(["fake-umu"], dict(umu_env or {}))),
             mock.patch.object(launch, "patch_options",
@@ -153,7 +154,7 @@ class ReadyLaunchHarness:
                 name: getattr(launch, name)
                 for name in ("warn", "wine_reg_set_refresh_token",
                              "ensure_login_deps", "xbl_preauth",
-                             "hide_signin_button",
+                             "hide_signin_button", "apply_branding",
                              "_prefix_stably_idle_after_wrapper")
             }
             return launch._launch_once(lock_fds=lock_fds,
@@ -1454,6 +1455,10 @@ class DiscordPresenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
     def test_hide_signin_button_invoked_on_launch(self):
         self.assertEqual(self._run(), 0)
         self.launch_mocks["hide_signin_button"].assert_called_once()
+
+    def test_branding_applied_to_the_game_on_launch(self):
+        self.assertEqual(self._run(), 0)
+        self.launch_mocks["apply_branding"].assert_called_once()
 
 
 class XboxPresenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):

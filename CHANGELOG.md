@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Linesia SkyFaction is listed under Featured Servers, like a real partner
+  server.** It used to sit among your own servers as a bare address. It now
+  has a tile with its icon in the Featured Servers section, and its page shows
+  a banner, a description and the server's address, with the same Play button
+  as before. The game gets its featured servers from Microsoft, so there is no
+  list on disk to add to: the Servers-tab entry the launcher already writes is
+  still what you join through, and the Servers tab is patched to show it as a
+  featured server. If a Minecraft update changes the Servers tab too much for
+  the patch, the launcher says so and Linesia goes back under your own servers.
+
+- **The yellow text under the Minecraft logo is about Linux now.** The title
+  screen picks one of the launcher's own splash lines ("I use Arch, btw!",
+  "Wine not?", "sudo make me a sandwich!", …) instead of Mojang's. The
+  original list is kept next to it as `splashes.json.bol-orig`.
+
 ## 2.3.0 — 2026-11-08
 
 Signing in works again on the current Minecraft, and the downloader keeps its

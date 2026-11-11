@@ -30,7 +30,7 @@ packages = ["bol"]
 # bol/virtual_desktop.py);
 # setuptools leaves out every non-Python file it is not told about.
 [tool.setuptools.package-data]
-bol = ["injector.exe", "fullscreen-nudge.exe", "desktop-bridge.exe"]
+bol = ["injector.exe", "fullscreen-nudge.exe", "desktop-bridge.exe", "partners/*"]
 
 [project.urls]
 Homepage = "https://wyze3306.github.io/BedrockOnLinux/"
