@@ -45,10 +45,10 @@
 - **macOS: Minecraft no longer closes right after PLAY with exit code 99.**
   With the Gaming Runtime in place the game got as far as asking Windows for
   four WinRT classes, and died on the C++ exception it raises when one is
-  refused. A CrossOver bottle refuses all four: its registry has no entry
-  for them (`0x80040154`, class not registered) and the Wine libraries that
-  would serve them are stubs without those classes (`0x80040111`, class not
-  available). The launcher now installs the Linux engine's builds of
+  refused (`0x80040154`, class not registered, or `0x80040111`, class not
+  available). The Wine of CrossOver 26.3 has two of them in no library at
+  all, `DataTransferManager` and `CoreTextServicesManager`. The launcher now
+  installs the Linux engine's builds of
   `twinapi.appcore.dll`, `wintypes.dll`, `windows.ui.core.textinput.dll` and
   `windows.ui.dll` into the bottle next to the runtime. Each copy has Wine's
   `Wine builtin DLL` marker cleared, because a Wine that sees it takes the

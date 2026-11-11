@@ -566,14 +566,17 @@ def wine_user_name(prefix):
 #     raises for that (exit 99, 0xe06d7363).
 #
 # With both in place the game gets as far as activating WinRT classes, and
-# dies on the same exception (exit 99 again) when one is refused. A CrossOver
-# bottle refuses four of the ones Minecraft asks for at startup: its registry
-# has no ActivatableClassId entry for them (0x80040154, class not
-# registered), and the Wine libraries that would serve them are stubs without
-# those classes (0x80040111, class not available). So the Mac also takes the
-# engine's builds of the libraries that do have them -- plain PEs again,
-# importing only combase, kernel32, ntdll, ucrtbase and, for two of them,
-# advapi32 and user32 -- and says in the registry where each class lives:
+# dies on the same exception (exit 99 again) when one is refused: class not
+# registered (0x80040154) when the registry has no ActivatableClassId entry
+# for it, class not available (0x80040111) when the library named there has
+# no such class. Four were reported refused in a CrossOver bottle. Read
+# against the Wine sources of CrossOver 26.3, two of them are in no library
+# of that Wine at all -- DataTransferManager and CoreTextServicesManager --
+# and two are in its own wintypes and windows.ui.core.textinput. So the Mac
+# also takes the engine's builds of the libraries that have all four --
+# plain PEs again, importing only combase, kernel32, ntdll, ucrtbase and,
+# for two of them, advapi32 and user32 -- and says in the registry where
+# each class lives, so that none depends on what a given bottle registers:
 #
 # twinapi.appcore.dll
 #     Windows.ApplicationModel.DataTransfer.DataTransferManager
