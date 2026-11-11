@@ -135,35 +135,35 @@ PARTNERS = (
         "activities": (
             {
                 "title": "SkyFaction",
-                "subtitle": "Main mode · 3-month seasons",
+                "subtitle": "Your island, your empire!",
                 "description": (
-                    "Build your faction's island, farm, unlock jobs, quests "
-                    "and prestiges, then raid the others."),
+                    "Start on your own island in the sky, grow it with your "
+                    "faction and rise to the top of the leaderboard."),
                 "image": "linesia-skyfaction.jpg",
             },
             {
-                "title": "Warzone & Events",
-                "subtitle": "Faction PvP",
+                "title": "Warzone",
+                "subtitle": "Fight for the map!",
                 "description": (
-                    "Form alliances and fight for the map in the warzone and "
-                    "the PvP events: Domination, Nexus, Outpost and more."),
+                    "Team up, form alliances and take on rival factions in "
+                    "epic PvP events: Domination, Nexus, Outpost and more!"),
                 "image": "linesia-warzone.jpg",
             },
             {
-                "title": "Economy & Jobs",
-                "subtitle": "Farm & progression",
+                "title": "Jobs & Farming",
+                "subtitle": "Grind your way to riches!",
                 "description": (
-                    "Work jobs, grow crops and mills, sell at the auction "
-                    "house and build the biggest fortune on the server."),
+                    "Work jobs, grow your crops, trade at the auction house "
+                    "and unlock new prestige levels."),
                 "image": "linesia-economy.jpg",
             },
             {
-                "title": "Community",
-                "subtitle": "Since 2021 · 25,000+ players",
+                "title": "Cosmetics",
+                "subtitle": "Show off your style!",
                 "description": (
-                    "Crossplay on PC, mobile and console, with tournaments "
-                    "and giveaways on Discord."),
-                "image": "linesia-icon.png",
+                    "Unlock exclusive armor skins and cosmetics, and make "
+                    "your faction the one everyone recognizes."),
+                "image": "linesia-cosmetics.jpg",
             },
         ),
     },
