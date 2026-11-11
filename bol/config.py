@@ -6,7 +6,7 @@ from pathlib import Path
 
 APP = "bedrock-on-linux"
 PRETTY = "BedrockOnLinux"
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 # Published Flatpak identity; used to print a runnable command for that layout.
 FLATPAK_APP_ID = "io.github.wyze3306.BedrockOnLinux"
 
@@ -173,7 +173,6 @@ DISCORD_SMALL_IMAGE = ""
 # own Microsoft account, obtains the title license and streams the MSIXVC
 # package from the official Xbox CDN. It replaced a third-party repository that
 # redistributed a DRM-stripped copy of the game. See third_party/xodus/README.md.
-XODUS_REPO = "xodus-gaming/xodus"
 XODUS_SOURCE_COMMIT = "64d39eb87a56c7d0d7e7fde0b233654ac5477b0f"
 # A patched binary is not the upstream commit's binary, so the rev names the
 # patches too: <commit12>-p<n>, for the n patch files in
@@ -237,7 +236,6 @@ LEGACY_XODUS_KEYRING = HOME / ".xodus-keyring.ron"
 # assets*.xboxlive.com, and Xodus still reads the package's own content id from
 # the downloaded header and asks Microsoft for that licence, so the account
 # still has to own Minecraft. It only restores the choice of build.
-GDK_LINKS_REPO = "MinecraftBedrockArchiver/GdkLinks"
 GDK_LINKS_URL = ("https://raw.githubusercontent.com/"
                  "MinecraftBedrockArchiver/GdkLinks/master/urls.json")
 # The CDN serves these over plain HTTP only. The payload is AES-XTS encrypted

@@ -77,6 +77,22 @@
   </supports>
 
   <releases>
+    <release version="2.3.1" date="2026-11-11">
+      <description>
+        <p>Other players keep their own skins on servers, and the Realms button
+           of the title screen works again.</p>
+        <ul>
+          <li>no longer replaces the skins of players who join after you with
+              default ones</li>
+          <li>opens the Realms page from the title screen instead of an
+              error</li>
+          <li>ends the session when Minecraft is closed, so PLAY works
+              again</li>
+          <li>can update Minecraft before a start from a shortcut</li>
+          <li>lists Linesia under Featured Servers</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.3.0" date="2026-11-08">
       <description>
         <p>Signing in works again on the current Minecraft, and Minecraft keeps

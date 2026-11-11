@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 2.3.1 — 2026-11-11
+
+Other players keep their own skins on servers, the Realms button of the title
+screen works again, and closing Minecraft ends the session. A shortcut can now
+update Minecraft before starting it, and Linesia is listed under Featured
+Servers.
 
 ### Added
 
