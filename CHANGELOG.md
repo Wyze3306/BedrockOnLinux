@@ -18,7 +18,7 @@
   server.** It used to sit among your own servers as a bare address. It now
   has a tile with its icon in the Featured Servers section, and its page shows
   a banner, a description, the server's address and Activities cards for what
-  there is to discover there (SkyFaction, Warzone, Jobs & Farming, Cosmetics),
+  there is to discover there (SkyFaction, Warzone, Industry, The Great Sea),
   with the same Play button as before. The game gets its featured servers from Microsoft, so there is no
   list on disk to add to: the Servers-tab entry the launcher already writes is
   still what you join through, and the Servers tab is patched to show it as a

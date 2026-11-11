@@ -150,20 +150,20 @@ PARTNERS = (
                 "image": "linesia-warzone.jpg",
             },
             {
-                "title": "Jobs & Farming",
-                "subtitle": "Grind your way to riches!",
+                "title": "Industry",
+                "subtitle": "Build your factory!",
                 "description": (
-                    "Work jobs, grow your crops, trade at the auction house "
-                    "and unlock new prestige levels."),
-                "image": "linesia-economy.jpg",
+                    "Wire up machines, sell the power you don't use, light "
+                    "your base with neon and take off with a jetpack."),
+                "image": "linesia-industry.jpg",
             },
             {
-                "title": "Cosmetics",
-                "subtitle": "Show off your style!",
+                "title": "The Great Sea",
+                "subtitle": "Set sail!",
                 "description": (
-                    "Unlock exclusive armor skins and cosmetics, and make "
-                    "your faction the one everyone recognizes."),
-                "image": "linesia-cosmetics.jpg",
+                    "Take your own boat across five seas, find the best "
+                    "fishing spots and explore the island forests."),
+                "image": "linesia-sea.jpg",
             },
         ),
     },
