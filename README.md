@@ -28,154 +28,77 @@ Friends, servers and Realms.**
 
 BedrockOnLinux installs and runs the Windows version of Minecraft Bedrock on
 Linux. It downloads the game from the Microsoft Store with your own account,
-sets everything up for you, and starts it. No Windows, no second machine,
-nothing to compile.
+sets everything up, and starts it. No Windows, no second machine, nothing to
+compile.
 
-You sign in to Microsoft from inside Minecraft, exactly as on Windows, so
-Friends, invitations, public servers, Realms and the Marketplace work like they
-should. Nothing goes through a third party.
+- **Online play as on Windows.** You sign in to Microsoft from inside
+  Minecraft, so Friends, invitations, public servers, Realms and the
+  Marketplace work. Nothing goes through a third party.
+- **Stable and Preview**, any version: install an older build when a server
+  hasn't updated yet.
+- **Mouse, keyboard and controller**, in the game and in the launcher, which
+  makes it usable on a Steam Deck.
+- **Your content.** Import `.mcpack`, `.mcaddon`, `.mcworld` and
+  `.mctemplate` files from **Settings ▸ Tools**; your worlds are backed up
+  before a different version opens them.
 
-You can also play without signing in to Xbox Live: single-player worlds and LAN
-games work, only the online features are out of reach. Starting the game does
-need an internet connection, though: a game downloaded from the Microsoft Store
-stays encrypted on disk, and Microsoft hands out the key to it each time it
-starts. Achievements show up in the
-game, but they don't unlock yet.
+Known limits: achievements show up in the game but don't unlock yet, and
+starting the game needs an internet connection even for single-player, because
+a Microsoft Store game stays encrypted on disk and Microsoft hands out its key
+at each start.
 
 ## Install
 
-Download the file you want from the
+Download the file for your system from the
 [latest release](https://github.com/Wyze3306/BedrockOnLinux/releases/latest).
 
-| Format | Best for | How to start it |
+| Format | Best for | Install or start it |
 |---|---|---|
-| AppImage | Most Linux desktops | `./BedrockOnLinux-*-x86_64.AppImage` |
+| AppImage | Most Linux desktops, Steam Deck | `chmod +x BedrockOnLinux-*-x86_64.AppImage`, then run it |
 | `.deb` | Debian, Ubuntu, Mint, LMDE | `sudo apt install ./bedrock-on-linux_*_amd64.deb` |
 | `.rpm` | Fedora, Nobara | `sudo dnf install ./bedrock-on-linux-*.x86_64.rpm` |
 | Flatpak | Atomic systems such as Bazzite | `flatpak install --user ./BedrockOnLinux-*-x86_64.flatpak` |
-| Nix | NixOS, or any Linux with Nix installed | `nix run github:Wyze3306/BedrockOnLinux` |
+| Nix | NixOS, or any Linux with Nix | `nix run github:Wyze3306/BedrockOnLinux` |
 
-The launcher tells you when a new version is out. The AppImage updates itself.
-The `.deb` and `.rpm` update themselves too, through apt or dnf: **Update now**
-downloads the new package, checks it against the release's checksums, and
-asks for your password to install it. For the Flatpak, download the new file
-and install it with the same command.
-Keep `--user` for the Flatpak: without it, Flatpak installs a second,
-system-wide copy, and the menu keeps starting the per-user one at the old
-version. `flatpak uninstall --system io.github.wyze3306.BedrockOnLinux` removes
-that extra copy.
+The launcher tells you when a new version is out. The AppImage, the `.deb` and
+the `.rpm` update themselves from **Update now**; for the Flatpak, download
+the new file and install it with the same command, keeping `--user`.
 
-### Nix / NixOS
-
-Try it without installing anything:
-
-```bash
-nix run github:Wyze3306/BedrockOnLinux
-```
-
-Or add it as a flake input to install it declaratively, for example into
-`environment.systemPackages`:
-
-```nix
-# flake.nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    bedrock-on-linux = {
-      url = "github:Wyze3306/BedrockOnLinux";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
-
-  outputs = { self, nixpkgs, bedrock-on-linux, ... }: {
-    nixosConfigurations.your-host = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
-      modules = [
-        {
-          environment.systemPackages = [
-            bedrock-on-linux.packages.x86_64-linux.default
-          ];
-        }
-        # ...your other modules
-      ];
-    };
-  };
-}
-```
+On NixOS, add `github:Wyze3306/BedrockOnLinux` as a flake input and install
+`packages.x86_64-linux.default`.
 
 ## Play
 
 1. Open **BedrockOnLinux** and sign in with the Microsoft account that owns
-   Minecraft. It is asked for twice, once to download the game from the
-   Microsoft Store, once to play online, because the Store needs a session
-   of its own. Use the same account both times; the launcher offers the
-   second sign-in right after the first, and again if a download needs it.
-   The first Store sign-in may also bring up a password prompt from your
-   desktop: it registers this PC as a Microsoft Store device, as Windows
-   does, and reads the firmware's system information for it (manufacturer,
-   model, serial number and UUID), which only root can read. Cancelling that
-   prompt is fine; the PC is registered without it, as in the Flatpak.
+   Minecraft. You are asked twice, once for the Microsoft Store download and
+   once for online play; use the same account both times.
 2. Pick **Minecraft** or **Minecraft Preview**, choose a version, and hit
    **PLAY**.
 3. Play, including the **Friends**, **Servers** and **Realms** tabs.
 
 The first launch downloads the game and everything it needs, so give it a
-while; after that it starts straight away. You can install an older version
-too, which is handy when a server hasn't updated yet.
+while; after that it starts straight away.
 
-The launcher can be used with a controller — the d-pad or left stick moves the
-highlight, **A** selects, **B** goes back, the shoulder buttons change tab and
-**Start** plays — and **Tools ▸ Create direct launch shortcut** adds a
-*Minecraft Bedrock* entry to your app menu or to Steam. That is the one to use
-on a Steam Deck.
+Good to know:
 
-On a laptop with two graphics cards, **Settings ▸ Advanced ▸ Graphics card**
-chooses the one Minecraft plays on.
-
-Mojang's **Bedrock Editor** is part of the game: open it from **Settings ▸
-Tools ▸ Open Bedrock Editor**, the *Open Bedrock Editor* action of the app menu
-entry, or `bedrock-on-linux play --editor`.
-
-### BetterRTX
-
-[BetterRTX](https://bedrock.graphics) presets install from **Settings ▸ Tools ▸
-BetterRTX**, or from a terminal:
-
-```bash
-bedrock-on-linux betterrtx list
-bedrock-on-linux betterrtx install default
-bedrock-on-linux betterrtx restore
-```
-
-A preset only works with the Minecraft version it was built for, so the
-launcher installs one only when its shaders match the selected version, and
-keeps the game's own shaders so **restore** can put them back. `install` also
-takes a `.rtpack` file.
-
-### Experimental OptiScaler / frame generation
-
-The launcher can install a tested OptiScaler v10 setup for Minecraft RTX under
-Wine/vkd3d-proton, including the physical `nvngx.dll` workaround needed to
-expose Bedrock's native DLSS input on the tested non-NVIDIA setup:
-
-```bash
-bedrock-on-linux optiscaler install
-bedrock-on-linux optiscaler status
-```
-
-OptiScaler is downloaded from upstream and is not bundled with this project.
-Frame generation remains opt-in in the OptiScaler overlay. See
-[docs/OPTISCALER.md](docs/OPTISCALER.md) for the exact setup, management
-commands, tested pipeline and compatibility notes.
+- The first Store sign-in may bring up a password prompt from your desktop. It
+  registers this PC as a Microsoft Store device, as Windows does. Cancelling
+  it is fine.
+- **Tools ▸ Create direct launch shortcut** adds a *Minecraft Bedrock* entry
+  to your app menu or to Steam. That is the one to use on a Steam Deck.
+- On a laptop with two graphics cards, **Settings ▸ Advanced ▸ Graphics card**
+  chooses the one Minecraft plays on.
+- The launcher works with a controller: d-pad or left stick to move, **A** to
+  select, **B** to go back, **Start** to play.
 
 ## What you need
 
-- A 64-bit Linux desktop, reasonably up to date.
+- A 64-bit (x86-64) Linux desktop, reasonably up to date.
 - A graphics card and driver that support Vulkan: anything from the last few
   years, with the driver your distribution ships.
 - A Microsoft account that owns Minecraft, since the game is downloaded under
   your own licence.
-- Enough free disk space for the game and its runtime, a few gigabytes.
+- A few gigabytes of free disk space for the game and its runtime.
 
 ## If something goes wrong
 
@@ -186,10 +109,9 @@ wrong:
 bedrock-on-linux doctor
 ```
 
-If the game itself misbehaves after an update or a crash, `bedrock-on-linux
-repair` rebuilds the Windows environment without touching your worlds. Logs are
-one click away in **Settings**, and the same commands are available from the
-AppImage or Flatpak through their own entry point.
+If the game misbehaves after an update or a crash, `bedrock-on-linux repair`
+rebuilds the Windows environment without touching your worlds. Logs are one
+click away in **Settings**.
 
 Still stuck? Ask on [Discord](https://discord.gg/5YJq54Yhbu) or
 [open an issue](https://github.com/Wyze3306/BedrockOnLinux/issues) with your
@@ -198,21 +120,17 @@ account details.
 
 ## Uninstalling
 
-Removing the app leaves what it downloaded where it was: the game, the Wine
-prefix with your worlds in it, the game engine and its runtime, several
-gigabytes in all. A package manager does not know about those files, and an
-AppImage has no uninstaller at all. To remove everything:
+Removing the app leaves what it downloaded: the game, your worlds, the game
+engine and its runtime, several gigabytes in all. To remove everything:
 
-1. If you want to keep your worlds, copy
+1. To keep your worlds, first copy
    `~/.local/share/bedrock-on-linux/compatdata/pfx/drive_c/users/steamuser/AppData/Roaming/Minecraft Bedrock`
-   somewhere first.
-2. Delete `~/.local/share/bedrock-on-linux`, or the folder you moved the
-   installation to in **Settings** (`~/.config/bedrock-on-linux` records it;
-   delete that too).
+   somewhere else.
+2. Delete `~/.local/share/bedrock-on-linux` (or the folder you moved the
+   installation to in **Settings**) and `~/.config/bedrock-on-linux`.
 3. Delete the shortcuts the launcher made, if any:
-   `~/.local/share/applications/bedrock-on-linux-*.desktop`, and the
-   *Minecraft Bedrock* entry you added to Steam. Launchers before 2.2.2 also
-   left `~/.xodus-keyring.ron` in your home folder.
+   `~/.local/share/applications/bedrock-on-linux-*.desktop` and the
+   *Minecraft Bedrock* entry in Steam.
 
 For the Flatpak, `flatpak uninstall --delete-data io.github.wyze3306.BedrockOnLinux`
 does all of it.
