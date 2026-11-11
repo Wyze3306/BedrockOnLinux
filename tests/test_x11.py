@@ -155,47 +155,24 @@ class XrandrCliFallbackTests(unittest.TestCase):
         self.assertEqual(x11.primary_output_size(runner=runner),
                           ("1920", "1080"))
 
-    def test_monitor_geometries_include_mixed_and_negative_positions(self):
+    def test_primary_is_found_among_mixed_and_negative_positions(self):
         self.assertEqual(
-            x11.monitor_geometries(
+            x11.primary_output_size(
                 runner=lambda _args, **_kwargs: result(MIXED_MONITORS)),
-            ((0, 0, 2560, 1440), (2560, 0, 1366, 768)),
-        )
+            ("2560", "1440"))
         self.assertEqual(
-            x11.monitor_geometries(
+            x11.primary_output_size(
                 runner=lambda _args, **_kwargs: result(NEGATIVE_MONITOR)),
-            ((-1920, 0, 1920, 1080), (0, 0, 1920, 1080)),
-        )
+            ("1920", "1080"))
 
-    def test_monitor_geometries_fall_back_when_active_option_is_unsupported(self):
-        def runner(args, **_kwargs):
-            if "--listactivemonitors" in args:
-                return result(returncode=1)
-            return result(MIXED_MONITORS)
-
-        self.assertEqual(
-            x11.monitor_geometries(runner=runner),
-            ((0, 0, 2560, 1440), (2560, 0, 1366, 768)),
-        )
-
-    def test_monitor_geometries_fall_back_to_connected_outputs(self):
+    def test_listmonitors_unsupported_falls_back_to_connected_outputs(self):
         def runner(args, **_kwargs):
             if args[-1].startswith("--list"):
                 return result(returncode=1)
             return result(CONNECTED_MIXED)
 
-        self.assertEqual(
-            x11.monitor_geometries(runner=runner),
-            ((0, 0, 2560, 1440), (2560, 0, 1366, 768)),
-        )
-
-    def test_combined_root_is_not_reported_as_a_physical_monitor(self):
-        def runner(args, **_kwargs):
-            if args[-1].startswith("--list"):
-                return result(returncode=1)
-            return result(BARE_XRANDR_COMBINED)
-
-        self.assertEqual(x11.monitor_geometries(runner=runner), ())
+        self.assertEqual(x11.primary_output_size(runner=runner),
+                         ("2560", "1440"))
 
     def test_listmonitors_unsupported_falls_back_to_combined_root(self):
         def runner(args, **_kwargs):
@@ -333,13 +310,13 @@ class XlibPathTests(unittest.TestCase):
         ])
         self.assertEqual(x11._primary_via_xlib(), ("1920", "1080"))
 
-    def test_monitor_geometries_preserve_xlib_positions(self):
+    def test_xlib_monitors_keep_their_positions(self):
         FakeDisplay.root = FakeRoot(monitors=[
             FakeMonitor(True, "2560", "1440", 0, 0),
             FakeMonitor(False, "1366", "768", 2560, 0),
         ])
         self.assertEqual(
-            x11.monitor_geometries(),
+            tuple(monitor[:4] for monitor in x11._monitors_via_xlib()),
             ((0, 0, 2560, 1440), (2560, 0, 1366, 768)),
         )
 

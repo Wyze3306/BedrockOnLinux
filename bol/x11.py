@@ -191,22 +191,6 @@ def _xrandr_runner(runner=None):
     return run
 
 
-def _monitors_via_xrandr_cli(runner=None):
-    run = _xrandr_runner(runner)
-    if run is None:
-        return None
-    for option in ("--listactivemonitors", "--listmonitors"):
-        result = run([option])
-        if result is not None and getattr(result, "returncode", 1) == 0:
-            monitors = _parse_list_monitors(getattr(result, "stdout", ""))
-            if monitors:
-                return monitors
-    result = run([])
-    if result is None or getattr(result, "returncode", 1) != 0:
-        return None
-    return _parse_connected_monitors(getattr(result, "stdout", "")) or None
-
-
 def _primary_via_xrandr_cli(runner=None):
     """Fallback: shell out to `xrandr` and parse its text output."""
     run = _xrandr_runner(runner)
@@ -231,16 +215,6 @@ def _primary_via_xrandr_cli(runner=None):
         return str(primary[2]), str(primary[3])
     m = re.search(r"current\s+(\d+)\s+x\s+(\d+)", output)
     return (m.group(1), m.group(2)) if m else None
-
-
-def monitor_geometries(runner=None):
-    """Active monitor rectangles as (x, y, width, height) tuples."""
-    monitors = (
-        _monitors_via_xlib()
-        or _monitors_via_xrandr_cli(runner)
-        or ()
-    )
-    return tuple(monitor[:4] for monitor in monitors)
 
 
 def primary_output_size(runner=None):

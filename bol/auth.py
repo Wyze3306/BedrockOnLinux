@@ -134,8 +134,8 @@ def msa_refresh(refresh_token):
 
 
 class NativeAuth:
-    """MSA device-code login for the no-ProxyPass path. We only obtain an
-    OAuth refresh token; WineGDK's XUser reads it from the prefix registry
+    """MSA device-code login. We only obtain an OAuth refresh token;
+    WineGDK's XUser reads it from the prefix registry
     and performs the Xbox Live / XSTS exchange itself."""
 
     def __init__(self):

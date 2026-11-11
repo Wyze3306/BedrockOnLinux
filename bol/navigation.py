@@ -7,13 +7,11 @@ operated without a mouse. That is the difference between the launcher being a
 five-second stop and being a dead end on a Steam Deck or any Game Mode session,
 where the launcher deliberately still opens before the game.
 
-This is the Qt rewrite of the customtkinter-era ring, which was removed with
-the old toolkit because it was built entirely on Tk internals. The geometry —
-`choose_neighbour`, `reading_order`, `within` — is the part that was never
-about a toolkit and is unchanged; everything that touches a widget is new, and
-in most cases smaller, because Qt already knows how to do it:
+The geometry — `choose_neighbour`, `reading_order`, `within` — knows nothing
+about a toolkit; everything that touches a widget leans on what Qt already
+does:
 
-* `QScrollArea.ensureWidgetVisible` replaces a hand-rolled scroll-into-view;
+* `QScrollArea.ensureWidgetVisible` scrolls the target into view;
 * `QApplication.activePopupWidget()` and `activeModalWidget()` say what is on
   top, so a dropdown or a dialog confines the ring with nothing to register;
 * a `QListWidget`, a `QLineEdit` and a `QTabBar` already navigate themselves
@@ -21,9 +19,8 @@ in most cases smaller, because Qt already knows how to do it:
   them.
 
 The ring itself is an overlay widget that paints an outline over the target and
-nothing else. The Tk version had to reconfigure each widget's own border and
-put it back afterwards; here nothing about the target is touched, which is why
-a switch, a painted gear and a bare clickable frame all light up the same way.
+nothing else: nothing about the target is touched, which is why a switch, a
+painted gear and a bare clickable frame all light up the same way.
 
 What counts as a control is discovered, not declared: the widget tree of
 whatever is on top is walked on each press. Qt answers most of it (a
@@ -288,7 +285,6 @@ class ControllerNav(QObject):
                  accepts_input=None, reader_factory=None, parent=None):
         super().__init__(parent or window)
         self._window = window
-        self._accent = accent
         self._on_back = on_back
         self._on_start = on_start
         self._on_devices = on_devices
@@ -298,7 +294,6 @@ class ControllerNav(QObject):
         self._reader = None
         self._current: QWidget = None
         self._shown = False
-        self._enabled = True
         self._ring = FocusRing(window, accent)
         # Only runs while the ring is up: it exists to notice a mouse being
         # picked up, which cannot happen while there is nothing to take away.
@@ -342,13 +337,7 @@ class ControllerNav(QObject):
         if reader is not None:
             reader.stop()
 
-    def set_enabled(self, enabled):
-        self._enabled = bool(enabled)
-        if not self._enabled:
-            self.hide_ring()
-
     def set_accent(self, accent):
-        self._accent = accent
         self._ring.set_colour(accent)
 
     @property
@@ -383,8 +372,7 @@ class ControllerNav(QObject):
         if isinstance(widget, (QAbstractButton, QLineEdit, QComboBox,
                                QListView, QTabBar)):
             return True
-        if hasattr(widget, "switch") and isinstance(
-                getattr(widget, "switch"), QAbstractButton):
+        if isinstance(getattr(widget, "switch", None), QAbstractButton):
             return True         # a labelled switch row: one control, not two
         # The launcher's hand-made controls — the version pill, the profile
         # and account chips — are frames with a click handler. What marks them
@@ -783,7 +771,7 @@ class ControllerNav(QObject):
 
     def dispatch(self, action):
         """Apply one logical controller action to the window."""
-        if not self._enabled or not self.ready():
+        if not self.ready():
             return
         if action in ("up", "down", "left", "right"):
             if self._shown:

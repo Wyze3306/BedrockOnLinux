@@ -60,9 +60,6 @@ from .profiles import (
 from .update import check_for_update, self_update
 from .util import load_settings, save_settings, format_display_version, mc_releases, gh_releases
 
-RE_MD_TOKENS = re.compile(r"(\*\*|`|__|\[[^\]]+\]\([^)]+\))")
-RE_MD_LINK = re.compile(r"^\[([^\]]+)\]\(([^)]+)\)$")
-
 try:
     import shiboken6
 except ImportError:  # pragma: no cover - shiboken6 ships alongside PySide6
@@ -272,8 +269,6 @@ class Theme:
     def gold_dim(self):   return self._pick("#fcf3e1", "#33291a")
     @property
     def blue(self):       return "#4a90d9"
-    @property
-    def blue_dim(self):   return self._pick("#e7f1fb", "#132433")
     @property
     def accent(self):     return self.gold if self.beta else self.green
     @property
@@ -624,21 +619,6 @@ class AuthBridge(QObject):
 # Small reusable widgets
 # ======================================================================
 
-class Tooltip:
-    """Thin wrapper so call sites read the same as the old ``explain()``."""
-    def __init__(self, widget: QWidget, text: str):
-        widget.setToolTip(text)
-        self.widget = widget
-
-    @property
-    def text(self):
-        return self.widget.toolTip()
-
-    @text.setter
-    def text(self, value):
-        self.widget.setToolTip(value)
-
-
 def btn(text, cmd=None, kind="ghost", w=None, h=32, tip=None, parent=None) -> QPushButton:
     b = QPushButton(text, parent)
     b.setObjectName({
@@ -829,10 +809,8 @@ class VersionPicker(Popup):
         v.addWidget(self.list)
         self.search.textChanged.connect(self._filter)
         self.list.itemClicked.connect(lambda it: self.picked.emit(it.text()))
-        self._labels = []
 
     def set_labels(self, labels, current):
-        self._labels = labels
         self.list.clear()
         for lab in labels:
             it = QListWidgetItem(lab)
@@ -1355,8 +1333,6 @@ class MainWindow(QMainWindow):
         al.addWidget(QLabel("▾"))
         self.acct_card.mousePressEvent = lambda e: self.open_accounts_menu()
         row.addWidget(self.acct_card)
-
-        self.update_banner_slot = row
         return row
 
     def _open_github(self):
@@ -2643,8 +2619,7 @@ class MainWindow(QMainWindow):
     def _offer_gpu_ack(self, ack_status, prefix="", title="Acknowledge previous GPU incident",
                        then=None):
         return _offer_gpu_incident_acknowledgement(
-            _MainWindowMessageBoxAdapter(self), self, ack_status,
-            prefix=prefix, title=title, then=then)
+            self, ack_status, prefix=prefix, title=title, then=then)
 
     # ------------------------------------------------------------ settings / changelog toggles
     def toggle_settings(self):
@@ -4383,52 +4358,33 @@ def _gpu_incident_safety_instruction(status):
 
 
 def _offer_gpu_incident_acknowledgement(
-        box, parent, status, prefix="",
+        window, status, prefix="",
         title="Acknowledge previous GPU incident", then=None):
-    """Confirm + acknowledge a GPU safety incident marker. `box` is duck-typed
-    on askyesno/showinfo/showerror(title, message, parent=None), so this
-    needs no real dialog widget to run or to test. The eligibility decision
-    itself is never made here: acknowledge_gpu_crash() re-checks it under the
-    launch lock, and a refusal is reported from its live status rather than
-    the one passed in, in case it changed in the meantime. `then`, when
-    given, is what the player was doing (PLAY), carried on once the
-    acknowledgement is written instead of a note saying it was."""
+    """Confirm + acknowledge a GPU safety incident marker.
+
+    `window` only needs question_box/info_box/error_box(title, message). The
+    eligibility decision itself is never made here: acknowledge_gpu_crash()
+    re-checks it under the launch lock, and a refusal is reported from its
+    live status rather than the one passed in, in case it changed in the
+    meantime. `then`, when given, is what the player was doing (PLAY),
+    carried on once the acknowledgement is written instead of a note saying
+    it was.
+    """
     instruction = _gpu_incident_safety_instruction(status)
     message = prefix + status.message + "\n\n" + instruction + " Acknowledge now?"
-    if not box.askyesno(title, message, parent=parent):
+    if not window.question_box(title, message):
         return False
     if acknowledge_gpu_crash():
         if then is not None:
             then()
             return True
-        box.showinfo(
+        window.info_box(
             "GPU safety",
             "The previous-boot incident was acknowledged. "
-            "PLAY will still run all current graphics safety checks.",
-            parent=parent)
+            "PLAY will still run all current graphics safety checks.")
         return True
-    box.showerror("GPU safety", gpu_crash_acknowledgement_status().message,
-                   parent=parent)
+    window.error_box("GPU safety", gpu_crash_acknowledgement_status().message)
     return False
-
-
-class _MainWindowMessageBoxAdapter:
-    """Adapts MainWindow's Qt-backed info_box/error_box/question_box onto the
-    askyesno/showinfo/showerror shape _offer_gpu_incident_acknowledgement
-    expects. `parent` is accepted for API compatibility but unused: the
-    underlying QMessageBox is already parented to the window itself."""
-
-    def __init__(self, window):
-        self._window = window
-
-    def askyesno(self, title, message, parent=None):
-        return self._window.question_box(title, message)
-
-    def showinfo(self, title, message, parent=None):
-        self._window.info_box(title, message)
-
-    def showerror(self, title, message, parent=None):
-        self._window.error_box(title, message)
 
 
 # ======================================================================
