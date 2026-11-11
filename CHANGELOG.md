@@ -14,6 +14,14 @@
 
 ### Fixed
 
+- **The Realms button of the title screen opens the Realms page again.** It
+  answered "An error has occurred. Going back to the previous screen...". The
+  launcher's own patch of the game's interface, the one that takes the "You
+  need a Microsoft account" notice off the Servers and Realms tabs, handed the
+  Realms pages a value of the wrong kind, and they stopped on it. The patch
+  is rewritten, and a game patched by an earlier launcher is fixed at the next
+  PLAY (#337).
+
 - **Closing Minecraft ends the session again.** A couple of minutes into a
   game, its WebView2 starts `MicrosoftEdgeUpdate.exe`, which never exits under
   Wine, and Proton waits for every Wine process before it returns. So after

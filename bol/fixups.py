@@ -128,8 +128,10 @@ _HBUI_GATE_MARKS = (
     '"not-signed-in"',
     '"msa-guest-playstation"',
 )
-_HBUI_GATE_DONE = re.compile(
-    r'function\s+\w+\(\)\{return"";return' + _HBUI_FACET_MAP)
+# The selector the facet map is given: `(e,t)=>{`, with the extra parenthesis
+# older bundles wrap a lone arrow function in.
+_HBUI_GATE_SELECTOR = re.compile(r'\(?\([\w$,\s]*\)=>\{')
+_HBUI_GATE_RETURN = 'return"";'
 _HBUI_LINK = re.compile(r'(_NotLoggedInWarning_OreUI`\)\}\)?,\[[^\]]*\]\);)'
                         r'(return \w+\.createElement\(\w+,)')
 _HBUI_LINK_DONE = re.compile(
@@ -145,8 +147,13 @@ def _hbui_gate_patch(data):
     there because XSAPI never completes its init under Wine, not because the
     account is missing -- the SISU/PlayFab auth behind it works.
 
-    The early return is unconditional, so the function contributes the same
-    (zero) hooks on every render and React's hook order stays consistent.
+    The early return goes inside the selector, so the function still returns
+    a facet. Returning the bare string from the function itself, as this
+    patch did up to 2.3.0, satisfied the notice, which only renders the
+    value, but the Realms pages hand the result to another facet map as one
+    of its facets: that threw, and the Realms button of the title screen
+    answered "An error has occurred" (#337). A bundle patched that way is
+    brought to this form.
     Returns ``(text, status)`` with status "applied", "already" or "missing".
 
     NOTE: forcing the isLoggedInWithMicrosoftAccount facet true instead (to
@@ -155,16 +162,27 @@ def _hbui_gate_patch(data):
     genuinely need XSAPI social/persona, which does not work under Wine (they
     then loop or crash). That is an engine-level problem, not a UI patch.
     """
-    if _HBUI_GATE_DONE.search(data):
-        return data, "already"
     for m in _HBUI_GATE.finditer(data):
         # Bound the window at the next function declaration: the marks are
         # common enough that an unbounded look-ahead matches the neighbour.
         stop = data.find("}function ", m.end())
         body = data[m.end():stop if stop != -1 else m.end() + 2000]
-        if all(mark in body for mark in _HBUI_GATE_MARKS):
-            return data[:m.end(1)] + 'return"";' + data[m.end(1):], "applied"
+        if not all(mark in body for mark in _HBUI_GATE_MARKS):
+            continue
+        selector = _HBUI_GATE_SELECTOR.match(data, m.end())
+        if not selector:
+            continue
+        if data.startswith(_HBUI_GATE_RETURN, selector.end()):
+            return data, "already"
+        return (data[:selector.end()] + _HBUI_GATE_RETURN
+                + data[selector.end():], "applied")
     return data, "missing"
+
+
+def _hbui_gate_from_2_3_0(data):
+    """Take out the gate patch of launchers up to 2.3.0, if it is there."""
+    return re.sub(r'(function\s+\w+\(\)\{)return"";(?=return'
+                  + _HBUI_FACET_MAP + ')', r'\1', data)
 
 
 def _hbui_link_patch(data):
@@ -204,8 +222,10 @@ def _hbui_read_status(game_dir):
             data = Path(js).read_text()
         except OSError:
             continue
-        results.append((Path(js).name,
-                        _hbui_gate_patch(data)[1], _hbui_link_patch(data)[1]))
+        gate = _hbui_gate_patch(_hbui_gate_from_2_3_0(data))[1]
+        if gate == "already" and _hbui_gate_from_2_3_0(data) != data:
+            gate = "applied"        # still in the form that broke Realms
+        results.append((Path(js).name, gate, _hbui_link_patch(data)[1]))
     return max(results,
                key=lambda r: (r[1] != "missing") + (r[2] != "missing"),
                default=(None, "missing", "missing"))
@@ -272,7 +292,7 @@ def _patch_hbui_signin_gate(game_dir: Path):
         except OSError:
             continue
         orig = data
-        data, gate = _hbui_gate_patch(data)
+        data, gate = _hbui_gate_patch(_hbui_gate_from_2_3_0(data))
         data, link = _hbui_link_patch(data)
         if data != orig:
             bak = js + ".bol-orig"
