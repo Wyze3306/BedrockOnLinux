@@ -57,6 +57,7 @@ from .gpu_safety import (
 from .hidraw import (keep_non_controllers_off_hidraw,
                      playstation_pads_through_sdl)
 from .inject import start_auto_inject
+from .leftovers import LeftoverReaper
 from .log import BolError, die, info, ok, warn
 from .ntsync import inproc_sync_problem
 from .perfcheck import (
@@ -1147,12 +1148,20 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         tag_game_window = None if use_gamescope else \
             _steam_game_window_tagger(env, exe)
         stop_announced = False
+        # The game's WebView2 leaves an updater running that never exits
+        # under Wine, and the wrapper waits for it: without this, closing
+        # Minecraft does not end the session.
+        reaper = LeftoverReaper(active_prefix())
         while True:
             try:
                 rc = proc.wait(timeout=1)
                 game_returned = True
                 break
             except subprocess.TimeoutExpired:
+                try:
+                    reaper.tick()
+                except Exception:
+                    pass
                 waited = supervision.stop_requested_for()
                 if waited is not None:
                     # Asked to stop. Whatever asked usually stopped the game

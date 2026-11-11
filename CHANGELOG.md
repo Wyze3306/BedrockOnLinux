@@ -2,14 +2,24 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Closing Minecraft ends the session again.** A couple of minutes into a
+  game, its WebView2 starts `MicrosoftEdgeUpdate.exe`, which never exits under
+  Wine, and Proton waits for every Wine process before it returns. So after
+  the game window closed, the launcher still considered Minecraft running and
+  PLAY refused to start it again. Once the game has been closed for a few
+  seconds, the launcher now closes that updater (and any WebView2 process
+  left behind) itself.
+
 ### Changed
 
 - **Linesia SkyFaction is listed under Featured Servers, like a real partner
   server.** It used to sit among your own servers as a bare address. It now
   has a tile with its icon in the Featured Servers section, and its page shows
-  a banner, a description, the server's address and Activities cards for its
-  game modes (SkyFaction, Warzone & Events, Economy & Jobs, Community), with
-  the same Play button as before. The game gets its featured servers from Microsoft, so there is no
+  a banner, a description, the server's address and Activities cards for what
+  there is to discover there (SkyFaction, Warzone, Jobs & Farming, Cosmetics),
+  with the same Play button as before. The game gets its featured servers from Microsoft, so there is no
   list on disk to add to: the Servers-tab entry the launcher already writes is
   still what you join through, and the Servers tab is patched to show it as a
   featured server. If a Minecraft update changes the Servers tab too much for
