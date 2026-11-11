@@ -130,8 +130,51 @@ PARTNERS = (
         "news": "Featured by BedrockOnLinux. Have fun, from Tux!",
         "icon": "linesia-icon.png",
         "banner": "linesia-banner.jpg",
+        # The "Activities" cards of a featured server's page: square image,
+        # title, subtitle, a few lines.
+        "activities": (
+            {
+                "title": "SkyFaction",
+                "subtitle": "Main mode · 3-month seasons",
+                "description": (
+                    "Build your faction's island, farm, unlock jobs, quests "
+                    "and prestiges, then raid the others."),
+                "image": "linesia-skyfaction.jpg",
+            },
+            {
+                "title": "Warzone & Events",
+                "subtitle": "Faction PvP",
+                "description": (
+                    "Form alliances and fight for the map in the warzone and "
+                    "the PvP events: Domination, Nexus, Outpost and more."),
+                "image": "linesia-warzone.jpg",
+            },
+            {
+                "title": "Economy & Jobs",
+                "subtitle": "Farm & progression",
+                "description": (
+                    "Work jobs, grow crops and mills, sell at the auction "
+                    "house and build the biggest fortune on the server."),
+                "image": "linesia-economy.jpg",
+            },
+            {
+                "title": "Community",
+                "subtitle": "Since 2021 · 25,000+ players",
+                "description": (
+                    "Crossplay on PC, mobile and console, with tournaments "
+                    "and giveaways on Discord."),
+                "image": "linesia-icon.png",
+            },
+        ),
     },
 )
+
+
+def _partner_images(partner):
+    """Every bundled image one partner's tiles and pages show."""
+    names = [partner["icon"], partner["banner"]]
+    names += [a["image"] for a in partner.get("activities", ())]
+    return list(dict.fromkeys(names))
 
 _ASSET_PREFIX = "bol-partner-"
 
@@ -183,7 +226,14 @@ _DETAILS_FIELDS = {
     "newsTitle": "__bolDetail(e.networkDetails,\"news_title\",\"newsTitle\")",
     "newsDescription": "__bolDetail(e.networkDetails,\"news\","
                        "\"newsDescription\")",
+    "activities": "__bolDetail(e.networkDetails,\"activities\","
+                  "\"activities\")",
 }
+# Whether the "Activities" block shows at all.
+_ACTIVITIES_SHOWN = "e=>e.networkDetails.activities.length>0"
+_ACTIVITIES_SHOWN_PATCHED = (
+    "e=>__bolDetail(e.networkDetails,\"activities\",\"activities\")"
+    ".length>0")
 
 
 def _partner_runtime(partners):
@@ -198,6 +248,12 @@ def _partner_runtime(partners):
         "news": p["news"],
         "icon": "assets/" + _ASSET_PREFIX + p["icon"],
         "banner": "assets/" + _ASSET_PREFIX + p["banner"],
+        "activities": [{
+            "title": a["title"],
+            "subtitle": a["subtitle"],
+            "description": a["description"],
+            "imagePath": "assets/" + _ASSET_PREFIX + a["image"],
+        } for a in p.get("activities", ())],
     } for p in partners]
     return (
         "var " + _PARTNER_MARK + "=" + json.dumps(table, ensure_ascii=True)
@@ -280,10 +336,20 @@ def _partner_patch(data, partners=PARTNERS):
     could list a server whose details then fail to load.
     """
     if data.startswith("var " + _PARTNER_MARK + "="):
-        # Patched by this or an earlier launcher: the call sites stay, the
-        # partner table and helpers on the first line are brought up to date.
-        return (_partner_runtime(partners) + data[data.index("\n") + 1:],
-                "already")
+        # Patched by this or an earlier launcher: the partner table and
+        # helpers on the first line are brought up to date, and the call
+        # sites added since that launcher are added now.
+        body = data[data.index("\n") + 1:]
+        for field, expr in _DETAILS_FIELDS.items():
+            if expr not in body:
+                body, n = _patch_detail_field(body, field, expr)
+                if n != 1:
+                    return data, "lost"
+        if _ACTIVITIES_SHOWN_PATCHED not in body:
+            if body.count(_ACTIVITIES_SHOWN) != 1:
+                return data, "lost"
+            body = body.replace(_ACTIVITIES_SHOWN, _ACTIVITIES_SHOWN_PATCHED)
+        return _partner_runtime(partners) + body, "already"
     if _PARTNER_MARK in data:
         return data, "already"
     if not _SIDE_MENU.search(data):
@@ -299,17 +365,25 @@ def _partner_patch(data, partners=PARTNERS):
     if layouts != 1:
         return data, "lost"
     for field, expr in _DETAILS_FIELDS.items():
-        new, n = re.subn(r'(?<=e=>)e\.networkDetails\.' + field
-                         + r'(?=\)?,\[\],\[)', lambda _m, x=expr: x, new)
+        new, n = _patch_detail_field(new, field, expr)
         if n != 1:
             return data, "lost"
+    if new.count(_ACTIVITIES_SHOWN) != 1:
+        return data, "lost"
+    new = new.replace(_ACTIVITIES_SHOWN, _ACTIVITIES_SHOWN_PATCHED)
     return _partner_runtime(partners) + new, "applied"
+
+
+def _patch_detail_field(text, field, expr):
+    """Route one details-pane field through the partner table."""
+    return re.subn(r'(?<=e=>)e\.networkDetails\.' + field
+                   + r'(?=\)?,\[\],\[)', lambda _m: expr, text)
 
 
 def _install_partner_assets(hbui, partners):
     assets = hbui / "assets"
     for p in partners:
-        for name in (p["icon"], p["banner"]):
+        for name in _partner_images(p):
             blob = pkgutil.get_data("bol", "partners/" + name)
             if not blob:
                 raise OSError(f"bundled partners/{name} is missing")

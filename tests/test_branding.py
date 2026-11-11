@@ -41,6 +41,10 @@ _DIRECT = (
     'function Gle(){const n=Fo(VM),'
     'a=k(e=>e.networkDetails.newsTitle,[],[n]),'
     'r=k(e=>e.networkDetails.newsDescription,[],[n]);return[a,r]}'
+    'function woe(){const a=Fo(VM),'
+    'r=k(e=>e.networkDetails.activities.length>0,[],[a]);return r}'
+    'function koe(){const a=k(e=>e.networkDetails.activities,[],[Fo(VM)]);'
+    'return a}'
 )
 
 # 1.26.52 shape: `(0,r.useFacetMap)((e=>…))`, other minified names.
@@ -69,7 +73,10 @@ _WRAPPED = (
     'return[i,s]}function Gae(){const t=(0,r.useSharedFacet)(MP),'
     'a=(0,r.useFacetMap)((e=>e.networkDetails.newsTitle),[],[t]),'
     'l=(0,r.useFacetMap)((e=>e.networkDetails.newsDescription),[],[t]);'
-    'return[a,l]}'
+    'return[a,l]}function Hae(){const a=(0,r.useSharedFacet)(MP),'
+    'r=(0,r.useFacetMap)((e=>e.networkDetails.activities.length>0),[],[a]);'
+    'return r}function Kae(){const a=(0,r.useFacetMap)((e=>e.networkDetails.'
+    'activities),[],[(0,r.useSharedFacet)(MP)]);return a}'
 )
 
 
@@ -87,7 +94,7 @@ class PartnerPatchShapes(unittest.TestCase):
         self.assertIn("null!=e.bolType?e.bolType:e.type", out)
         self.assertIn("&&!__bolPartnerOf(e.networkDetails))", out)
         for field in ("imagePath", "description", "newsTitle",
-                      "newsDescription"):
+                      "newsDescription", "activities"):
             self.assertNotIn("e=>e.networkDetails.%s" % field, out)
         # Patching again only refreshes the helpers.
         again, status = branding._partner_patch(out)
@@ -108,6 +115,22 @@ class PartnerPatchShapes(unittest.TestCase):
         broken = _DIRECT.replace("n(e.value,e.type,e.label)",
                                  "n(e.value,e.kind,e.label)")
         self.assertEqual(branding._partner_patch(broken), (broken, "lost"))
+
+    def test_a_bundle_patched_before_activities_gains_them(self):
+        out, _ = branding._partner_patch(_DIRECT)
+        older = out.replace(branding._ACTIVITIES_SHOWN_PATCHED,
+                            branding._ACTIVITIES_SHOWN).replace(
+            branding._DETAILS_FIELDS["activities"],
+            "e.networkDetails.activities")
+        self.assertNotEqual(older, out)
+        self.assertEqual(branding._partner_patch(older), (out, "already"))
+
+    def test_every_partner_image_is_bundled(self):
+        for p in branding.PARTNERS:
+            for name in branding._partner_images(p):
+                with self.subTest(image=name):
+                    self.assertTrue((Path(branding.__file__).parent
+                                     / "partners" / name).is_file())
 
     def test_partner_table_updates_on_an_already_patched_bundle(self):
         out, _ = branding._partner_patch(_DIRECT)
@@ -146,6 +169,16 @@ class PartnerRuntime(unittest.TestCase):
         rest = self._eval("__bolRest(ext.externalServerWorlds)")
         self.assertEqual([s["id"] for s in rest], ["1", "3"])
 
+    def test_the_partner_page_has_activity_cards(self):
+        cards = self._eval(
+            "__bolDetail({address:'play.linesia.net',activities:[]},"
+            "'activities','activities')")
+        self.assertEqual(len(cards), 4)
+        for card in cards:
+            self.assertEqual(set(card), {"title", "subtitle", "description",
+                                         "imagePath"})
+            self.assertTrue(card["imagePath"].startswith("assets/bol-partner-"))
+
     def test_details_are_recognised_by_address(self):
         self.assertTrue(self._eval(
             "__bolDetail({address:'PLAY.linesia.net',name:'x',"
@@ -169,7 +202,7 @@ class PartnerInstall(unittest.TestCase):
                 (hbui / "index-abc.js.bol-orig").read_text(encoding="utf-8"),
                 _DIRECT)
             for p in branding.PARTNERS:
-                for name in (p["icon"], p["banner"]):
+                for name in branding._partner_images(p):
                     self.assertGreater((hbui / "assets" / (
                         "bol-partner-" + name)).stat().st_size, 1000)
             # Idempotent.
