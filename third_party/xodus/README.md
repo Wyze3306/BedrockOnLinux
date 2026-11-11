@@ -76,19 +76,34 @@ is a self-contained commit with the test that fails without it.
 | `0003-licensing-report-a-license-that-cannot-be-read.patch` | Reading the licence out of a licences response — first key, base64, XML — was an index and two unwraps inside a running download, so anything unexpected from the licensing service was a panic in a library rather than a line the caller could print. It now ends the download the way a refused entitlement does. |
 | `0004-login-host-the-second-leg-of-a-sign-in-like-the-first.patch` | The sign-in window that loads for ever (issue #214). A token exchange that faults hands back an `inline_auth_url`, and `finalize_request` opened it with an **empty** `HeaderMap` — none of the nine `cxh-*`/`hostApp` headers that tell login.live.com it is talking to the token broker. Without them Microsoft serves the ordinary consumer interrupt ("Please wait", a disabled *OK*) instead of the CloudExperienceHost one, so the page never reaches `ppsecure/post.srf` — the only URL `create_session` fires `Finish` on — `ServerData` is never read back, and `xodus-cli login` sits there printing nothing and never exiting. |
 | `0005-licensing-ask-for-a-sign-in-instead-of-unwrapping-a-missing-token.patch` | The download dying on a keyring that holds some of the account and not the rest (issue #260). A license request reads four entries — this device's STS token and license, the account (`user-DA`) and its Passport STS token — and unwrapped every lookup, so a keyring missing one of them ended the download on `called Result::unwrap() on an Err value: NotFound`. Reproduced by deleting `user-DA` from a copy of a working keyring: the unpatched binary panics at `license.rs:17`, the patched one prints "not logged in: the signed-in Microsoft account is missing from the keyring (entry not found); sign in again", which the launcher already reads as a sign-in to offer. |
+| `0006-licensing-send-a-jwe-delegation-ticket-without-the-d-prefix.patch` | Every launch and download refused by the licensing service since 2026-10-12 (issue #322). The `delegationcompact` token Live issues for the licence request used to be an opaque ticket, sent as `d=<ticket>`; it is now a compact JWE (five segments, the second empty for `alg: dir`), and `licenses/content` answers `d=<jwe>` with `401 InvalidMsaTicketFormat`. The same request with the token sent as-is is answered `200` with the licence. A JOSE token now goes out unprefixed and an opaque ticket keeps its `d=`, so the fix holds whichever of the two Live issues. |
+| `0007-licensing-report-a-refused-license-request-with-its-status-and-reason.patch` | Why issue #322 had nothing to go on. A licensing refusal is a JSON error, not a licence, so reading it as one failed in serde and the launcher printed `request error: error decoding response body for url (https://licensing.mp.microsoft.com/v7.0/licenses/content)` — no status, no reason. The status is now checked first, and a refusal reads `the licensing service refused the request (HTTP 401): InvalidMsaTicketFormat: ...`, the inner error's code and message. |
+| `0008-login-finish-on-a-serverdata-short-of-an-unused-field.patch` | The sign-in that still sits on "Please wait" after the password, printing nothing (issue #366). The page hands its tokens back as `ServerData`, read as a `DAProperty` of seven required strings; one missing and the payload fell through to `HostBridgeMessage`, whose fields are all optional, so it parsed and was dropped without a word. `sDASessionKey` is never read and `sSTSInlineFlowToken` is already optional in the exchange, so both now default, and `K` is read as a string or a number. The handler also says on stderr which required fields a token bag lacks (names only), which host method the page invoked that is not answered, and every page that finishes loading (no query string) — so `store-login.log` shows where a sign-in stopped instead of being empty. |
+| `0009-tokens-sign-the-device-in-again-when-its-session-has-expired.patch` | Every launch and download panicking after about two months (issue #367): `not implemented: Exchange token supports only singular token right now Fault(Fault)`. The keyring keeps this device's Passport STS token under `device-tokens`, and it is issued for 60 days; `get_device_sts_token` handed it out without reading its `wsu:Expires`, and `ensure_device_credentials` signed the device in again only when the entry was missing, so once it lapsed every token exchange it signed got a SOAP Fault, and `exchange_device_token` had no arm for one. An expired device token now reads as expired, so the device is signed in again before the request; the account's own token (`user-tokens`, 90 days) does the same and asks for a sign-in. A Fault from the exchange is an error rather than a panic, and the license request answers it by dropping `device-tokens` (keeping `dev_license`, `user-DA` and `user-tokens`), signing the device in again and retrying once — what deleting that entry by hand did. |
+| `0010-tokens-renew-the-account-s-session-in-its-last-week.patch` | The same cliff for the account, thirty days later (issue #367). Sign-in stores the account's Passport session under `user-tokens`, and Live issues it for 90 days; with 0009 alone, the license request then says "not logged in: ... has expired; sign in again", a sign-in through the page some systems cannot get past (#366). While Live still takes the session it issues a new one without a sign-in: asked for `http://Passport.NET/tb` with this device's session, it answers with the session itself, keyed `http://Passport.NET/STS`, for another 90 days. The license request does that when the session ends within a week, stores the new one, and carries on with the old one if Live does not issue it. Tested against Live on a copy of a keyring whose account session was set to end in two days: the license was issued and the copy held a session ending 90 days later. |
+| `0011-licensing-sign-the-device-in-again-for-any-answer-that-is-not-a-ticket.patch` | 0009 retried only a SOAP Fault. Live answers a device token it does not recognise at all with an envelope the exchange cannot read (`missing field wsa:Action`, reproduced with an altered token on a copy of a keyring), and a secret that no longer decrypts the answer fails in the client; both ended on "could not exchange this device's Microsoft session", which a fresh device session cures the same way. Every failure of that exchange now gets the one retry except a request that got no answer, which is the network's: the launcher reports that one as a missing connection. |
 
 A patched binary is not the upstream commit's binary, so the rev names the
 patches too: `<commit12>-p<n>`, where `n` is how many patch files there are.
-Publishing one takes two passes, like every other pinned artifact — run
-`.github/workflows/build-xodus.yml`, read the SHA-256 it reports, pin
-`XODUS_REV` and `XODUS_ARCHIVE_SHA256` in `bol/config.py`, then run it again
-with `publish` on. Until that pin lands, the launcher keeps downloading the
-unpatched asset it names today — which is exactly what happened to the first
-four patches above: they sat on main for a week while every download still raced
-its own package cache (issues #241 and #242), because nothing tied the pin
-back to the directory. `ci.yml` now checks that `XODUS_REV` names the patch
-set on the branch, so a patch added here fails the build until it is built and
-pinned.
+Publishing one takes two passes. Set `XODUS_REV` to match the patch count and
+clear `XODUS_ARCHIVE_SHA256` when the binary changes. Run
+`.github/workflows/build-xodus.yml` with `publish=false`, review the uploaded
+archive and pin its reported SHA-256 in `bol/config.py`. This candidate build
+allows a missing or different pin, but cannot publish it. Run it again with
+`publish=true` to reproduce and publish the pinned bytes. The application
+workflow verifies the published binary and WebKitGTK archives before packaging,
+and the release orchestrator builds Xodus when either archive needs publishing.
+Merging Xodus configuration, patch or build changes into main automatically
+starts the release orchestrator. It builds and publishes missing pinned
+archives, verifies the dependencies and publishes the launcher in one job
+graph. A failed build blocks application packaging. For a PR, CI can verify
+an attested fork release against the committed pins before the same bytes
+are published upstream. Application packaging still requires upstream assets.
+
+The first four patches sat on main for a week while users still downloaded
+the old binary and raced its package cache (issues #241 and #242).
+`ci.yml` checks that `XODUS_REV` names the patch set on the branch, and the
+application workflow also verifies that the matching archive is published.
 
 ## The WebKitGTK runtime beside it
 

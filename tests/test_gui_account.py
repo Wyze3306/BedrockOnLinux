@@ -185,6 +185,94 @@ class BothAccountsAreVisibleTests(unittest.TestCase):
                            _menu(window).findChildren(type(window.acct_text))])
 
 
+class RefusedOnlineSignInTests(unittest.TestCase):
+    """A token file is not proof that Microsoft will still accept it."""
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def test_a_refused_refresh_is_not_left_green(self):
+        with headless_window() as window, \
+                mock.patch("bol.auth.msa_session_snapshot",
+                           return_value=({"refresh_token": "old"}, "epoch")), \
+                mock.patch("bol.auth.msa_refresh_result",
+                           return_value=(None, "invalid_grant")), \
+                mock.patch("bol.auth.account_epoch_is_current",
+                           return_value=True), \
+                mock.patch.object(gui.threading, "Thread") as thread:
+            thread.side_effect = lambda target, daemon=None: SimpleNamespace(
+                start=target)
+            window._refresh_account_row("in")
+            window._warm_xbox_preauth()
+
+            menu = _menu(window)
+            self.assertEqual(window._acct_mode, "relink")
+            self.assertEqual(menu.online.status.text(),
+                             "Microsoft refused the saved sign-in")
+            self.assertEqual(menu.online.button.text(), "Sign in again")
+            self.assertEqual(window.acct_text.text(), "Sign in")
+
+    def test_a_network_failure_does_not_call_the_account_refused(self):
+        with headless_window() as window, \
+                mock.patch("bol.auth.msa_session_snapshot",
+                           return_value=({"refresh_token": "old"}, "epoch")), \
+                mock.patch("bol.auth.msa_refresh_result",
+                           side_effect=OSError("network unavailable")), \
+                mock.patch.object(gui.threading, "Thread") as thread:
+            thread.side_effect = lambda target, daemon=None: SimpleNamespace(
+                start=target)
+            window._refresh_account_row("in")
+            window._warm_xbox_preauth()
+
+            self.assertEqual(window._acct_mode, "out")
+
+    def test_a_transient_service_error_does_not_reject_the_account(self):
+        with headless_window() as window, \
+                mock.patch("bol.auth.msa_session_snapshot",
+                           return_value=({"refresh_token": "old"}, "epoch")), \
+                mock.patch("bol.auth.msa_refresh_result",
+                           return_value=(None, "temporarily_unavailable")), \
+                mock.patch.object(gui.threading, "Thread") as thread:
+            thread.side_effect = lambda target, daemon=None: SimpleNamespace(
+                start=target)
+            window._refresh_account_row("in")
+            window._warm_xbox_preauth()
+
+            self.assertEqual(window._acct_mode, "out")
+
+    def test_a_stale_worker_cannot_reject_the_new_account(self):
+        with headless_window() as window, \
+                mock.patch("bol.auth.msa_session_snapshot",
+                           return_value=({"refresh_token": "old"}, "old")), \
+                mock.patch("bol.auth.msa_refresh_result",
+                           return_value=(None, "invalid_grant")), \
+                mock.patch("bol.auth.account_epoch_is_current",
+                           return_value=False), \
+                mock.patch.object(gui.threading, "Thread") as thread:
+            thread.side_effect = lambda target, daemon=None: SimpleNamespace(
+                start=target)
+            window._refresh_account_row("in")
+            window._warm_xbox_preauth()
+
+            self.assertEqual(window._acct_mode, "out")
+
+    def test_sign_in_again_retires_the_refused_token_first(self):
+        with headless_window() as window:
+            started = []
+            window.na.start = lambda *args: started.append(args)
+            window._refresh_account_row("refused")
+            with mock.patch.object(gui, "msa_logout") as logout, \
+                    mock.patch.object(gui.threading, "Thread") as thread:
+                thread.side_effect = lambda target, daemon=None: SimpleNamespace(
+                    start=target)
+                window.acct_click()
+
+            logout.assert_called_once_with()
+            self.assertEqual(len(started), 1)
+            self.assertEqual(window._acct_mode, "loading")
+
+
 class DownloadSignInIsOfferedWhereItIsMissedTests(unittest.TestCase):
     """PLAY reaching the download with no account for it is an offer, not a
     launch failure: nothing broke and nothing was downloaded, and the account
@@ -469,24 +557,32 @@ class XboxPreauthWarmUpTests(unittest.TestCase):
                 window._on_online()
             self.assertTrue(warm.called)
 
-    def test_the_refreshed_token_is_handed_to_xbl_preauth(self):
+    def test_the_rotated_token_is_saved_then_handed_to_xbl_preauth(self):
         from bol import auth
         with headless_window() as window:
-            with mock.patch.object(auth, "msa_load",
-                                   return_value={"refresh_token": "r"}), \
-                    mock.patch.object(auth, "msa_refresh",
-                                      return_value={"access_token": "a"}), \
-                    mock.patch.object(auth, "_account_cache_epoch",
-                                      return_value=7), \
+            with mock.patch.object(
+                    auth, "msa_session_snapshot",
+                    return_value=({"refresh_token": "old"}, "epoch")), \
+                    mock.patch.object(
+                        auth, "msa_refresh_result",
+                        return_value=({"refresh_token": "new",
+                                      "access_token": "a"}, None)), \
+                    mock.patch.object(
+                        auth, "msa_save_for_account_epoch",
+                        return_value=True) as save, \
                     mock.patch.object(auth, "xbl_preauth",
                                       return_value=True) as preauth:
                 self._run_warm_up(window)
-            preauth.assert_called_once_with("a", 7)
+            save.assert_called_once()
+            self.assertEqual(save.call_args.args[0]["refresh_token"], "new")
+            self.assertEqual(save.call_args.args[1], "epoch")
+            preauth.assert_called_once_with("a", "epoch")
 
     def test_no_stored_account_is_not_an_error(self):
         from bol import auth
         with headless_window() as window:
-            with mock.patch.object(auth, "msa_load", return_value=None), \
+            with mock.patch.object(auth, "msa_session_snapshot",
+                                   return_value=(None, "epoch")), \
                     mock.patch.object(auth, "xbl_preauth") as preauth:
                 self._run_warm_up(window)
             self.assertFalse(preauth.called)
@@ -497,7 +593,7 @@ class XboxPreauthWarmUpTests(unittest.TestCase):
         # crash in a background thread.
         from bol import auth
         with headless_window() as window:
-            with mock.patch.object(auth, "msa_load",
+            with mock.patch.object(auth, "msa_session_snapshot",
                                    side_effect=RuntimeError("offline")):
                 self._run_warm_up(window)
 

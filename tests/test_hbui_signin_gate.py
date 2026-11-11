@@ -46,6 +46,22 @@ _LINK_OLD = (
     '[a,e]);return r.createElement(sx,{role:"noticeTint"},'
     'r.createElement(sx.Link,{onClick:l},"login"))}'
 )
+# The shape shipped by 1.26.60: hooks are called directly (`k(` for
+# useFacetMap) and a lone arrow function lost its parentheses.
+_GATE_DIRECT = (
+    'function mle(){return k((e,t)=>{'
+    'const{isSignedInPlatformNetwork:n,isLoggedInWithMicrosoftAccount:a,'
+    'hasPremiumNetworkAccess:r}=e,l=oW(t.platform),o=rW(t.platform);'
+    'return a&&!n&&l?"platform-guest-nintendo":!a&&n&&o&&!r?'
+    '"msa-guest-playstation":"not-signed-in"},[],[Fo(WD),Fo(ci)])}'
+)
+_LINK_DIRECT = (
+    'function ple({location:e}){const{t:n}=zu("notLoggedInWarning"),a=_(),'
+    'r=pB(),l=(0,t.useCallback)(()=>{r({screen:`${fle(e)}`,button:"SignIn"}),'
+    'a.push(`/sign-in?signInSource=${fle(e)}_NotLoggedInWarning_OreUI`)},'
+    '[r,a,e]);return t.createElement(SX,{role:"noticeTint"},'
+    't.createElement(SX.Link,{onClick:l},n(".loginLink")))}'
+)
 # A zero-argument facet hook that reads none of the account state, sitting
 # right before the real one: the marks leak into an unbounded look-ahead.
 _DECOY = ('function p3(){return(0,r.useFacetMap)((e=>e.thirdPartyServers),'
@@ -72,29 +88,65 @@ class HbuiPatchTests(unittest.TestCase):
     def test_patches_the_bundle_shape_that_broke_them(self):
         applied, _gd, js, out = self._run(_GATE_NEW + _LINK_NEW)
         self.assertTrue(applied)
-        self.assertIn('function T3(){return"";return(0,r.useFacetMap)', out)
+        self.assertIn('function T3(){return(0,r.useFacetMap)(((e,t)=>{return"";', out)
         self.assertIn('[c,a,e]);return null;return n.createElement(nD,', out)
         self.assertTrue(Path(str(js) + ".bol-orig").exists())
 
     def test_still_patches_the_shape_the_needles_were_written_for(self):
         applied, _gd, _js, out = self._run(_GATE_OLD + _LINK_OLD)
         self.assertTrue(applied)
-        self.assertIn('function wB(){return"";return(0,l.useFacetMap)', out)
+        self.assertIn('function wB(){return(0,l.useFacetMap)(((e,t)=>{return"";', out)
         self.assertIn('[a,e]);return null;return r.createElement(sx,', out)
+
+    def test_patches_the_directly_called_hooks_of_1_26_60(self):
+        applied, gd, _js, out = self._run(_GATE_DIRECT + _LINK_DIRECT)
+        self.assertTrue(applied)
+        self.assertIn('function mle(){return k((e,t)=>{return"";', out)
+        self.assertIn('[r,a,e]);return null;return t.createElement(SX,', out)
+        with mock.patch.object(fixups, "ok"), mock.patch.object(fixups, "warn"):
+            self.assertTrue(fixups._patch_hbui_signin_gate(gd))
+        self.assertEqual(
+            fixups.hbui_signin_gate_status(str(gd))[0],
+            "OK (gate + link patched)")
+
+    def test_the_hook_still_returns_a_facet(self):
+        # #337: the Realms pages pass this hook's result to another facet
+        # map. A bare string there threw, and the title screen's Realms
+        # button answered "An error has occurred".
+        _applied, _gd, _js, out = self._run(_GATE_DIRECT + _LINK_DIRECT)
+        self.assertNotIn('(){return"";', out)
+        self.assertIn('function mle(){return k(', out)
+
+    def test_a_bundle_patched_by_2_3_0_is_brought_to_the_new_form(self):
+        old = (_GATE_DIRECT + _LINK_DIRECT).replace(
+            "function mle(){return k(", 'function mle(){return"";return k(')
+        self.assertNotEqual(old, _GATE_DIRECT + _LINK_DIRECT)
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        gd = _game_dir(tmp.name, old)
+        self.assertEqual(fixups.hbui_signin_gate_status(str(gd))[0],
+                         "not applied yet")
+        with mock.patch.object(fixups, "ok"), mock.patch.object(fixups, "warn"):
+            self.assertTrue(fixups._patch_hbui_signin_gate(gd))
+        out = next(gd.glob("data/gui/dist/hbui/index-*.js")).read_text()
+        self.assertNotIn('(){return"";', out)
+        self.assertIn('function mle(){return k((e,t)=>{return"";', out)
+        self.assertEqual(fixups.hbui_signin_gate_status(str(gd))[0],
+                         "OK (gate + link patched)")
 
     def test_is_idempotent(self):
         _applied, gd, js, once = self._run(_GATE_NEW + _LINK_NEW)
         with mock.patch.object(fixups, "ok"), mock.patch.object(fixups, "warn"):
             self.assertTrue(fixups._patch_hbui_signin_gate(gd))
         self.assertEqual(js.read_text(), once)
-        self.assertEqual(once.count('return"";return(0,'), 1)
+        self.assertEqual(once.count('=>{return"";'), 1)
         self.assertEqual(once.count("return null;return "), 1)
 
     def test_leaves_a_neighbouring_facet_hook_alone(self):
         _applied, _gd, _js, out = self._run(_DECOY + _GATE_NEW + _LINK_NEW)
         self.assertIn('function p3(){return(0,r.useFacetMap)', out)
-        self.assertIn('function T3(){return"";', out)
-        self.assertEqual(out.count('return"";return(0,'), 1)
+        self.assertIn('function T3(){return(0,r.useFacetMap)(((e,t)=>{return"";', out)
+        self.assertEqual(out.count('=>{return"";'), 1)
 
     def test_a_rebundled_ui_is_reported_not_skipped(self):
         tmp = TemporaryDirectory()
@@ -120,7 +172,7 @@ class HbuiPatchTests(unittest.TestCase):
     def test_one_dead_anchor_still_writes_the_other_and_warns(self):
         applied, _gd, _js, out = self._run(_GATE_NEW)
         self.assertFalse(applied)
-        self.assertIn('function T3(){return"";', out)
+        self.assertIn('(((e,t)=>{return"";', out)
 
 
 class HbuiStatusTests(unittest.TestCase):

@@ -103,7 +103,7 @@ jobs:
     # download, which only surfaces later as a setup-time failure for users.
     # Catch it here, at PR/push time, instead.
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -142,6 +142,8 @@ jobs:
           echo "   ok — the pinned revision names the patch set on this branch."
 
       - name: Verify committed release pins resolve to a matching published asset
+        env:
+          XODUS_CANDIDATE_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail
           cfg=bol/config.py
@@ -149,11 +151,12 @@ jobs:
 
           check_pin() {
             local label="$1" tag="$2" asset_glob="$3" pin="$4"
+            local asset_repo="${5:-$repo}"
             echo "== checking ${label} (tag: ${tag})"
             rm -rf /tmp/pin-check; mkdir -p /tmp/pin-check
-            if ! gh release download "$tag" -R "$repo" \
+            if ! gh release download "$tag" -R "$asset_repo" \
                 -p "$asset_glob" -D /tmp/pin-check 2>/tmp/pin-check.err; then
-              echo "::error::${label}: no release/asset matching '${asset_glob}' found on ${repo} at tag '${tag}'." >&2
+              echo "::error::${label}: no release/asset matching '${asset_glob}' found on ${asset_repo} at tag '${tag}'." >&2
               cat /tmp/pin-check.err >&2
               return 1
             fi
@@ -172,6 +175,9 @@ jobs:
               echo "  (build-engine.yml, build-xcurl.yml or build-xodus.yml) was never run" >&2
               echo "  with publish:true against ${repo} after the pin changed." >&2
               return 1
+            fi
+            if [ "$asset_repo" != "$repo" ]; then
+              gh attestation verify "$f" -R "$asset_repo" || return 1
             fi
             echo "   ok — ${label} pin matches the published asset."
           }
@@ -193,19 +199,44 @@ jobs:
           # install-time one: the launcher signs in, then cannot fetch anything.
           xodus_rev="$(grep -m1 '^XODUS_REV = ' "$cfg" | cut -d'"' -f2)"
           xodus_pin="$(grep -m1 '^XODUS_ARCHIVE_SHA256 = ' "$cfg" | cut -d'"' -f2)"
+          webview_rev="$(grep -m1 '^XODUS_WEBVIEW_REV = ' "$cfg" | cut -d'"' -f2)"
+          webview_pin="$(grep -m1 '^XODUS_WEBVIEW_SHA256 = ' "$cfg" | cut -d'"' -f2)"
+          xodus_repo="$repo"
+          xodus_assets_ready() {
+            local assets
+            assets="$(gh release view "xodus-${xodus_rev}" -R "$repo" \
+              --json assets --jq '.assets[].name' 2>/dev/null)" || return 1
+            echo "$assets" | grep -Fxq "xodus-cli-${xodus_rev}.tar.gz" || return 1
+            if [ -n "$webview_pin" ]; then
+              echo "$assets" | grep -Fxq "xodus-webview-${webview_rev}.tar.xz" || return 1
+            fi
+          }
+          # A main push starts publication in the release workflow in parallel.
+          if [ -z "$XODUS_CANDIDATE_REPO" ]; then
+            for attempt in {1..45}; do
+              xodus_assets_ready && break
+              [ "$attempt" -eq 45 ] && break
+              echo "Waiting for automatic Xodus publication (${attempt}/45)."
+              sleep 30
+            done
+          fi
+          # A PR can pin its attested fork build before the merge publishes
+          # the same bytes upstream. Packaging still requires upstream assets.
+          if [ -n "$XODUS_CANDIDATE_REPO" ] && \
+              ! gh release view "xodus-${xodus_rev}" -R "$repo" >/dev/null 2>&1; then
+            xodus_repo="$XODUS_CANDIDATE_REPO"
+          fi
           check_pin "xodus-cli (XODUS_ARCHIVE_SHA256)" \
-            "xodus-${xodus_rev}" "xodus-cli-${xodus_rev}.tar.gz" "$xodus_pin" || fail=1
+            "xodus-${xodus_rev}" "xodus-cli-${xodus_rev}.tar.gz" "$xodus_pin" "$xodus_repo" || fail=1
 
           # The WebKitGTK runtime rides in the same release as the binary it
           # belongs to. An unset pin is a supported state -- the launcher then
           # asks for the host package instead of installing unverified bytes --
           # so only a set pin has to resolve.
-          webview_rev="$(grep -m1 '^XODUS_WEBVIEW_REV = ' "$cfg" | cut -d'"' -f2)"
-          webview_pin="$(grep -m1 '^XODUS_WEBVIEW_SHA256 = ' "$cfg" | cut -d'"' -f2)"
           if [ -n "$webview_pin" ]; then
             check_pin "WebKitGTK runtime (XODUS_WEBVIEW_SHA256)" \
               "xodus-${xodus_rev}" "xodus-webview-${webview_rev}.tar.xz" \
-              "$webview_pin" || fail=1
+              "$webview_pin" "$xodus_repo" || fail=1
           else
             echo "== skipping the WebKitGTK runtime: XODUS_WEBVIEW_SHA256 is unset"
           fi

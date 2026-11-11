@@ -23,6 +23,15 @@ through Wine's own virtual HID devices, and controllers are left exactly as
 Wine would have them. Every other device Wine could open gets winebus's
 per-device option ``Devices\\<vid>/<pid>`` → ``Hidraw`` = 0, so it never does.
 ``BOL_HIDRAW=all`` restores Wine's default for those devices.
+
+PlayStation pads get the same option for the opposite reason (#57). winebus
+prefers hidraw for every DualShock 4 and DualSense, and over hidraw the game
+is handed Sony's own HID report, which GameInput does not take for a gamepad:
+the touchpad moves the mouse and nothing else does anything. With hidraw off
+for them, winebus takes them through SDL, which maps them to an XInput
+gamepad -- and when Steam Input runs, its virtual pad is the only one the game
+sees. Proton's wine is told this with ``PROTON_DISABLE_HIDRAW``; the engine's
+winebus is WineGDK's and reads only this registry option.
 """
 # SPDX-License-Identifier: MIT
 
@@ -54,6 +63,15 @@ _CONTROLLER_PAGES = frozenset({0x02, 0x05})
 # Valve's Steam Controller and Steam Deck present vendor-defined collections
 # but are controllers that Steam Input drives through hidraw.
 _CONTROLLER_VENDORS = frozenset({0x28DE})
+# The pads winebus's is_dualshock4_gamepad() and is_dualsense_gamepad() send
+# to hidraw.
+PLAYSTATION_PADS: Tuple[DeviceId, ...] = (
+    (0x054C, 0x05C4),  # DualShock 4
+    (0x054C, 0x09CC),  # DualShock 4 v2
+    (0x054C, 0x0BA0),  # DualShock 4 wireless adapter
+    (0x054C, 0x0CE6),  # DualSense
+    (0x054C, 0x0DF2),  # DualSense Edge
+)
 
 
 def application_usages(descriptor: bytes) -> List[Usage]:
@@ -200,6 +218,22 @@ def keep_non_controllers_off_hidraw(prefix: Path, root: Path = SYSFS_HIDRAW,
              f"{_names(idents)} (they can crash Wine's HID stack and take "
              f"the mouse with it; BOL_HIDRAW=all to allow them).")
     return idents
+
+
+def playstation_pads_through_sdl(prefix: Path,
+                                 environ: Optional[Mapping[str, str]] = None
+                                 ) -> bool:
+    """Have winebus take PlayStation pads through SDL rather than hidraw.
+
+    Written for every pad of PLAYSTATION_PADS, connected or not, so one
+    plugged in while the game runs is covered as well. Like the other
+    options it must be written before Wine starts; ``BOL_HIDRAW=all`` removes
+    it. Returns whether the prefix changed.
+    """
+    env = os.environ if environ is None else environ
+    restore = env.get("BOL_HIDRAW", "").strip().lower() == "all"
+    return update_prefix_registry(
+        prefix, machine=hidraw_option_changes(PLAYSTATION_PADS, restore))
 
 
 def summary(root: Path = SYSFS_HIDRAW, dev: Path = DEV) -> str:

@@ -17,6 +17,7 @@ from .config import CACHE, LOGS
 from .log import BolError, desktop_notify
 from .prefix import _mc_running, active_prefix, prefix_processes
 from .proton import proton_path
+from .winehelper import engine_env
 
 
 def _cmdline_has_winedbg(cmdline):
@@ -120,6 +121,7 @@ def run_injector(dll_path):
     env.update({"WINEESYNC": "1", "WINEFSYNC": "1",
                 "WINEPREFIX": str(active_prefix()),
                 "WINEDEBUG": os.environ.get("WINEDEBUG", "-all")})
+    engine_env(pp, env)
     LOGS.mkdir(parents=True, exist_ok=True)
     with open(LOGS / "injector.log", "a") as log:
         log.write(f"\n--- inject {dll} ---\n")

@@ -325,6 +325,8 @@ WINEGDK_NATIVE_PROVENANCE_FILES=(
   0009-xgameruntime-support-IXSystemImpl2-5-and-stub-XSystemHandleTrack.patch
   0010-windows.storage-implement-the-file-save-picker.patch
   0011-winewayland-bind-wl_seat-no-newer-than-the-pointer-listener.patch
+  0012-xgameruntime-run-titles-that-target-a-newer-gaming-services.patch
+  0013-kernelbase-report-PrivateUsage-from-GetProcessMemoryInfo.patch
 )
 
 verify_sha256() {
@@ -374,10 +376,10 @@ verify_winegdk_source_provenance() {
     "ee0543f11737a11f5edec389967bb41482c7f5eda3807c24d171dd6bf6301274" \
     "WineGDK r12 source delta"
   verify_sha256 "$native_root/README.md" \
-    "5a5e3dc34df9dd17b6c7732081e75e9260161602e7cb14cd570cced065b0ece5" \
+    "221e444a94c9383406e10fde93a0153e91f0d3cd43580660f4498bea7b89156f" \
     "WineGDK native5 source-delta README"
   verify_sha256 "$native_root/SOURCE-SHA256SUMS" \
-    "954afa1bc968c36cd8379ea9a53a318261944d5e1dbeaceeba58e0c63fc3c432" \
+    "e5b3763a60374f1a5b1506f459ad80f39fe302d2397f26e2d9b9d220af4e412b" \
     "WineGDK native5 source hash lock"
   verify_sha256 \
     "$native_root/0001-winegdk-native5-Xbox-and-file-picker-runtime.patch" \
@@ -423,6 +425,14 @@ verify_winegdk_source_provenance() {
     "$native_root/0011-winewayland-bind-wl_seat-no-newer-than-the-pointer-listener.patch" \
     "ed550ec1c78d581fbd21d25da429b9b37fb137e19df7128056cb2ec5340a5c59" \
     "WineGDK Wayland seat version"
+  verify_sha256 \
+    "$native_root/0012-xgameruntime-run-titles-that-target-a-newer-gaming-services.patch" \
+    "d43c0f2cf32b624bb12d6db890d6f9a3a45e72523837310d868bec78318f59ce" \
+    "WineGDK Gaming Services version"
+  verify_sha256 \
+    "$native_root/0013-kernelbase-report-PrivateUsage-from-GetProcessMemoryInfo.patch" \
+    "850b8f80a23e1b9a5b25ab2b647125c7affe6650fe8f9c632678bba9dacae35e" \
+    "WineGDK GetProcessMemoryInfo PrivateUsage"
 }
 
 has_marker() {
@@ -910,6 +920,8 @@ for relative_root, names in (
         "native5/0009-xgameruntime-support-IXSystemImpl2-5-and-stub-XSystemHandleTrack.patch",
         "native5/0010-windows.storage-implement-the-file-save-picker.patch",
         "native5/0011-winewayland-bind-wl_seat-no-newer-than-the-pointer-listener.patch",
+        "native5/0012-xgameruntime-run-titles-that-target-a-newer-gaming-services.patch",
+        "native5/0013-kernelbase-report-PrivateUsage-from-GetProcessMemoryInfo.patch",
     )),
     (gdk_proton_provenance_root, ("provenance.env",)),
 ):

@@ -1,0 +1,632 @@
+From f58885ae1ce0a2939206c5f38ba30cc363298dc1 Mon Sep 17 00:00:00 2001
+From: Dan Hamik <dan@hamik.net>
+Date: Tue, 3 Nov 2026 13:25:05 -0600
+Subject: [PATCH] tokens: sign the device in again when its session has expired
+
+The keyring keeps this device's Passport STS token under device-tokens,
+and login.live.com issues it for 60 days. get_device_sts_token handed it
+out without reading its wsu:Expires, and ensure_device_credentials only
+signed the device in again when the entry was missing, so once the token
+lapsed every request it signed was answered with a SOAP Fault -- for as
+long as the keyring kept it. exchange_device_token had no arm for a
+Fault, and a license request ended on
+
+  not implemented: Exchange token supports only singular token right
+  now Fault(Fault)
+
+Deleting device-tokens by hand, and nothing else, was enough: the next
+run signed the same device in again and the license request went
+through.
+
+Read the lifetime: get_device_sts_token and get_user_sts_token report
+TokenStoreError::Expired for a legacy token within five minutes of its
+wsu:Expires (a lifetime that does not parse is used as before). For the
+device token that makes ensure_device_credentials drop device-tokens and
+sign the device in again before anything uses it. The account's token
+(user-tokens, 90 days) can only be replaced by a sign-in, and the
+license request now says so: "not logged in: ... has expired ...; sign
+in again".
+
+A device session can also be refused before its stored lifetime ends.
+exchange_device_token turns a Fault into RSTError::Fault, carrying the
+pp reqstatus when there is one, instead of panicking, and the license
+request answers it by dropping device-tokens (dev_license, user-DA and
+user-tokens stay), signing the device in again through the new
+reauthenticate_device_session, and retrying once. A second refusal is
+reported, not retried.
+
+Reported downstream as
+https://github.com/Wyze3306/BedrockOnLinux/issues/367.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/xodus-cli/src/license.rs        | 106 +++++++++++++++----
+ crates/xodus/src/api/live/mod.rs       |  74 ++++++++++++-
+ crates/xodus/src/api/live/rst/error.rs |   9 ++
+ crates/xodus/src/models/secrets.rs     |  63 +++++++++++
+ crates/xodus/src/tokens/device.rs      |  34 +++++-
+ crates/xodus/src/tokens/manager.rs     | 138 ++++++++++++++++++++++++-
+ crates/xodus/src/tokens/store.rs       |   2 +
+ 7 files changed, 397 insertions(+), 29 deletions(-)
+
+diff --git a/crates/xodus-cli/src/license.rs b/crates/xodus-cli/src/license.rs
+index 1871bef..f46e831 100644
+--- a/crates/xodus-cli/src/license.rs
++++ b/crates/xodus-cli/src/license.rs
+@@ -1,6 +1,7 @@
++use xodus::api::live::RSTError;
+ use xodus::licensing::splicense::{DeviceKey, SPLicense};
+ use xodus::models::live::ExchangeUserTokenOutcome;
+-use xodus::models::secrets::Token;
++use xodus::models::secrets::{LegacyToken, Token};
+ use xodus::models::soap;
+ use xodus::tokens::TokenManager;
+ use xodus::tokens::store::TokenStoreError;
+@@ -15,21 +16,45 @@ use xodus::tokens::store::TokenStoreError;
+ /// download, with nothing to say that signing in again is the way out.
+ /// "not logged in" is the phrase for that.
+ fn missing(what: &str, err: TokenStoreError) -> String {
+-    format!("not logged in: {what} is missing from the keyring ({err}); sign in again")
++    match err {
++        TokenStoreError::Expired(_) => {
++            format!("not logged in: {what} in the keyring has expired ({err}); sign in again")
++        }
++        err => format!("not logged in: {what} is missing from the keyring ({err}); sign in again"),
++    }
+ }
+ 
+-pub async fn get_license(
+-    client: &reqwest::Client,
+-    tokens: &TokenManager,
+-    content_id: String,
+-    market: String,
+-) -> std::result::Result<(DeviceKey, SPLicense), String> {
++fn device_sts_token(tokens: &TokenManager) -> std::result::Result<LegacyToken, String> {
+     let dev_token = tokens
+         .get_device_sts_token()
+         .map_err(|err| missing("this device's Microsoft session", err))?;
+     let Token::Legacy(dev_token) = dev_token else {
+         return Err("Invalid STS token".to_string());
+     };
++    Ok(dev_token)
++}
++
++async fn exchange_device_token(
++    client: &reqwest::Client,
++    dev_token: LegacyToken,
++) -> std::result::Result<soap::RequestSecurityTokenResponse, RSTError> {
++    xodus::api::live::exchange_device_token(
++        client,
++        dev_token,
++        "{d6d5a677-0872-4ab0-9442-bb792fce85c5}".to_string(),
++        "www.microsoft.com".to_owned(),
++        Some(soap::PolicyReference::mbi_ssl()),
++    )
++    .await
++}
++
++pub async fn get_license(
++    client: &reqwest::Client,
++    tokens: &TokenManager,
++    content_id: String,
++    market: String,
++) -> std::result::Result<(DeviceKey, SPLicense), String> {
++    let dev_token = device_sts_token(tokens)?;
+     let user = tokens
+         .get_user()
+         .map_err(|err| missing("the signed-in Microsoft account", err))?;
+@@ -40,15 +65,32 @@ pub async fn get_license(
+         return Err("Unspported user token".to_string());
+     };
+ 
+-    let ms_device_token = xodus::api::live::exchange_device_token(
+-        client,
+-        dev_token.clone(),
+-        "{d6d5a677-0872-4ab0-9442-bb792fce85c5}".to_string(),
+-        "www.microsoft.com".to_owned(),
+-        Some(soap::PolicyReference::mbi_ssl()),
+-    )
+-    .await
+-    .unwrap();
++    // A device session login.live.com refuses is one a fresh sign-in of the
++    // same device cures, which is what deleting `device-tokens` by hand did
++    // (issue #367). Once: a second refusal is reported, not retried.
++    let (dev_token, ms_device_token) = match exchange_device_token(client, dev_token.clone()).await
++    {
++        Ok(token) => (dev_token, token),
++        Err(RSTError::Fault(status)) => {
++            tracing::warn!(
++                "login.live.com refused this device's session (reqstatus: {}); signing the device in again",
++                status.as_deref().unwrap_or("none")
++            );
++            xodus::tokens::device::reauthenticate_device_session(client, tokens).await;
++            let dev_token = device_sts_token(tokens)?;
++            let token = exchange_device_token(client, dev_token.clone())
++                .await
++                .map_err(|err| {
++                    format!("this device's Microsoft session was refused again after signing it in afresh: {err}")
++                })?;
++            (dev_token, token)
++        }
++        Err(err) => {
++            return Err(format!(
++                "could not exchange this device's Microsoft session: {err}"
++            ));
++        }
++    };
+ 
+     let user_token = xodus::api::live::exchange_user_token(
+         client,
+@@ -132,7 +174,9 @@ mod tests {
+             lifetime: soap::Timestamp {
+                 id: None,
+                 created: "2026-09-29T00:00:00Z".to_string(),
+-                expires: "2026-09-30T00:00:00Z".to_string(),
++                // Expired tokens are not handed out, and these tests are
++                // about entries that are missing.
++                expires: "2099-09-30T00:00:00Z".to_string(),
+             },
+         })
+     }
+@@ -194,4 +238,30 @@ mod tests {
+         assert!(err.starts_with("not logged in:"), "unexpected error: {err}");
+         assert!(err.contains("session token"), "{err}");
+     }
++
++    #[tokio::test]
++    async fn an_expired_account_session_asks_for_a_sign_in() {
++        let tokens = TokenManager::with_memory();
++        tokens
++            .save_device_token(PASSPORT_STS.to_string(), legacy())
++            .unwrap();
++        tokens
++            .save_user(&User {
++                puid: "1".to_string(),
++                username: "player@example.com".to_string(),
++            })
++            .unwrap();
++        let Token::Legacy(mut expired) = legacy() else {
++            unreachable!()
++        };
++        expired.lifetime.expires = "2026-09-30T00:00:00Z".to_string();
++        tokens
++            .save_user_token(PASSPORT_STS.to_string(), Token::Legacy(expired))
++            .unwrap();
++
++        let err = license_error(&tokens).await;
++
++        assert!(err.starts_with("not logged in:"), "unexpected error: {err}");
++        assert!(err.contains("has expired"), "{err}");
++    }
+ }
+diff --git a/crates/xodus/src/api/live/mod.rs b/crates/xodus/src/api/live/mod.rs
+index f9abc32..e838d15 100644
+--- a/crates/xodus/src/api/live/mod.rs
++++ b/crates/xodus/src/api/live/mod.rs
+@@ -10,6 +10,8 @@ use crate::models::soap;
+ mod rst;
+ mod utils;
+ 
++pub use rst::RSTError;
++
+ pub const XML_HEADER: &str = r#"<?xml version="1.0" encoding="UTF-8"?>"#;
+ 
+ pub async fn login_device_credential(
+@@ -70,13 +72,36 @@ pub async fn exchange_device_token(
+ 
+     let envelope = request.request(client).await?;
+ 
++    single_security_token(envelope)
++}
++
++/// The one token a device token exchange asks for, or why there is none.
++///
++/// A Fault is what login.live.com sends for a device token it no longer
++/// accepts, and it used to reach `unimplemented!` here -- a panic in the
++/// middle of a license request, for something signing the device in again
++/// fixes.
++fn single_security_token(
++    envelope: soap::Envelope,
++) -> Result<soap::RequestSecurityTokenResponse, rst::RSTError> {
+     match envelope.body.body {
+         soap::BodyContent::RequestSecurityTokenResponse(res) => Ok(*res),
+         soap::BodyContent::RequestSecurityTokenResponseCollection(mut collection) => {
+-            let token = collection.security_tokens.remove(0);
+-            Ok(token)
++            if collection.security_tokens.is_empty() {
++                return Err(rst::RSTError::UnexpectedResponse("empty token collection"));
++            }
++            Ok(collection.security_tokens.remove(0))
++        }
++        soap::BodyContent::Fault(_) => Err(rst::RSTError::Fault(
++            envelope.header.pp.and_then(|pp| pp.req_status),
++        )),
++        soap::BodyContent::EncryptedData(_) => {
++            Err(rst::RSTError::UnexpectedResponse("encrypted body"))
++        }
++        soap::BodyContent::RequestSecurityToken(_)
++        | soap::BodyContent::RequestMultipleSecurityTokens(_) => {
++            Err(rst::RSTError::UnexpectedResponse("token request"))
+         }
+-        b => unimplemented!("Exchange token supports only singular token right now {b:?}"),
+     }
+ }
+ 
+@@ -129,6 +154,49 @@ pub async fn exchange_user_token(
+     })
+ }
+ 
++#[cfg(test)]
++mod faults {
++    use super::{rst::RSTError, single_security_token};
++    use crate::models::soap;
++
++    fn envelope(body: soap::BodyContent, pp: Option<soap::PP>) -> soap::Envelope {
++        let mut header = soap::Header::new();
++        header.pp = pp;
++        soap::Envelope::new(header, soap::Body { body })
++    }
++
++    #[test]
++    fn a_fault_is_an_error_not_a_panic() {
++        // Any status: it is only carried into the message.
++        let pp = soap::PP {
++            xmlns_psf: None,
++            server_version: None,
++            req_status: Some("0x80048821".to_string()),
++            inline_auth_url: None,
++            inline_end_auth_url: None,
++            auth_state_internal: None,
++            user_session_key: None,
++        };
++        let err =
++            single_security_token(envelope(soap::BodyContent::Fault(soap::Fault {}), Some(pp)))
++                .unwrap_err();
++
++        assert!(
++            matches!(&err, RSTError::Fault(Some(status)) if status == "0x80048821"),
++            "{err:?}"
++        );
++        assert!(err.to_string().contains("SOAP Fault"), "{err}");
++    }
++
++    #[test]
++    fn a_fault_without_a_status_is_still_a_fault() {
++        let err = single_security_token(envelope(soap::BodyContent::Fault(soap::Fault {}), None))
++            .unwrap_err();
++
++        assert!(matches!(err, RSTError::Fault(None)), "{err:?}");
++    }
++}
++
+ #[cfg(test)]
+ mod test {
+     use crate::api::live::exchange_device_token;
+diff --git a/crates/xodus/src/api/live/rst/error.rs b/crates/xodus/src/api/live/rst/error.rs
+index b105134..6319293 100644
+--- a/crates/xodus/src/api/live/rst/error.rs
++++ b/crates/xodus/src/api/live/rst/error.rs
+@@ -25,6 +25,15 @@ pub enum RSTError {
+     Utf8(#[from] std::str::Utf8Error),
+     #[error("The signature verification failed - {0}")]
+     InvalidResponseSignature(String),
++    /// login.live.com refused the request. For a request signed with a
++    /// device token this is what a lapsed or revoked device session gets.
++    #[error(
++        "login.live.com refused the token request with a SOAP Fault (reqstatus: {})",
++        .0.as_deref().unwrap_or("none")
++    )]
++    Fault(Option<String>),
++    #[error("login.live.com answered the token request with an unexpected {0}")]
++    UnexpectedResponse(&'static str),
+ }
+ 
+ #[derive(thiserror::Error, Debug)]
+diff --git a/crates/xodus/src/models/secrets.rs b/crates/xodus/src/models/secrets.rs
+index f431aaa..806b8eb 100644
+--- a/crates/xodus/src/models/secrets.rs
++++ b/crates/xodus/src/models/secrets.rs
+@@ -22,6 +22,23 @@ pub struct LegacyToken {
+     pub lifetime: Timestamp,
+ }
+ 
++impl LegacyToken {
++    /// Whether the token's `wsu:Expires` has passed at `now`.
++    ///
++    /// The keyring keeps a Passport STS token for as long as nothing replaces
++    /// it, and login.live.com answers every request signed with an expired one
++    /// with a SOAP Fault. A token is treated as expired a few minutes early so
++    /// a request does not race its own expiry, or the server's clock.
++    /// A lifetime that cannot be read is not called expired: the token is then
++    /// used as before, and the server is the judge.
++    pub fn is_expired_at(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
++        match chrono::DateTime::parse_from_rfc3339(&self.lifetime.expires) {
++            Ok(expires) => now + chrono::TimeDelta::minutes(5) >= expires.to_utc(),
++            Err(_) => false,
++        }
++    }
++}
++
+ #[derive(Debug, Serialize, Deserialize, Clone)]
+ #[serde(untagged)]
+ pub enum Token {
+@@ -103,6 +120,52 @@ fn is_jose_compact(value: &str) -> bool {
+ mod tests {
+     use super::*;
+ 
++    fn legacy_expiring(expires: &str) -> LegacyToken {
++        LegacyToken {
++            key_name: None,
++            token: "token".to_string(),
++            binary_secret: None,
++            tpm_key: None,
++            lifetime: Timestamp {
++                id: None,
++                created: "2026-09-04T00:00:00Z".to_string(),
++                expires: expires.to_string(),
++            },
++        }
++    }
++
++    fn at(time: &str) -> chrono::DateTime<chrono::Utc> {
++        chrono::DateTime::parse_from_rfc3339(time).unwrap().to_utc()
++    }
++
++    #[test]
++    fn a_token_past_its_expiry_is_expired() {
++        let token = legacy_expiring("2026-11-03T12:00:00Z");
++        assert!(token.is_expired_at(at("2026-11-03T12:00:01Z")));
++        assert!(token.is_expired_at(at("2026-12-01T00:00:00Z")));
++    }
++
++    #[test]
++    fn a_token_about_to_expire_is_expired() {
++        let token = legacy_expiring("2026-11-03T12:00:00Z");
++        assert!(token.is_expired_at(at("2026-11-03T11:57:00Z")));
++    }
++
++    #[test]
++    fn a_token_within_its_lifetime_is_not_expired() {
++        let token = legacy_expiring("2026-11-03T12:00:00Z");
++        assert!(!token.is_expired_at(at("2026-11-03T11:00:00Z")));
++        // Fractional seconds and an explicit offset are read the same way.
++        let token = legacy_expiring("2026-11-03T12:00:00.1234567+00:00");
++        assert!(!token.is_expired_at(at("2026-11-03T11:00:00Z")));
++    }
++
++    #[test]
++    fn a_lifetime_that_cannot_be_read_is_not_expired() {
++        assert!(!legacy_expiring("").is_expired_at(at("2026-11-03T12:00:00Z")));
++        assert!(!legacy_expiring("soon").is_expired_at(at("2026-11-03T12:00:00Z")));
++    }
++
+     #[test]
+     fn prefixes_an_opaque_delegation_ticket() {
+         assert_eq!(delegation_ticket("EwAoA+pvBAAU".to_string()), "d=EwAoA+pvBAAU");
+diff --git a/crates/xodus/src/tokens/device.rs b/crates/xodus/src/tokens/device.rs
+index ec363e4..2fc88ac 100644
+--- a/crates/xodus/src/tokens/device.rs
++++ b/crates/xodus/src/tokens/device.rs
+@@ -5,16 +5,42 @@ use crate::models::devicecredential::{Authentication, ClientInfo, DeviceAddReque
+ use crate::models::secrets::Device;
+ use crate::models::soap::BodyContent;
+ use crate::tokens::manager::TokenManager;
++use crate::tokens::store::TokenStoreError;
+ 
+ /// Provisions a device (if none is stored yet) or re-authenticates an existing one
+ /// (if its STS token is missing/expired), persisting the result through `tokens`.
+ pub async fn ensure_device_credentials(client: &reqwest::Client, tokens: &TokenManager) {
+     match tokens.get_device_license() {
+         Err(_) => provision_device(client, tokens).await,
+-        Ok(license) if tokens.get_device_sts_token().is_err() => {
+-            reauthenticate_device(client, tokens, license).await
+-        }
+-        Ok(_) => {}
++        Ok(license) => match tokens.get_device_sts_token() {
++            Ok(_) => {}
++            Err(TokenStoreError::Expired(expires)) => {
++                tracing::info!("this device's STS token expired at {expires}; signing it in again");
++                // Every device token was issued to the same lapsed session.
++                drop_device_tokens(tokens);
++                reauthenticate_device(client, tokens, license).await
++            }
++            Err(_) => reauthenticate_device(client, tokens, license).await,
++        },
++    }
++}
++
++/// Signs this device in again, for a session login.live.com refused although
++/// it had not expired by its stored lifetime.
++///
++/// Drops the device tokens and nothing else -- the device (`dev_license`) and
++/// the account stay -- which is the same thing as deleting `device-tokens`
++/// from the keyring by hand, then runs `ensure_device_credentials`. A caller
++/// should retry a refused request once after this, not in a loop: a refusal
++/// a fresh device session does not cure is not a device-session problem.
++pub async fn reauthenticate_device_session(client: &reqwest::Client, tokens: &TokenManager) {
++    drop_device_tokens(tokens);
++    ensure_device_credentials(client, tokens).await;
++}
++
++fn drop_device_tokens(tokens: &TokenManager) {
++    if let Err(err) = tokens.remove_device_tokens() {
++        tracing::debug!("could not remove the device tokens: {err}");
+     }
+ }
+ 
+diff --git a/crates/xodus/src/tokens/manager.rs b/crates/xodus/src/tokens/manager.rs
+index aeb9897..d3bad3c 100644
+--- a/crates/xodus/src/tokens/manager.rs
++++ b/crates/xodus/src/tokens/manager.rs
+@@ -90,9 +90,23 @@ impl TokenManager {
+         Self::write_token_store(&*self.persistent, keys::DEVICE_TOKENS, address, token)
+     }
+ 
++    /// This device's Passport STS token, unless it has expired.
++    ///
++    /// It is issued for 60 days and nothing used to look at that, so once it
++    /// lapsed every request it signed was answered with a SOAP Fault, for as
++    /// long as the keyring kept it. `TokenStoreError::Expired` is what makes
++    /// `ensure_device_credentials` sign the device in again.
+     pub fn get_device_sts_token(&self) -> Result<Token, TokenStoreError> {
+-        self.get_device_token_for(PASSPORT_STS)?
+-            .ok_or(TokenStoreError::NotFound)
++        Self::unexpired(
++            self.get_device_token_for(PASSPORT_STS)?
++                .ok_or(TokenStoreError::NotFound)?,
++        )
++    }
++
++    /// Drops every device STS token, keeping the device itself (`dev_license`),
++    /// so the next `ensure_device_credentials` signs the same device in again.
++    pub fn remove_device_tokens(&self) -> Result<(), TokenStoreError> {
++        self.persistent.remove(keys::DEVICE_TOKENS)
+     }
+ 
+     // ---- User STS tokens (keyed by SOAP "applies_to" address) --------------
+@@ -105,9 +119,23 @@ impl TokenManager {
+         Self::write_token_store(&*self.persistent, keys::USER_TOKENS, address, token)
+     }
+ 
++    /// The account's Passport STS token, unless it has expired. Only a new
++    /// sign-in replaces it, so an expired one is reported as such rather than
++    /// sent to be refused.
+     pub fn get_user_sts_token(&self) -> Result<Token, TokenStoreError> {
+-        self.get_user_token_for(PASSPORT_STS)?
+-            .ok_or(TokenStoreError::NotFound)
++        Self::unexpired(
++            self.get_user_token_for(PASSPORT_STS)?
++                .ok_or(TokenStoreError::NotFound)?,
++        )
++    }
++
++    fn unexpired(token: Token) -> Result<Token, TokenStoreError> {
++        match &token {
++            Token::Legacy(legacy) if legacy.is_expired_at(chrono::Utc::now()) => {
++                Err(TokenStoreError::Expired(legacy.lifetime.expires.clone()))
++            }
++            _ => Ok(token),
++        }
+     }
+ 
+     // ---- User info -----------------------------------------------------------
+@@ -178,3 +206,105 @@ impl TokenManager {
+         backend.set(key, &serde_json::to_vec(&TokenStore { tokens })?)
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::models::secrets::LegacyToken;
++    use crate::models::soap::Timestamp;
++
++    fn legacy(expires: chrono::DateTime<chrono::Utc>) -> Token {
++        Token::Legacy(LegacyToken {
++            key_name: None,
++            token: "token".to_string(),
++            binary_secret: None,
++            tpm_key: None,
++            lifetime: Timestamp {
++                id: None,
++                created: (expires - chrono::TimeDelta::days(60)).to_rfc3339(),
++                expires: expires.to_rfc3339(),
++            },
++        })
++    }
++
++    fn expired() -> Token {
++        legacy(chrono::Utc::now() - chrono::TimeDelta::days(1))
++    }
++
++    fn current() -> Token {
++        legacy(chrono::Utc::now() + chrono::TimeDelta::days(30))
++    }
++
++    #[test]
++    fn an_expired_device_token_is_not_handed_out() {
++        let tokens = TokenManager::with_memory();
++        tokens
++            .save_device_token(PASSPORT_STS.to_string(), expired())
++            .unwrap();
++
++        assert!(matches!(
++            tokens.get_device_sts_token(),
++            Err(TokenStoreError::Expired(_))
++        ));
++    }
++
++    #[test]
++    fn a_current_device_token_is_handed_out() {
++        let tokens = TokenManager::with_memory();
++        tokens
++            .save_device_token(PASSPORT_STS.to_string(), current())
++            .unwrap();
++
++        assert!(tokens.get_device_sts_token().is_ok());
++    }
++
++    #[test]
++    fn an_expired_user_token_is_not_handed_out() {
++        let tokens = TokenManager::with_memory();
++        tokens
++            .save_user_token(PASSPORT_STS.to_string(), expired())
++            .unwrap();
++
++        assert!(matches!(
++            tokens.get_user_sts_token(),
++            Err(TokenStoreError::Expired(_))
++        ));
++    }
++
++    #[test]
++    fn removing_the_device_tokens_keeps_the_device_and_the_account() {
++        let tokens = TokenManager::with_memory();
++        tokens
++            .save_device_license(&Device {
++                puid: "1".to_string(),
++                hwid: "hw".to_string(),
++                device_id: "dev".to_string(),
++                splicense: String::new(),
++                username: "02device".to_string(),
++                password: "secret".to_string(),
++            })
++            .unwrap();
++        tokens
++            .save_device_token(PASSPORT_STS.to_string(), expired())
++            .unwrap();
++        tokens
++            .save_user_token(PASSPORT_STS.to_string(), current())
++            .unwrap();
++        tokens
++            .save_user(&User {
++                puid: "2".to_string(),
++                username: "player@example.com".to_string(),
++            })
++            .unwrap();
++
++        tokens.remove_device_tokens().unwrap();
++
++        assert!(matches!(
++            tokens.get_device_sts_token(),
++            Err(TokenStoreError::NotFound)
++        ));
++        assert!(tokens.get_device_license().is_ok());
++        assert!(tokens.get_user_sts_token().is_ok());
++        assert!(tokens.get_user().is_ok());
++    }
++}
+diff --git a/crates/xodus/src/tokens/store.rs b/crates/xodus/src/tokens/store.rs
+index 76d2329..3718d99 100644
+--- a/crates/xodus/src/tokens/store.rs
++++ b/crates/xodus/src/tokens/store.rs
+@@ -25,4 +25,6 @@ pub enum TokenStoreError {
+     Serde(#[from] serde_json::Error),
+     #[error("entry not found")]
+     NotFound,
++    #[error("entry expired at {0}")]
++    Expired(String),
+ }
+-- 
+2.43.0
+

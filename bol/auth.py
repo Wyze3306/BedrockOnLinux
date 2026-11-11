@@ -113,18 +113,29 @@ def msa_logout():
     return True
 
 
-def msa_refresh(refresh_token):
-    """Trade a refresh token for a fresh one (same shape WineGDK's XUser uses
-    internally). Returns the token dict, or None if it was rejected."""
+def msa_refresh_result(refresh_token):
+    """Return ``(fresh_token, error)`` for an MSA refresh response.
+
+    Transport failures still raise, which lets callers distinguish an offline
+    machine from Microsoft's explicit ``invalid_grant`` response.  Keep this
+    detail here rather than making every caller repeat the token endpoint.
+    """
     t = http_post_form(MSA_TOKEN, {
         "client_id": MSA_CLIENT_ID, "scope": MSA_SCOPE,
         "grant_type": "refresh_token", "refresh_token": refresh_token})
-    return t if t.get("refresh_token") else None
+    return (t if t.get("refresh_token") else None, t.get("error"))
+
+
+def msa_refresh(refresh_token):
+    """Trade a refresh token for a fresh one (same shape WineGDK's XUser uses
+    internally). Returns the token dict, or None if it was rejected."""
+    fresh, _error = msa_refresh_result(refresh_token)
+    return fresh
 
 
 class NativeAuth:
-    """MSA device-code login for the no-ProxyPass path. We only obtain an
-    OAuth refresh token; WineGDK's XUser reads it from the prefix registry
+    """MSA device-code login. We only obtain an OAuth refresh token;
+    WineGDK's XUser reads it from the prefix registry
     and performs the Xbox Live / XSTS exchange itself."""
 
     def __init__(self):
@@ -237,6 +248,15 @@ _XBL_PREAUTH_MESSAGES = {
         "finish creating or verifying the Xbox profile and accept any "
         "requested terms, then sign out and sign in again."
     ),
+    # Microsoft's token endpoint answered, and refused the saved refresh
+    # token (invalid_grant): Xbox Live was never asked anything, so its
+    # profile advice would send people to fix an account nothing is wrong
+    # with.
+    "signin": (
+        "Microsoft no longer accepts the sign-in saved on this computer, so "
+        "Xbox Live could not be asked for a session. Sign out in the "
+        "launcher, sign in again, then click PLAY."
+    ),
     "network": (
         "Xbox Live could not be reached. Check the Internet connection, DNS, "
         "VPN or proxy and firewall, then try again."
@@ -266,6 +286,7 @@ _XBL_PREAUTH_DIAGNOSTIC_PRIORITY = {
     "local": 40,
     "session": 40,
     "account": 50,
+    "signin": 50,
     "age": 60,
 }
 
@@ -824,7 +845,7 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
 
     ``refresh_unreachable`` tells the caller's Microsoft token refresh failed
     on transport rather than being rejected, so a missing access token is
-    reported as an unreachable service instead of a bad account.
+    reported as an unreachable service instead of a refused sign-in.
     """
     import base64, uuid as _uuid
     _clear_xbl_preauth_diagnostic()
@@ -908,7 +929,7 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
         return _fallback("xbl_preauth: no fresh Microsoft access token; cannot "
                          "refresh the Xbox multiplayer chain.",
                          "microsoft-token",
-                         "network" if refresh_unreachable else "account")
+                         "network" if refresh_unreachable else "signin")
     try:
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives import hashes, serialization
@@ -1378,6 +1399,14 @@ def wine_apply_winegdk_prereqs():
             r"Software\Microsoft\WindowsRuntime\ActivatableClassId"
             r"\Windows.Storage.Pickers.FileSavePicker",
             "DllPath", r"C:\windows\system32\windows.storage.dll"),
+        # A build that asks for a newer Gaming Services than the engine's
+        # 6247 is refused at GDKC_InitAPI, and the game quits with exit 0
+        # before its window opens: Preview 1.26.70 asks for 7849 (#274).
+        # Without this value the engine's check reads an uninitialised
+        # variable, so the same build started or not from one launch to the
+        # next, and always started with Wine tracing on.
+        reg_dword(r"Software\Microsoft\GamingServices",
+                  "IgnoreVersionMismatch", 1),
     ]
     # Azure rejects Wine GnuTLS' TLS 1.3 handshake (7-byte fatal Alert →
     # 0x80090304); forcing TLS 1.2 via DefaultSecureProtocols lets the

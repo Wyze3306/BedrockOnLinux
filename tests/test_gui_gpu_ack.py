@@ -27,7 +27,7 @@ def _status(previous_boot_fault=False, message="an interrupted launch"):
     )
 
 
-class FakeMessageBox:
+class FakeWindow:
     """Records what the dialogs were asked, and answers yes or no."""
 
     def __init__(self, answer=True):
@@ -36,27 +36,27 @@ class FakeMessageBox:
         self.info = []
         self.errors = []
 
-    def askyesno(self, title, message, parent=None):
-        self.asked.append((title, message, parent))
+    def question_box(self, title, message):
+        self.asked.append((title, message))
         return self.answer
 
-    def showinfo(self, title, message, parent=None):
-        self.info.append((title, message, parent))
+    def info_box(self, title, message):
+        self.info.append((title, message))
 
-    def showerror(self, title, message, parent=None):
-        self.errors.append((title, message, parent))
+    def error_box(self, title, message):
+        self.errors.append((title, message))
 
 
 class AcknowledgementOfferTests(unittest.TestCase):
     def _offer(self, answer=True, acknowledged=True, status=None, **kwargs):
-        box = FakeMessageBox(answer)
+        box = FakeWindow(answer)
         ack = mock.Mock(return_value=acknowledged)
         with mock.patch.object(gui, "acknowledge_gpu_crash", ack), \
                 mock.patch.object(gui, "gpu_crash_acknowledgement_status",
                                   return_value=_status(
                                       message="still refused")):
             result = gui._offer_gpu_incident_acknowledgement(
-                box, "parent", status or _status(), **kwargs)
+                box, status or _status(), **kwargs)
         return result, box, ack
 
     def test_declining_the_confirmation_writes_nothing(self):
@@ -84,11 +84,10 @@ class AcknowledgementOfferTests(unittest.TestCase):
         # would trade one annoyance for a dialog that explains nothing.
         _, box, _ = self._offer(prefix="Unsafe graphics session: …\n\n",
                                 title="Minecraft could not start")
-        title, message, parent = box.asked[0]
+        title, message = box.asked[0]
         self.assertEqual(title, "Minecraft could not start")
         self.assertTrue(message.startswith("Unsafe graphics session: …"))
         self.assertIn("an interrupted launch", message)
-        self.assertEqual(parent, "parent")
 
     def test_the_confirmation_names_what_must_be_checked_first(self):
         _, box, _ = self._offer(status=_status(previous_boot_fault=True))

@@ -181,3 +181,16 @@ def test_the_account_that_played_last_gets_the_import(tmp_path):
     assert (current / "world_templates" / "Aether Legends"
             / "manifest.json").is_file()
     assert not (stale / "world_templates").exists()
+
+
+def test_preview_imports_into_its_own_shared_folder(tmp_path):
+    from unittest import mock
+
+    from bol import perfcheck
+    with mock.patch.object(perfcheck, "_launched_edition",
+                           return_value="preview"):
+        folder = content._mojang_dir(tmp_path)
+    assert "/Minecraft Bedrock Preview/Users/Shared/" in str(folder)
+    with mock.patch.object(perfcheck, "_launched_edition", return_value=None):
+        assert "/Minecraft Bedrock/Users/Shared/" in str(
+            content._mojang_dir(tmp_path))

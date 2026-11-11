@@ -187,6 +187,35 @@ class PrefixTests(unittest.TestCase):
                     Path(td), Path(td) / "empty", environ={}), [])
             update.assert_not_called()
 
+    def test_playstation_pads_go_through_sdl(self):
+        # winebus prefers hidraw for these, which leaves the game only the
+        # touchpad (#57); Hidraw = 0 sends them through SDL's gamepad mapping.
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self.make_prefix(td)
+            self.assertTrue(hidraw.playstation_pads_through_sdl(
+                prefix, environ={}))
+            system = (prefix / "system.reg").read_text()
+            for key in ("054c/05c4", "054c/09cc", "054c/0ba0", "054c/0ce6",
+                        "054c/0df2"):
+                section = (r"[System\\ControlSet002\\Services\\winebus"
+                           r"\\Devices\\" + key + "]")
+                self.assertIn(section, system)
+            self.assertEqual(system.count('"Hidraw"=dword:00000000'), 5)
+
+            # Re-applied at every PLAY without rewriting the hive.
+            before = (prefix / "system.reg").read_bytes()
+            self.assertFalse(hidraw.playstation_pads_through_sdl(
+                prefix, environ={}))
+            self.assertEqual((prefix / "system.reg").read_bytes(), before)
+
+    def test_playstation_opt_out_restores_wines_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self.make_prefix(td)
+            hidraw.playstation_pads_through_sdl(prefix, environ={})
+            hidraw.playstation_pads_through_sdl(
+                prefix, environ={"BOL_HIDRAW": "all"})
+            self.assertNotIn('"Hidraw"=', (prefix / "system.reg").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

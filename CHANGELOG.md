@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 2.3.1 — 2026-11-11
+
+Other players keep their own skins on servers, the Realms button of the title
+screen works again, and closing Minecraft ends the session. A shortcut can now
+update Minecraft before starting it, and Linesia is listed under Featured
+Servers.
+
+### Added
+
+- **A shortcut can keep Minecraft up to date.** With **Settings ▸ General ▸
+  Update Minecraft when started from a shortcut** on, a direct launch
+  shortcut (or `bedrock-on-linux play`) installs the newest build of the
+  edition you play before starting it, instead of staying on the build picked
+  in the launcher. `bedrock-on-linux play --update` does it once. It is off
+  by default, because a server that has not updated yet refuses a newer game,
+  and if the update cannot be made the installed build starts as usual (#328).
 
 ### Added
 
@@ -42,6 +57,226 @@
 
 ### Fixed
 
+- **Other players keep their own skins.** On servers, players and NPCs that
+  joined after you sometimes showed up with a random default skin and kept
+  it. The game asks Windows how much memory it is using to decide whether it
+  can afford more skins, and Wine left that answer unwritten, so now and then
+  the game believed it was almost out of memory. The engine (`native22`) now
+  gives the real figure. Found and fixed by @ItsClairton (#292).
+
+- **The Realms button of the title screen opens the Realms page again.** It
+  answered "An error has occurred. Going back to the previous screen...". The
+  launcher's own patch of the game's interface, the one that takes the "You
+  need a Microsoft account" notice off the Servers and Realms tabs, handed the
+  Realms pages a value of the wrong kind, and they stopped on it. The patch
+  is rewritten, and a game patched by an earlier launcher is fixed at the next
+  PLAY (#337).
+
+- **Closing Minecraft ends the session again.** A couple of minutes into a
+  game, its WebView2 starts `MicrosoftEdgeUpdate.exe`, which never exits under
+  Wine, and Proton waits for every Wine process before it returns. So after
+  the game window closed, the launcher still considered Minecraft running and
+  PLAY refused to start it again. Once the game has been closed for a few
+  seconds, the launcher now closes that updater (and any WebView2 process
+  left behind) itself.
+
+### Changed
+
+- **Linesia SkyFaction is listed under Featured Servers, like a real partner
+  server.** It used to sit among your own servers as a bare address. It now
+  has a tile with its icon in the Featured Servers section, and its page shows
+  a banner, a description, the server's address and Activities cards for what
+  there is to discover there (SkyFaction, Warzone, Industry, The Great Sea),
+  with the same Play button as before. The game gets its featured servers from Microsoft, so there is no
+  list on disk to add to: the Servers-tab entry the launcher already writes is
+  still what you join through, and the Servers tab is patched to show it as a
+  featured server. If a Minecraft update changes the Servers tab too much for
+  the patch, the launcher says so and Linesia goes back under your own servers.
+
+- **The yellow text under the Minecraft logo is about Linux now.** The title
+  screen picks one of the launcher's own splash lines ("I use Arch, btw!",
+  "Wine not?", "sudo make me a sandwich!", …) instead of Mojang's. The
+  original list is kept next to it as `splashes.json.bol-orig`.
+
+## 2.3.0 — 2026-11-08
+
+Signing in works again on the current Minecraft, and the downloader keeps its
+Microsoft sessions alive instead of stopping two months after the Store
+sign-in. The in-game sign-in patches apply to Minecraft 1.26.60 and later, a
+rotated online-play token is no longer thrown away, and scrolling Settings no
+longer moves the game to another graphics card. Python 3.15 is supported.
+
+### Fixed
+
+- **The Microsoft Store sign-in no longer hangs silently after the
+  password** (#366). When Microsoft's page handed back its tokens without
+  a field xodus-cli never uses, the reply was dropped and the window sat on
+  *Please wait* for ever. Those fields are optional now, and
+  `logs/store-login.log` records each sign-in page that loads and any reply
+  it could not use, so a sign-in that still stops says where.
+
+- **Minecraft starts and downloads again after about two months of use**
+  ([#367](https://github.com/Wyze3306/BedrockOnLinux/issues/367)). PLAY and
+  downloads stopped on `not implemented: Exchange token supports only singular
+  token right now Fault(Fault)`. The downloader keeps two Microsoft sign-ins
+  from the Store sign-in, one for this computer that Microsoft issues for 60
+  days and one for the account, for 90, and it renewed neither: once the
+  computer's ran out, Microsoft refused every request it signed and the
+  downloader crashed on the refusal. The computer's is now signed in again
+  when it has expired, or when Microsoft refuses it anyway, and the request
+  tried once more; the account's is renewed in its last week without a new
+  sign-in. Neither registers another device. If Microsoft still refuses, or
+  the account's sign-in ran out unused, the launcher says so and asks you to
+  sign in to the Microsoft Store account again, instead of "No known cause"
+  or a Rust panic. Without a connection, PLAY still says that a connection
+  is what is missing.
+
+- **Scrolling Settings no longer changes the graphics card on the way past**
+  ([#363](https://github.com/Wyze3306/BedrockOnLinux/issues/363)). A wheel
+  turn over the *Graphics card* list while scrolling the Advanced tab picked
+  the next card and saved it, so a desktop with an NVIDIA card could start
+  Minecraft on the processor's integrated GPU, at single-digit frame rates,
+  with nothing to say why. The lists and number fields in Settings now take
+  the wheel only once clicked; otherwise it scrolls the page.
+
+- **A revoked online-play sign-in is no longer shown as signed in** (#331,
+  #360). The
+  background Xbox warm-up refreshed Microsoft's token but discarded its
+  rotated replacement, leaving a revoked token on disk while the account row
+  stayed green. Minecraft then opened without an Xbox user and its broken
+  in-game sign-in ended at an error such as *Drowned*. The replacement token
+  is now saved atomically, and an explicit `invalid_grant` response marks the
+  account as needing attention and offers **Sign in again**. Network and
+  transient service failures do not sign the player out. Relinking retires
+  only the refused online-play session; the Store/download account is kept.
+
+- **Minecraft Preview reads its own settings, not the stable game's.** Both
+  editions share one Wine prefix, but the launcher only ever looked in the
+  stable game's folder. Launching Preview capped it at the stable game's Max
+  Framerate, set that file's limit aside instead of Preview's (leaving
+  Preview's own limiter to hold a CPU core), decided the display cap and
+  fullscreen fix from the stable game's vsync and fullscreen settings, and
+  never added the default servers to Preview's list. Each folder is also seen
+  once now, not twice through Proton's `users/<login>` link.
+
+- **The online-multiplayer safety warning stays off for signed-in players.**
+  The launcher only switched it off in the signed-out profile's settings,
+  while a signed-in game reads its account's own file, so the warning kept
+  coming back. Every profile's file is patched now, Preview's included.
+  Worlds, packs and skins imported from the launcher while Preview is
+  selected also go to Preview's folder rather than the stable game's.
+
+- **PLAY from the launcher works on Python 3.15** (#356). Python 3.15 imports
+  parts of its standard library lazily, and once PySide6 had replaced the
+  import function those names never resolved: PLAY stopped on
+  `'lazy_import' object is not callable`. The launcher now turns lazy
+  imports off before it imports anything, as Python 3.14 behaved.
+- **The in-game sign-in patches apply to Minecraft 1.26.60 and Preview
+  1.26.70 again.** Their UI bundle calls its hooks directly, which moved it
+  past both anchors: the Servers tab went back to "You need a Microsoft
+  account", the in-game Sign-in link to "Failed to log in", and `doctor`
+  said `sign-in ui: NOT PATCHED`.
+
+## 2.2.10 — 2026-10-27
+
+Minecraft starts and downloads again after Microsoft changed its sign-in
+token, and Minecraft Preview 1.26.70 starts on the new engine, native21.
+PLAY reaches the game sooner and says why when Microsoft refuses the
+licence, PlayStation controllers work in the game, and old server resource
+packs no longer fill the disk.
+
+### Fixed
+
+- **PLAY reaches the game about a second sooner.** Every launch rewrote a
+  handful of values in the Wine registry and rescanned the whole of
+  `system.reg` for each one, about 100,000 lines in a played-in prefix: over
+  a second on its own. The file is now read into its sections once. The
+  Microsoft token refresh, a round trip that nothing needs until the Xbox
+  sign-in, also runs while the prefix is prepared instead of before it.
+  Measured from PLAY to the game process: about 2.4 s before, 1 s after.
+
+- **A missing system locale that costs seconds at every start is named.**
+  The Steam Linux Runtime always needs `en_US.UTF-8` beside the player's own
+  locale, and when the system lacks one it rebuilds them all at each launch:
+  3 to 6 seconds more before the game window on a French desktop with only
+  `fr_FR.UTF-8` installed. PLAY now says which locale is missing and how to
+  add it once.
+
+- **Minecraft Preview 1.26.70 starts**
+  ([#274](https://github.com/Wyze3306/BedrockOnLinux/issues/274)). It asks
+  for a newer Gaming Services than the engine reports and quit at once,
+  without a window or a message, on some launches and not others: the switch
+  that skips that check was read through uninitialised variables. Engine
+  native21 reads it correctly and no longer refuses such a build at all; it
+  notes the difference in the log and lets the game start. Measured: the
+  Preview's window opened on 7 launches out of 7, against 0 out of 5
+  before.
+
+- **A licence Microsoft refuses is reported instead of PLAY doing nothing**
+  ([#345](https://github.com/Wyze3306/BedrockOnLinux/issues/345)). When the
+  licensing service answered with something other than a licence, the game
+  never started and the launcher came back without a word. PLAY now ends
+  with the refusal, Microsoft's reason when the downloader gives one, and
+  what to do about it.
+
+- **The launcher no longer hides while the game runs on an ordinary
+  desktop** ([#293](https://github.com/Wyze3306/BedrockOnLinux/issues/293)).
+  It took any `GAMESCOPE*` property on the display's root window for Steam
+  Game Mode and stepped aside, but the Steam client leaves its own
+  `GAMESCOPECTRL_*` properties there on a normal desktop too. Only the
+  properties Gamescope itself writes count now.
+
+- **Injected clients on the Legacy renderer**
+  ([#291](https://github.com/Wyze3306/BedrockOnLinux/issues/291)). Flarial
+  and similar clients draw through Direct3D 12, which the Legacy
+  compatibility renderer does not use, so their menu never appeared. PLAY now
+  says so when automatic injection is on with Legacy.
+
+- **Minecraft starts and downloads again**
+  ([#322](https://github.com/Wyze3306/BedrockOnLinux/issues/322)). Since
+  2026-10-12 every PLAY ended at once with `request error: error decoding
+  response body for url (https://licensing.mp.microsoft.com/v7.0/licenses/content)`.
+  Microsoft changed the format of the sign-in token the licence request
+  carries, and the licensing service refused the old way of sending it
+  (`401 InvalidMsaTicketFormat`), so the content key that decrypts the game
+  never arrived. The downloader now sends the token in the form the service
+  accepts. A refused licence request also says why now, with the HTTP status
+  and Microsoft's reason, instead of "error decoding response body".
+
+- **DualSense and DualShock 4 controllers work in the game**
+  ([#57](https://github.com/Wyze3306/BedrockOnLinux/issues/57)). In the
+  game, a PlayStation controller only moved the mouse with its touchpad,
+  with or without Steam Input: Wine handed Minecraft the controller's raw
+  Sony input, which the game does not read as a gamepad. The settings the
+  launcher used to turn that off only work with Proton's own Wine, not with
+  the engine the launcher installs. PLAY now sets the option this engine
+  reads, so the controller goes through SDL and reaches the game as an
+  Xbox-style gamepad (or, with Steam Input on, only Steam's virtual pad
+  does). `BOL_HIDRAW=all` turns it off.
+
+- **The fullscreen fix, the virtual-desktop bridge and DLL injection run
+  on systems without libunwind**
+  ([#324](https://github.com/Wyze3306/BedrockOnLinux/issues/324)). These
+  small Windows programs run with the engine's Wine beside the game, but
+  without the engine's own libraries, so on a system that has no
+  `libunwind.so.8` of its own, such as Guix, each one stopped at once with
+  "could not load ntdll.so". A fullscreen start then stayed stretched or
+  framed. They now get the same libraries as the game.
+
+- **A refused Microsoft sign-in is no longer blamed on the Xbox profile**
+  ([#331](https://github.com/Wyze3306/BedrockOnLinux/issues/331)). When
+  Microsoft refuses the sign-in saved on the computer, PLAY said "Xbox Live
+  rejected this Microsoft account" and sent people to xbox.com to fix a
+  profile Xbox Live had never been asked about. It now says the saved
+  sign-in was refused and to sign out and sign in again.
+
+- **Drop-down lists are readable in the light theme**
+  ([#332](https://github.com/Wyze3306/BedrockOnLinux/issues/332)). On a
+  dark desktop, the list a drop-down opens, such as **Graphics card**, kept
+  the desktop's dark background under the light theme's dark text. Those
+  lists, right-click menus and tooltips now take the launcher's own colours,
+  in either theme and on any desktop.
+
 - **Old versions of server resource packs no longer pile up.** Every pack
   version a server sends stays unpacked in the prefix's
   `Temp/Minecraft Bedrock/minecraftpe/packcache`. On Windows the system's
@@ -53,6 +288,17 @@
   temporary files. The newest version of every pack stays, so nothing a
   server sends today is lost. On that prefix this frees 4.2 GB once the
   week has passed.
+
+### Packaging
+
+- **Engine native21.** It differs from native20 only in xgameruntime's
+  Gaming Services version check (WineGDK patch `0012`). Built and attested
+  by the release workflow: archive
+  `e98512e74b1c3f930fdd213b24ac4a01abfa3a6336276076a509530c540b2b13`.
+- The Minecraft downloader is the reviewed `64d39eb87a56-p7`, and the
+  release workflow checks that it is published before it releases the
+  launcher. Downloader updates are built for review first, then published
+  together with the launcher once they are merged.
 
 ## 2.2.9 — 2026-10-09
 

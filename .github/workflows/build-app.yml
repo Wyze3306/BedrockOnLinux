@@ -58,6 +58,34 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Verify the published Minecraft downloader before packaging
+        run: |
+          set -euo pipefail
+          cfg=bol/config.py
+          repo="$(grep -m1 '^WINEGDK_PREBUILT_REPO = ' "$cfg" | cut -d'"' -f2)"
+          commit="$(grep -m1 '^XODUS_SOURCE_COMMIT = ' "$cfg" | cut -d'"' -f2)"
+          rev="$(grep -m1 '^XODUS_REV = ' "$cfg" | cut -d'"' -f2)"
+          pin="$(grep -m1 '^XODUS_ARCHIVE_SHA256 = ' "$cfg" | cut -d'"' -f2)"
+          level="$(find third_party/xodus/patches -maxdepth 1 -name '*.patch' | wc -l)"
+          want="${commit:0:12}"
+          [ "$level" -eq 0 ] || want="${want}-p${level}"
+          if [ "$rev" != "$want" ] || [ -z "$pin" ]; then
+            echo "::error::Xodus revision or integrity pin is not ready. Build, review, pin and publish $want first."
+            exit 1
+          fi
+          verify_asset() {
+            local asset="$1" expected="$2" directory
+            directory="$(mktemp -d)"
+            gh release download "xodus-${rev}" -R "$repo" -p "$asset" -D "$directory"
+            echo "${expected}  ${directory}/${asset}" | sha256sum -c -
+          }
+          verify_asset "xodus-cli-${rev}.tar.gz" "$pin"
+          webview_rev="$(grep -m1 '^XODUS_WEBVIEW_REV = ' "$cfg" | cut -d'"' -f2)"
+          webview_pin="$(grep -m1 '^XODUS_WEBVIEW_SHA256 = ' "$cfg" | cut -d'"' -f2)"
+          if [ -n "$webview_pin" ]; then
+            verify_asset "xodus-webview-${webview_rev}.tar.xz" "$webview_pin"
+          fi
+
       - name: Install the packaging toolchain
         run: |
           sudo apt-get update

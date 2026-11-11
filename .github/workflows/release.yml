@@ -25,6 +25,16 @@
 name: Release
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - bol/config.py
+      - third_party/xodus/**
+      - scripts/build-xodus-cli.sh
+      - scripts/build-xodus-webview.sh
+      - scripts/pin-apt-snapshot.sh
+      - .github/workflows/build-xodus.yml
+      - .github/workflows/release.yml
   workflow_dispatch:
     inputs:
       publish:
@@ -50,6 +60,7 @@ jobs:
       build_xcurl: ${{ steps.probe.outputs.build_xcurl }}
       build_winegdk: ${{ steps.probe.outputs.build_winegdk }}
       build_vkd3d: ${{ steps.probe.outputs.build_vkd3d }}
+      build_xodus: ${{ steps.probe.outputs.build_xodus }}
       channel: ${{ steps.probe.outputs.channel }}
       publish: ${{ steps.probe.outputs.publish }}
     steps:
@@ -69,6 +80,14 @@ jobs:
           cfg=bol/config.py
           xrev="$(grep -m1 '^OPENSSL_XCURL_REV = ' $cfg | cut -d'"' -f2)"
           xsha="$(grep -m1 '^OPENSSL_XCURL_ARCHIVE_SHA256 = ' $cfg | cut -d'"' -f2)"
+          xodus_rev="$(grep -m1 '^XODUS_REV = ' "$cfg" | cut -d'"' -f2)"
+          xodus_sha="$(grep -m1 '^XODUS_ARCHIVE_SHA256 = ' "$cfg" | cut -d'"' -f2)"
+          webview_rev="$(grep -m1 '^XODUS_WEBVIEW_REV = ' "$cfg" | cut -d'"' -f2)"
+          webview_sha="$(grep -m1 '^XODUS_WEBVIEW_SHA256 = ' "$cfg" | cut -d'"' -f2)"
+          if [ -z "$xodus_sha" ]; then
+            echo "::error::Build Xodus with publish=false and pin the reviewed archive before releasing."
+            exit 1
+          fi
           commit="$(grep -m1 '^WINEGDK_SOURCE_COMMIT = ' $cfg | cut -d'"' -f2)"
           wshort="${commit:0:12}"
           wmanifest="$(grep -m1 '^WINEGDK_SOURCE_MANIFEST_SHA256 = ' "$cfg" | cut -d'"' -f2)"
@@ -92,6 +111,11 @@ jobs:
             fi
           }
           bx="$(needs_build "xcurl-${xrev}" "openssl-xcurl-set-${xrev}.tar.gz" "$xsha")"
+          bxo="$(needs_build "xodus-${xodus_rev}" "xodus-cli-${xodus_rev}.tar.gz" "$xodus_sha")"
+          if [ -n "$webview_sha" ] && \
+              [ "$(needs_build "xodus-${xodus_rev}" "xodus-webview-${webview_rev}.tar.xz" "$webview_sha")" = "true" ]; then
+            bxo=true
+          fi
           bw="$(needs_build "winegdk-${wshort}-${wmshort}" "winegdk-prefix-${wshort}-${wmshort}.tar.gz" "$wpre")"
           # vkd3d has no single committed tarball SHA (its wrapper is not the
           # integrity boundary; the DLL hashes in OUTPUT-SHA256SUMS are). So it
@@ -100,6 +124,8 @@ jobs:
           bv="$(needs_build "$vtag" "vkd3d-universal-3.0.1-nv-dgc.tar.gz" "")"
           if [ "${{ github.event_name }}" = "schedule" ]; then
             channel=nightly; publish=true
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            channel=release; publish=true
           else
             channel=release; publish="$PUBLISH_INPUT"
           fi
@@ -107,6 +133,7 @@ jobs:
             echo "build_xcurl=$bx"
             echo "build_winegdk=$bw"
             echo "build_vkd3d=$bv"
+            echo "build_xodus=$bxo"
             echo "channel=$channel"
             echo "publish=$publish"
           } >> "$GITHUB_OUTPUT"
@@ -132,6 +159,17 @@ jobs:
       id-token: write
       attestations: write
     uses: ./.github/workflows/build-winegdk.yml
+    with:
+      publish: true
+
+  xodus:
+    needs: resolve
+    if: ${{ needs.resolve.outputs.build_xodus == 'true' }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/build-xodus.yml
     with:
       publish: true
 
@@ -166,7 +204,7 @@ jobs:
 
   # ---- App: reuses engine + xcurl, publishes with the pinned bill of materials
   app:
-    needs: [resolve, engine]
+    needs: [resolve, engine, xodus]
     if: ${{ !cancelled() && !failure() }}
     permissions:
       contents: write

@@ -309,6 +309,40 @@ class GraphicsSafetyTests(unittest.TestCase):
         self.assertFalse(gpu_safety._gamescope_root_atoms({}))
         self.assertFalse(gpu_safety._gamescope_root_atoms({"DISPLAY": "  "}))
 
+    def _root_atoms_with(self, names):
+        """_gamescope_root_atoms against a root window holding ``names``."""
+        import ctypes
+
+        names = [name.encode() for name in names]
+        buffers = [ctypes.create_string_buffer(name) for name in names]
+        atoms = (ctypes.c_ulong * max(len(names), 1))(*range(len(names)))
+
+        def list_properties(_display, _root, count):
+            count._obj.value = len(names)
+            return ctypes.cast(atoms, ctypes.POINTER(ctypes.c_ulong))
+
+        xlib = SimpleNamespace(
+            XOpenDisplay=lambda _name: 1,
+            XDefaultRootWindow=lambda _display: 1,
+            XListProperties=list_properties,
+            XGetAtomName=lambda _display, atom: ctypes.addressof(
+                buffers[atom]),
+            XFree=lambda _pointer: None,
+            XCloseDisplay=lambda _display: None,
+        )
+        with mock.patch.object(ctypes.cdll, "LoadLibrary", return_value=xlib):
+            return gpu_safety._gamescope_root_atoms({"DISPLAY": ":0"})
+
+    def test_root_atoms_need_the_compositors_own_properties(self):
+        # The Steam client writes its GAMESCOPECTRL_* control properties on
+        # an ordinary desktop's root window too, and they outlive Steam: they
+        # are not Gamescope, and taking them for it hid the launcher (#293).
+        self.assertFalse(self._root_atoms_with(
+            ["_NET_SUPPORTED", "GAMESCOPECTRL_BASELAYER_APPID",
+             "GAMESCOPECTRL_BASELAYER_WINDOW"]))
+        self.assertTrue(self._root_atoms_with(
+            ["_NET_SUPPORTED", "GAMESCOPE_FOCUSED_WINDOW"]))
+
     def test_gamescope_only_exempts_a_parsed_zero_provider_result(self):
         def failed(*_args, **_kwargs):
             return result(returncode=1)

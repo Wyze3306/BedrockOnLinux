@@ -261,11 +261,6 @@ def load_failure(binary, env=None):
     return (proc.stderr or "").strip() or f"exit status {proc.returncode}"
 
 
-def binary_loads(binary, env=None):
-    """Whether the dynamic loader can start ``binary`` with this environment."""
-    return load_failure(binary, env) is None
-
-
 def host_tls_available(env=None):
     """Whether the host's WebKitGTK can open an https:// page.
 

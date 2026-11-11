@@ -131,6 +131,9 @@ def test_injector_uses_game_prefix_and_wine_z_path(tmp_path):
         "Minecraft.Windows.exe",
     ]
     assert kwargs["env"]["WINEPREFIX"] == str(prefix)
+    # The engine's own libunwind, which a Guix host does not have (#324).
+    assert kwargs["env"]["LD_LIBRARY_PATH"].startswith(
+        str(engine / "files" / "lib" / "x86_64-linux-gnu") + os.pathsep)
     assert kwargs["timeout"] == 60
     assert (logs / "injector.log").is_file()
 

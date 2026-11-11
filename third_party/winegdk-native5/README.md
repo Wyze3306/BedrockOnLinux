@@ -156,7 +156,33 @@ the seat is now bound at version 7, where the wheel arrives as
 `axis_discrete`, which the driver already turns into the same `WHEEL_DELTA`
 steps; with newer headers nothing changes.
 
+The `0012` patch lets a title built against a newer Gaming Services run.
+`GDKC_InitAPI` refused every title asking for more than the 6247 this runtime
+reports, and Minecraft Preview 1.26.70 asks for 7849: it quit with exit code 0
+before its window opened, with nothing on screen to say why (issue #274). On
+Windows the answer is a Gaming Services update; here there is none to install,
+so the difference is now a warning and the title continues, its calls this
+runtime lacks failing one by one like any other unimplemented call. The
+`HKLM\Software\Microsoft\GamingServices` `IgnoreVersionMismatch` switch was
+read with an uninitialised buffer size and value and tested with `FAILED()`,
+which never sees the positive Win32 error `RegGetValueW` returns, so whether
+the title was refused depended on the stack: the same build started with Wine
+tracing on and quit with it off. Both are initialised and the result is
+compared with `ERROR_SUCCESS`; the switch now only silences the warning.
+
+The `0013` patch makes `GetProcessMemoryInfo` report `PrivateUsage`. Given a
+`PROCESS_MEMORY_COUNTERS_EX`, kernelbase filled the short structure, set `cb`
+to the short size and returned `TRUE`, so the caller read whatever its stack
+held in the last field. Minecraft uses that field to estimate how much memory
+it has left, and when the leftover looked like a huge figure it stored a
+default skin for every player added to the world instead of their own, at
+random and for the rest of the session (issue #292, found and fixed by
+ItsClairton). ntdll already answers `ProcessVmCounters` with `VM_COUNTERS_EX`;
+kernelbase now asks for it, fills `PrivateUsage` when the caller's buffer has
+room for it and reports the `_EX` size in `cb`, as Windows does. `psapi.h`
+gains the structure.
+
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
 native5 delta and its follow-ups. The Bullseye builder applies the reviewed r12
 and native patches when the target commit is unavailable, always applies `0002`
-through `0011`, then verifies the complete resulting source tree.
+through `0013`, then verifies the complete resulting source tree.

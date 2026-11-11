@@ -16,6 +16,24 @@ from .config import CACHE
 from .prefix import active_prefix
 from .proton import proton_path
 
+# What the proton script puts in front of LD_LIBRARY_PATH before it starts
+# wine. ntdll.so needs libunwind.so.8, which the engine carries in the first
+# of these and a host need not have: a wine run beside the game without them
+# dies on "could not load ntdll.so: libunwind.so.8" (Guix, #324).
+_ENGINE_LIBRARY_DIRS = ("x86_64-linux-gnu", "aarch64-linux-gnu",
+                        "i386-linux-gnu")
+
+
+def engine_env(engine, env):
+    """``env`` with the engine's own libraries first, as the game gets them."""
+    libraries = os.pathsep.join(
+        str(Path(engine) / "files" / "lib" / name)
+        for name in _ENGINE_LIBRARY_DIRS)
+    existing = env.get("LD_LIBRARY_PATH", "")
+    env["LD_LIBRARY_PATH"] = (libraries + os.pathsep + existing
+                              if existing else libraries)
+    return env
+
 
 def extract(name):
     """The helper `name` from the package, written to the cache; or None."""
@@ -53,4 +71,4 @@ def command(name):
     if helper is None:
         return None
     env = dict(os.environ, WINEPREFIX=str(active_prefix()), WINEDEBUG="-all")
-    return [str(wine), str(helper)], env
+    return [str(wine), str(helper)], engine_env(engine, env)

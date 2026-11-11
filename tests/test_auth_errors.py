@@ -25,6 +25,23 @@ class _Response:
         return self._payload
 
 
+class MsaRefreshResultTests(unittest.TestCase):
+    def test_invalid_grant_is_preserved_for_the_gui(self):
+        with mock.patch.object(auth, "http_post_form", return_value={
+                "error": "invalid_grant",
+                "error_description": "refresh token was revoked",
+        }):
+            self.assertEqual(auth.msa_refresh_result("old"),
+                             (None, "invalid_grant"))
+
+    def test_success_keeps_the_rotated_refresh_token(self):
+        response = {"access_token": "access", "refresh_token": "new"}
+        with mock.patch.object(auth, "http_post_form",
+                               return_value=response):
+            self.assertEqual(auth.msa_refresh_result("old"),
+                             (response, None))
+
+
 class PreauthFailureDiagnosticTests(unittest.TestCase):
     access_secret = "msa-access-token-must-not-leak"
     response_secret = "xbox-response-token-must-not-leak"
@@ -123,7 +140,10 @@ class PreauthFailureDiagnosticTests(unittest.TestCase):
         self.assertEqual(diagnostic["category"], "network")
         self.assertIn("Internet connection", auth.xbl_preauth_error_message())
 
-    def test_a_rejected_token_still_points_at_the_account(self):
+    def test_a_rejected_token_asks_for_a_new_sign_in(self):
+        """Microsoft refusing the saved token is not an Xbox profile problem:
+        Xbox Live was never reached (#331)."""
+
         with tempfile.TemporaryDirectory() as td:
             with mock.patch.object(auth, "DATA", Path(td)), \
                     mock.patch.object(auth, "warn"), \
@@ -133,7 +153,13 @@ class PreauthFailureDiagnosticTests(unittest.TestCase):
 
         diagnostic = auth.xbl_preauth_diagnostic()
         self.assertEqual(diagnostic["stage"], "microsoft-token")
-        self.assertEqual(diagnostic["category"], "account")
+        self.assertEqual(diagnostic["category"], "signin")
+        with mock.patch("bol.network.clock_is_unsynchronized",
+                        return_value=True):
+            message = auth.xbl_preauth_error_message()
+        self.assertIn("Sign out in the launcher, sign in again", message)
+        self.assertNotIn("Xbox profile", message)
+        self.assertNotIn("clock", message)
 
     def test_accessor_returns_a_copy(self):
         self.run_failure(OSError("offline"))

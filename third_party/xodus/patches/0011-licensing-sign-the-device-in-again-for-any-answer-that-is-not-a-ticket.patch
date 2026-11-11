@@ -1,0 +1,90 @@
+From f4913bf417745ba5616566993f4cb490566366c8 Mon Sep 17 00:00:00 2001
+From: Wyze3306 <contact.wyze3306@gmail.com>
+Date: Sun, 8 Nov 2026 14:49:30 +0100
+Subject: [PATCH 11/11] licensing: sign the device in again for any answer that
+ is not a ticket
+
+The license request signed the device in afresh and asked once more
+only when Live answered the device token exchange with a SOAP Fault.
+Live answers a device session it does not recognise at all with an
+envelope the exchange cannot read, and a session whose secret no longer
+decrypts the answer fails in the client; both ended the request on
+"could not exchange this device's Microsoft session", which a fresh
+device session cures just the same.
+
+Any failure of that exchange now gets the one retry, except a request
+that got no answer: that is the network's, and a new session changes
+nothing there, so it is still reported as it was.
+
+Tested against Live on a copy of a keyring with its device token
+altered: Live's answer was "missing field `wsa:Action`", and the device
+was signed in again and the license issued.
+---
+ crates/xodus-cli/src/license.rs | 36 ++++++++++++++++++++++++++++++---
+ 1 file changed, 33 insertions(+), 3 deletions(-)
+
+diff --git a/crates/xodus-cli/src/license.rs b/crates/xodus-cli/src/license.rs
+index 5e18d81..549a32f 100644
+--- a/crates/xodus-cli/src/license.rs
++++ b/crates/xodus-cli/src/license.rs
+@@ -52,6 +52,19 @@ async fn exchange_device_token(
+     .await
+ }
+ 
++/// Whether signing this device in afresh is worth one more try after `err`.
++///
++/// Live answered, and not with a ticket. A SOAP Fault is what a lapsed or
++/// revoked device session gets; a session Live does not recognise at all is
++/// answered with an envelope the exchange cannot read (`missing field
++/// wsa:Action`), and a session whose secret no longer decrypts the answer
++/// fails in the client. A fresh device session is what cures each of them,
++/// as deleting `device-tokens` by hand did. A request that never got an
++/// answer is the network's, and a new session changes nothing there.
++fn worth_a_fresh_session(err: &RSTError) -> bool {
++    !matches!(err, RSTError::Request(_))
++}
++
+ pub async fn get_license(
+     client: &reqwest::Client,
+     tokens: &TokenManager,
+@@ -75,10 +88,9 @@ pub async fn get_license(
+     let (dev_token, ms_device_token) = match exchange_device_token(client, dev_token.clone()).await
+     {
+         Ok(token) => (dev_token, token),
+-        Err(RSTError::Fault(status)) => {
++        Err(err) if worth_a_fresh_session(&err) => {
+             tracing::warn!(
+-                "login.live.com refused this device's session (reqstatus: {}); signing the device in again",
+-                status.as_deref().unwrap_or("none")
++                "login.live.com did not exchange this device's session ({err}); signing the device in again"
+             );
+             xodus::tokens::device::reauthenticate_device_session(client, tokens).await;
+             let dev_token = device_sts_token(tokens)?;
+@@ -273,6 +285,24 @@ mod tests {
+         assert!(err.contains("session token"), "{err}");
+     }
+ 
++    #[test]
++    fn any_answer_that_is_not_a_ticket_is_worth_a_fresh_session() {
++        assert!(worth_a_fresh_session(&RSTError::Fault(None)));
++        assert!(worth_a_fresh_session(&RSTError::UnexpectedResponse(
++            "encrypted body"
++        )));
++        assert!(worth_a_fresh_session(&RSTError::InvalidResponseSignature(
++            "digest".to_string()
++        )));
++        assert!(worth_a_fresh_session(&RSTError::Decryption));
++    }
++
++    #[test]
++    fn a_request_that_got_no_answer_is_not_worth_a_fresh_session() {
++        let unsent = reqwest::Client::new().get("not a url").build().unwrap_err();
++        assert!(!worth_a_fresh_session(&RSTError::Request(unsent)));
++    }
++
+     #[tokio::test]
+     async fn an_expired_account_session_asks_for_a_sign_in() {
+         let tokens = TokenManager::with_memory();
+-- 
+2.47.3
+

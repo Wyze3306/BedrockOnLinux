@@ -77,5 +77,23 @@ class EntryPointTests(unittest.TestCase):
         self.assertIn("bedrock-on-linux optiscaler", result.stdout)
 
 
+class LazyImportTests(unittest.TestCase):
+    """PySide6 replaces builtins.__import__, and a Python 3.15 lazy name read
+    after that stays a ``lazy_import`` object: PLAY from the GUI died on
+    ``concurrent.futures.ThreadPoolExecutor`` (#356)."""
+
+    def test_the_package_turns_lazy_imports_off_before_any_import(self):
+        source = (ROOT / "bol" / "__init__.py").read_text()
+        switch = source.index("sys.set_lazy_imports_filter(")
+        self.assertLess(switch, source.index("from ."))
+
+    @unittest.skipUnless(hasattr(sys, "get_lazy_imports_filter"),
+                         "Python without PEP 810 lazy imports")
+    def test_no_import_is_lazy_once_bol_is_loaded(self):
+        lazy = sys.get_lazy_imports_filter()
+        self.assertIsNotNone(lazy)
+        self.assertFalse(lazy("concurrent.futures", ".thread", None))
+
+
 if __name__ == "__main__":
     unittest.main()

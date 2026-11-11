@@ -60,9 +60,6 @@ from .profiles import (
 from .update import check_for_update, self_update
 from .util import load_settings, save_settings, format_display_version, mc_releases, gh_releases
 
-RE_MD_TOKENS = re.compile(r"(\*\*|`|__|\[[^\]]+\]\([^)]+\))")
-RE_MD_LINK = re.compile(r"^\[([^\]]+)\]\(([^)]+)\)$")
-
 try:
     import shiboken6
 except ImportError:  # pragma: no cover - shiboken6 ships alongside PySide6
@@ -275,8 +272,6 @@ class Theme:
     @property
     def blue(self):       return "#4a90d9"
     @property
-    def blue_dim(self):   return self._pick("#e7f1fb", "#132433")
-    @property
     def accent(self):     return self.gold if self.beta else self.green
     @property
     def accent_hov(self): return self.gold_hov if self.beta else self.green_hov
@@ -430,6 +425,27 @@ class Theme:
             color: {self.accent};
         }}
         QListWidget::item:hover {{ background: {self.card3}; }}
+        /* A combo box's list, a context menu and a tooltip are windows of
+           their own. Under the transparent QWidget rule they paint no
+           background, so the desktop's palette shows behind the theme's
+           text: dark under dark text once the light theme is on (#332). */
+        QComboBox QAbstractItemView, QMenu {{
+            background: {self.card};
+            color: {self.fg};
+            border: 1px solid {self.border};
+            outline: none;
+            selection-background-color: {self.accent_dim};
+            selection-color: {self.accent};
+        }}
+        QMenu::item {{ padding: 5px 18px; background: transparent; }}
+        QMenu::item:selected {{ background: {self.accent_dim}; color: {self.accent}; }}
+        QMenu::item:disabled {{ color: {self.muted}; }}
+        QToolTip {{
+            background: {self.card};
+            color: {self.fg};
+            border: 1px solid {self.border};
+            padding: 3px 5px;
+        }}
         QProgressBar {{
             background: {self.card2};
             border-radius: 4px;
@@ -598,26 +614,12 @@ class AuthBridge(QObject):
     auth = Signal(str, str)
     online = Signal()
     refreshed = Signal()
+    refused = Signal()
 
 
 # ======================================================================
 # Small reusable widgets
 # ======================================================================
-
-class Tooltip:
-    """Thin wrapper so call sites read the same as the old ``explain()``."""
-    def __init__(self, widget: QWidget, text: str):
-        widget.setToolTip(text)
-        self.widget = widget
-
-    @property
-    def text(self):
-        return self.widget.toolTip()
-
-    @text.setter
-    def text(self, value):
-        self.widget.setToolTip(value)
-
 
 def btn(text, cmd=None, kind="ghost", w=None, h=32, tip=None, parent=None) -> QPushButton:
     b = QPushButton(text, parent)
@@ -636,6 +638,43 @@ def btn(text, cmd=None, kind="ghost", w=None, h=32, tip=None, parent=None) -> QP
     if tip:
         b.setToolTip(tip)
     return b
+
+
+class SettingComboBox(QComboBox):
+    """A drop-down that a wheel turn on the way past leaves alone (#363).
+
+    The Settings tabs scroll, and Qt hands a wheel turn to whichever combo
+    box is under the pointer, focused or not, as a new choice. The graphics
+    card choice is saved on every change, so scrolling the Advanced tab could
+    move the game onto the processor's iGPU without anyone seeing it happen,
+    and the next PLAY crawled. Unfocused, the turn goes to the page, which is
+    what the player meant; clicked or tabbed into, the wheel works as before.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class SettingSpinBox(QSpinBox):
+    """A number field that a wheel turn on the way past leaves alone, as
+    :class:`SettingComboBox`."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
 
 
 def tool_row(text, cmd, tip=None, danger=False) -> QPushButton:
@@ -772,10 +811,8 @@ class VersionPicker(Popup):
         v.addWidget(self.list)
         self.search.textChanged.connect(self._filter)
         self.list.itemClicked.connect(lambda it: self.picked.emit(it.text()))
-        self._labels = []
 
     def set_labels(self, labels, current):
-        self._labels = labels
         self.list.clear()
         for lab in labels:
             it = QListWidgetItem(lab)
@@ -1136,6 +1173,7 @@ class MainWindow(QMainWindow):
         self._auth_bridge.auth.connect(self._on_auth)
         self._auth_bridge.online.connect(self._on_online)
         self._auth_bridge.refreshed.connect(self._on_refreshed)
+        self._auth_bridge.refused.connect(self._on_refused)
 
         self.setWindowTitle(PRETTY)
         self.resize(1000, 660)
@@ -1306,8 +1344,6 @@ class MainWindow(QMainWindow):
         al.addWidget(QLabel("▾"))
         self.acct_card.mousePressEvent = lambda e: self.open_accounts_menu()
         row.addWidget(self.acct_card)
-
-        self.update_banner_slot = row
         return row
 
     def _open_github(self):
@@ -1818,7 +1854,9 @@ class MainWindow(QMainWindow):
         """Record where the online sign-in stands, then redraw both places
         that show it. Kept as the single entry point the auth callbacks and
         the sign-in flow already call."""
-        self._acct_mode = {"in": "out", "auth": "cancel"}.get(phase, "in")
+        self._acct_mode = {
+            "in": "out", "auth": "cancel", "refused": "relink",
+        }.get(phase, "in")
         if phase != "auth":
             self._acct_confirm = False
         self._refresh_accounts()
@@ -1840,6 +1878,10 @@ class MainWindow(QMainWindow):
             return (self.theme.gold, "Waiting for the sign-in to finish…",
                     "Cancel?" if self._acct_confirm else "Cancel",
                     red if self._acct_confirm else None)
+        if mode == "relink":
+            return (self.theme.gold,
+                    "Microsoft refused the saved sign-in",
+                    "Sign in again", None)
         return self.theme.sub, "Not signed in", "Sign in", None
 
     def _store_state(self):
@@ -1884,9 +1926,11 @@ class MainWindow(QMainWindow):
         else:
             pill_dot = self.theme.sub
         self.acct_dot.setStyleSheet(f"color:{pill_dot};")
-        gt = msa_gamertag() if getattr(self, "_acct_mode", "in") == "out" else None
-        self.acct_text.setText(gt or ("Signing in…" if pill_dot == self.theme.gold
-                                       and online_dot == self.theme.gold else "Sign in"))
+        mode = getattr(self, "_acct_mode", "in")
+        gt = msa_gamertag() if mode == "out" else None
+        self.acct_text.setText(
+            gt or ("Signing in…" if mode in ("loading", "cancel")
+                   else "Sign in"))
         self.acct_card.setToolTip(
             f"Play online: {online_status}\nDownload Minecraft: {store_status}")
 
@@ -1956,6 +2000,17 @@ class MainWindow(QMainWindow):
                 self._acct_confirm = True
                 self._refresh_accounts()
         else:
+            if mode == "relink":
+                # The token file exists but Microsoft has rejected the token
+                # inside it. NativeAuth deliberately refuses to start over an
+                # existing token, so retire that account generation before
+                # asking for a fresh device code. The Store/download account
+                # is separate and is not touched here.
+                try:
+                    msa_logout()
+                except BolError as exc:
+                    warn(str(exc))
+                    return
             self._acct_mode = "loading"
             self._refresh_accounts()
             threading.Thread(
@@ -2247,6 +2302,12 @@ class MainWindow(QMainWindow):
             return
         self._refresh_account_row("in")
 
+    def _on_refused(self):
+        """Show that a present token is not necessarily a usable sign-in."""
+        if not _alive(self):
+            return
+        self._refresh_account_row("refused")
+
     def _warm_xbox_preauth(self):
         """Mint the Xbox token chain now rather than at PLAY.
 
@@ -2259,16 +2320,30 @@ class MainWindow(QMainWindow):
         """
         def work():
             from .auth import (
-                msa_load, msa_refresh, xbl_preauth, _account_cache_epoch)
-            from .config import DATA
+                account_epoch_is_current, msa_refresh_result,
+                msa_save_for_account_epoch, msa_session_snapshot, xbl_preauth)
             try:
-                token = msa_load()
+                token, epoch = msa_session_snapshot()
                 if not token:
                     return
-                fresh = msa_refresh(token.get("refresh_token"))
-                if not (fresh and fresh.get("access_token")):
+                fresh, error = msa_refresh_result(token.get("refresh_token"))
+                if not fresh:
+                    # A transport failure raises and follows the best-effort
+                    # path below. Only Microsoft's explicit invalid_grant
+                    # means this account needs a fresh device-code sign-in;
+                    # transient service errors must not sign the player out.
+                    if (error == "invalid_grant"
+                            and account_epoch_is_current(epoch)):
+                        self._auth_bridge.refused.emit()
                     return
-                epoch = _account_cache_epoch(DATA / "winegdk-preauth")
+                # Microsoft may rotate refresh tokens. The old warm-up threw
+                # that replacement away, so a later launch could find only a
+                # revoked token even though the GUI still looked signed in.
+                # Save it under the same logout generation before continuing.
+                if not msa_save_for_account_epoch(
+                        {"refresh_token": fresh["refresh_token"],
+                         "obtained": int(time.time())}, epoch):
+                    return
                 if xbl_preauth(fresh.get("access_token"), epoch):
                     # Runs on the raw worker thread started below, which has
                     # no Qt event loop -- go through AuthBridge rather than
@@ -2638,8 +2713,7 @@ class MainWindow(QMainWindow):
     def _offer_gpu_ack(self, ack_status, prefix="", title="Acknowledge previous GPU incident",
                        then=None):
         return _offer_gpu_incident_acknowledgement(
-            _MainWindowMessageBoxAdapter(self), self, ack_status,
-            prefix=prefix, title=title, then=then)
+            self, ack_status, prefix=prefix, title=title, then=then)
 
     # ------------------------------------------------------------ settings / changelog toggles
     def toggle_settings(self):
@@ -2743,6 +2817,15 @@ class MainWindow(QMainWindow):
                                "waiting for it. Off by default.")
         close_row.toggled.connect(lambda on: self._save_setting("close_on_launch", on))
         startup.addWidget(close_row)
+
+        update_row = self._switch(
+            "Update Minecraft when started from a shortcut",
+            self.settings.get("auto_update_game", False),
+            "A direct launch shortcut installs the newest build before the "
+            "game starts, instead of staying on the one picked here. Off by "
+            "default: a server that has not updated yet refuses a newer game.")
+        update_row.toggled.connect(lambda on: self._save_setting("auto_update_game", on))
+        startup.addWidget(update_row)
 
         controller = card_section(v, "Controller",
             "Move a highlight around the launcher with a gamepad, for Steam "
@@ -3237,7 +3320,7 @@ class MainWindow(QMainWindow):
                "the discrete card to play on it.")
         label.setToolTip(tip)
         row.addWidget(label)
-        combo = QComboBox()
+        combo = SettingComboBox()
         combo.setToolTip(tip)
         combo.addItem("Automatic (system default)", gpus.AUTO)
         try:
@@ -3542,7 +3625,7 @@ class MainWindow(QMainWindow):
         mode_label.setToolTip("Choose whether to inject a local DLL or download one from a URL.")
         mode_layout.addWidget(mode_label)
 
-        self.dll_mode_combo = QComboBox()
+        self.dll_mode_combo = SettingComboBox()
         self.dll_mode_combo.addItem("File", "file")
         self.dll_mode_combo.addItem("Download", "url")
         current_mode = self.settings.get("injector_dll_type", "file")
@@ -3575,7 +3658,7 @@ class MainWindow(QMainWindow):
             "into a game that has not opened yet.")
         delay_layout.addWidget(delay_label)
 
-        self.delay_spin = QSpinBox()
+        self.delay_spin = SettingSpinBox()
         self.delay_spin.setRange(0, 60)
         self.delay_spin.setValue(int(self.settings.get("injector_delay", 5)))
         self.delay_spin.valueChanged.connect(lambda val: self._save_setting("injector_delay", val))
@@ -4421,52 +4504,33 @@ def _gpu_incident_safety_instruction(status):
 
 
 def _offer_gpu_incident_acknowledgement(
-        box, parent, status, prefix="",
+        window, status, prefix="",
         title="Acknowledge previous GPU incident", then=None):
-    """Confirm + acknowledge a GPU safety incident marker. `box` is duck-typed
-    on askyesno/showinfo/showerror(title, message, parent=None), so this
-    needs no real dialog widget to run or to test. The eligibility decision
-    itself is never made here: acknowledge_gpu_crash() re-checks it under the
-    launch lock, and a refusal is reported from its live status rather than
-    the one passed in, in case it changed in the meantime. `then`, when
-    given, is what the player was doing (PLAY), carried on once the
-    acknowledgement is written instead of a note saying it was."""
+    """Confirm + acknowledge a GPU safety incident marker.
+
+    `window` only needs question_box/info_box/error_box(title, message). The
+    eligibility decision itself is never made here: acknowledge_gpu_crash()
+    re-checks it under the launch lock, and a refusal is reported from its
+    live status rather than the one passed in, in case it changed in the
+    meantime. `then`, when given, is what the player was doing (PLAY),
+    carried on once the acknowledgement is written instead of a note saying
+    it was.
+    """
     instruction = _gpu_incident_safety_instruction(status)
     message = prefix + status.message + "\n\n" + instruction + " Acknowledge now?"
-    if not box.askyesno(title, message, parent=parent):
+    if not window.question_box(title, message):
         return False
     if acknowledge_gpu_crash():
         if then is not None:
             then()
             return True
-        box.showinfo(
+        window.info_box(
             "GPU safety",
             "The previous-boot incident was acknowledged. "
-            "PLAY will still run all current graphics safety checks.",
-            parent=parent)
+            "PLAY will still run all current graphics safety checks.")
         return True
-    box.showerror("GPU safety", gpu_crash_acknowledgement_status().message,
-                   parent=parent)
+    window.error_box("GPU safety", gpu_crash_acknowledgement_status().message)
     return False
-
-
-class _MainWindowMessageBoxAdapter:
-    """Adapts MainWindow's Qt-backed info_box/error_box/question_box onto the
-    askyesno/showinfo/showerror shape _offer_gpu_incident_acknowledgement
-    expects. `parent` is accepted for API compatibility but unused: the
-    underlying QMessageBox is already parented to the window itself."""
-
-    def __init__(self, window):
-        self._window = window
-
-    def askyesno(self, title, message, parent=None):
-        return self._window.question_box(title, message)
-
-    def showinfo(self, title, message, parent=None):
-        self._window.info_box(title, message)
-
-    def showerror(self, title, message, parent=None):
-        self._window.error_box(title, message)
 
 
 # ======================================================================

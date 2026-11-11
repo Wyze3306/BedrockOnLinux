@@ -129,6 +129,8 @@ jobs:
 
       - name: Assert the build matches the pinned SHA-256
         id: build
+        env:
+          PUBLISH: ${{ inputs.publish }}
         run: |
           rev="$(grep -m1 '^XODUS_REV = ' bol/config.py | cut -d'"' -f2)"
           pin="$(grep -m1 '^XODUS_ARCHIVE_SHA256 = ' bol/config.py | cut -d'"' -f2)"
@@ -145,9 +147,12 @@ jobs:
           echo "pinned : $pin"
           echo "built  : $built"
           if [ "$built" != "$pin" ]; then
-            echo "::error::xodus-cli SHA-256 does not match XODUS_ARCHIVE_SHA256." \
-                 "Re-pin bol/config.py from a reviewed build of this commit." >&2
-            exit 1
+            if [ "$PUBLISH" = "true" ]; then
+              echo "::error::xodus-cli SHA-256 does not match XODUS_ARCHIVE_SHA256." \
+                   "Run with publish=false, review the artifact, and pin its SHA-256 in bol/config.py." >&2
+              exit 1
+            fi
+            echo "::warning::Unpublished candidate: pin $built as XODUS_ARCHIVE_SHA256 after review."
           fi
           echo "sha256=$built" >> "$GITHUB_OUTPUT"
           echo "rev=$rev" >> "$GITHUB_OUTPUT"

@@ -21,6 +21,22 @@ from bol import launch, perfcheck
 
 
 _Usage = namedtuple("_Usage", "total used free")
+# Kept before setUpModule replaces it for the rest of the module.
+_real_locale_available = perfcheck.locale_available
+
+
+def setUpModule():
+    # Whether this host has the container's locales is not what the other
+    # tests are about; ContainerLocaleTests asks it directly.
+    patcher = mock.patch.object(perfcheck, "locale_available",
+                                return_value=True)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+    # Nor which edition this machine's own settings would launch.
+    edition = mock.patch.object(perfcheck, "_launched_edition",
+                                return_value=None)
+    edition.start()
+    unittest.addModuleCleanup(edition.stop)
 
 _OPTIONS_RELATIVE = (
     "drive_c/users/steamuser/AppData/Roaming/Minecraft Bedrock/Users/"
@@ -145,6 +161,37 @@ class GameOptionsTests(unittest.TestCase):
             self.assertIsNotNone(found)
             self.assertEqual(
                 perfcheck.read_game_options(found)["gfx_vsync"], "1")
+
+    def test_preview_reads_its_own_settings_not_the_stable_games(self):
+        preview = _OPTIONS_RELATIVE.replace(
+            "/Minecraft Bedrock/", "/Minecraft Bedrock Preview/")
+        self.assertNotEqual(preview, _OPTIONS_RELATIVE)
+        with tempfile.TemporaryDirectory() as td:
+            _prefix(td, relative=preview, gfx_max_framerate="60")
+            prefix = _prefix(td, gfx_max_framerate="144")
+            # The stable file is the newer one, as after a stable session.
+            stable = perfcheck.find_options_file(prefix, "release")
+            os.utime(stable, (stable.stat().st_mtime + 60,) * 2)
+            self.assertEqual(perfcheck.read_game_options(
+                perfcheck.find_options_file(prefix, "preview"))
+                ["gfx_max_framerate"], "60")
+            self.assertEqual(perfcheck.read_game_options(
+                perfcheck.find_options_file(prefix))["gfx_max_framerate"],
+                "144")
+            with mock.patch.object(perfcheck, "_launched_edition",
+                                   return_value="preview"):
+                self.assertEqual(perfcheck.read_game_options(
+                    perfcheck.find_options_file(prefix))
+                    ["gfx_max_framerate"], "60")
+            self.assertEqual(len(perfcheck.find_options_files(prefix)), 2)
+            self.assertEqual(len(perfcheck.find_game_data_dirs(prefix)), 2)
+
+    def test_the_login_link_to_steamuser_is_not_a_second_profile(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = _prefix(td)
+            os.symlink("steamuser", prefix / "drive_c/users/player")
+            self.assertEqual(len(perfcheck.find_options_files(prefix)), 1)
+            self.assertEqual(len(perfcheck.find_game_data_dirs(prefix)), 1)
 
     def test_a_prefix_before_the_first_launch_is_silent(self):
         with tempfile.TemporaryDirectory() as td:
@@ -658,3 +705,49 @@ class LaunchWiringTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContainerLocaleTests(unittest.TestCase):
+    """A locale the host lacks is rebuilt by pressure-vessel at every launch."""
+
+    def _problem(self, environ, present, flatpak=False):
+        with tempfile.TemporaryDirectory() as td:
+            info = Path(td) / ".flatpak-info"
+            if flatpak:
+                info.write_text("[Application]\n")
+            return perfcheck.container_locale_problem(
+                environ, available=lambda name: name in present,
+                flatpak_info=info)
+
+    def test_a_missing_en_us_is_named_with_the_fix(self):
+        problem = self._problem({"LANG": "fr_FR.UTF-8"}, {"fr_FR.UTF-8"})
+        self.assertIn("en_US.UTF-8", problem)
+        self.assertNotIn("fr_FR", problem)
+        self.assertIn("locale-gen", problem)
+
+    def test_the_players_own_locale_counts_too(self):
+        problem = self._problem({"LANG": "de_DE.UTF-8"}, {"en_US.UTF-8"})
+        self.assertIn("de_DE.UTF-8", problem)
+
+    def test_quiet_when_everything_is_there_or_cannot_be_helped(self):
+        both = {"en_US.UTF-8", "fr_FR.UTF-8"}
+        self.assertIsNone(self._problem({"LANG": "fr_FR.UTF-8"}, both))
+        self.assertIsNone(self._problem({"LANG": "C.UTF-8"}, {"en_US.UTF-8"}))
+        self.assertIsNone(self._problem({"LANG": "fr_FR.UTF-8"}, set(),
+                                        flatpak=True))
+        self.assertIsNone(self._problem(
+            {"LANG": "fr_FR.UTF-8", "PRESSURE_VESSEL_GENERATE_LOCALES": "0"},
+            set()))
+
+    def test_an_unknown_answer_says_nothing(self):
+        self.assertIsNone(perfcheck.container_locale_problem(
+            {"LANG": "fr_FR.UTF-8"}, available=lambda _name: None,
+            flatpak_info=Path("/nonexistent/.flatpak-info")))
+
+    def test_glibc_is_asked_without_changing_this_process(self):
+        import locale
+        before = locale.setlocale(locale.LC_CTYPE)
+        self.assertIn(_real_locale_available("C.UTF-8"), (True, None))
+        self.assertIn(_real_locale_available("xx_NOWHERE.UTF-8"),
+                      (False, None))
+        self.assertEqual(locale.setlocale(locale.LC_CTYPE), before)

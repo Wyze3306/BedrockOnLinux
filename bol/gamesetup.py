@@ -10,6 +10,7 @@ from .config import LOGS
 from .deps import ensure_login_deps
 from .fixups import fix_curl_ssl, hide_signin_button, install_gdk_xbox_dlls
 from .gameinput import install_gameinput
+from .config import GAMES
 from .games import (
     _auto_selection,
     _game_root,
@@ -17,11 +18,12 @@ from .games import (
     install_game,
     installed_builds,
     mc_version_str,
+    list_versions,
     prune_legacy_game_archives,
     use_game_dir,
     version_dir,
 )
-from .log import BolError, info, ok, warn
+from .log import BolError, desktop_notify, info, ok, warn
 from .platform import IS_MAC
 from .prefix import (
     active_prefix,
@@ -106,6 +108,51 @@ def _mac_build(edition, version):
              + (f"Minecraft {have}" if have else "the Minecraft you added")
              + " instead.")
     return root
+
+
+# Off unless asked for: a server that has not updated yet refuses a newer
+# client, so moving to a new build stays the player's decision by default.
+AUTO_UPDATE_SETTING = "auto_update_game"
+
+
+def update_game_before_play(always=False, setup=None, versions=None):
+    """Move to the newest build of the edition being played (#328).
+
+    For a start with no launcher window -- a desktop or Steam shortcut --
+    where nobody is shown that a new build is out. Does nothing unless the
+    setting is on or ``always`` is. Returns the build switched to, or None
+    when the installed one is kept: it is already the newest, it is a copy
+    from outside the managed folder, or the update could not be made. Never
+    raises: whatever stops the update, the build already installed still
+    starts.
+    """
+    settings = load_settings()
+    if not (always or settings.get(AUTO_UPDATE_SETTING, False)):
+        return None
+    game_dir = settings.get("game_dir")
+    try:
+        managed = bool(game_dir) and Path(game_dir).resolve().is_relative_to(
+            GAMES.resolve())
+    except OSError:
+        managed = False
+    if not managed:
+        return None
+    try:
+        edition, current = _auto_selection(settings)
+        listed = (versions or list_versions)(edition["id"], offline_ok=False)
+        newest = listed[0]["version"] if listed else None
+        if not newest or newest == current:
+            return None
+        message = (f"Updating {edition['name']} from {current or '?'} to "
+                   f"{newest} before it starts …")
+        info(message)
+        desktop_notify(message)
+        (setup or do_setup)(mc_edition=edition, mc_version=newest)
+    except Exception as exc:
+        warn(f"Could not update Minecraft ({exc}); starting the build "
+             "already installed.")
+        return None
+    return newest
 
 
 def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
@@ -199,11 +246,71 @@ LICENCE_UNREACHABLE = (
     "stays encrypted on disk, and Microsoft hands out the key that decrypts "
     "it each time it starts, so it needs an internet connection to start, "
     "single-player included. Connect to the internet and click PLAY again.")
+# From 64d39eb87a56-p9 on, the exchange that needs the network first reports
+# it instead of panicking:
+#   could not exchange this device's Microsoft session: Error making a request
+#   reqwest::Error { kind: Request, url: "https://login.live.com/RST2.srf",
+#   source: … ConnectError("dns error", …
 _LICENCE_UNREACHABLE = (
-    r"panicked at [^\n]*license\.rs[^\n]*\n[^\n]*"
+    r"(?:panicked at [^\n]*license\.rs[^\n]*\n|"
+    r"could not exchange this device's Microsoft session: |"
+    r"Microsoft session was refused again after signing it in afresh: )"
+    r"[^\n]*"
     r"(?:dns error|failed to lookup address|ConnectError|Connect,|"
     r"timed out|Connection refused|Network is unreachable|"
     r"error sending request)")
+
+
+# The licence request is signed with two Microsoft sessions the Store sign-in
+# left in xodus-cli's keyring: this computer's, which Microsoft issues for 60
+# days, and the account's, for 90. xodus-cli up to 64d39eb87a56-p8 renewed
+# neither, and a refused device session ended in a panic before the game
+# started (#367), which read "No known cause":
+#   thread 'main' panicked at crates/xodus/src/api/live/mod.rs:79:14:
+#   not implemented: Exchange token supports only singular token right now
+#   Fault(Fault)
+# Patches 0009 and 0010 renew both. What is left is a device session Microsoft
+# refuses even freshly signed in, or an account session that ran out before
+# the game was played in its last week, and the Store sign-in replaces both.
+# Signing out keeps the device, so it does not cost one of the account's ten.
+STORE_SESSION_REFUSED = (
+    "Minecraft could not start because Microsoft no longer accepts the "
+    "Microsoft Store sign-in the game's licence is fetched with at every "
+    "start. Open the account menu, sign out of the Microsoft Store account "
+    "(Download Minecraft), sign in again, then click PLAY.")
+_STORE_SESSION_REFUSED = (
+    r"Exchange token supports only singular token[^\n]*Fault|"
+    r"Microsoft session was refused again after signing it in afresh|"
+    r"not logged in: [^\n]*(?:in the keyring has expired|"
+    r"is missing from the keyring)")
+
+
+# The licensing service answered, and the answer was not a licence (#345).
+# xodus-cli up to -p5 printed only that it could not decode the body; -p7
+# names the HTTP status and Microsoft's reason. Either way the game never
+# started, and the launcher came back as if PLAY had done nothing.
+LICENCE_SERVICE_REFUSED = (
+    "Microsoft's licensing service refused the licence Minecraft needs to "
+    "start, so the game never opened")
+_LICENCE_SERVICE_REFUSAL = re.compile(
+    r"the licensing service refused the request \(([^)\n]{1,40})\):?[ \t]*"
+    r"([^\n]{0,160})|"
+    r"error decoding response body for url \(https://licensing\.mp\."
+    r"microsoft\.com", re.I)
+
+
+def _licence_service_refusal(text):
+    """The hit for a licence the service refused, or None."""
+    match = _LICENCE_SERVICE_REFUSAL.search(text)
+    if not match:
+        return None
+    status, reason = match.group(1), (match.group(2) or "").strip()
+    detail = f" ({status}{': ' + reason if reason else ''})" if status else ""
+    return (f"{LICENCE_SERVICE_REFUSED}{detail}. In Settings ▸ Accounts, "
+            "unlink the Store account and link it again with the account "
+            "that owns Minecraft, then click PLAY. If the licence is refused "
+            "again, update the launcher and attach minecraft.log to a bug "
+            "report.")
 
 
 # DRM devices, for telling a virtual GPU from a real one (#302).
@@ -279,6 +386,7 @@ _DIAG_RULES = [
     # Store devices, and where they are given back is not in the message.
     (r"Device group is full", LICENCE_REFUSED),
     (_LICENCE_UNREACHABLE, LICENCE_UNREACHABLE),
+    (_STORE_SESSION_REFUSED, STORE_SESSION_REFUSED),
     (r"\bInitialConnection[-_: ]*13(?!\d)",
      "LAN InitialConnection-13 — check that the host firewall allows "
      "Minecraft's inbound RakNet UDP 19132 and, on Windows, that the host "
@@ -354,9 +462,18 @@ def diagnose():
     # The game never ran: xodus-cli died fetching the licence, and its panic
     # names login.live.com right before "failed to lookup address", which
     # the in-game sign-in rule reads as a failed sign-in (#308).
-    if LICENCE_UNREACHABLE in hits:
+    if LICENCE_UNREACHABLE in hits or STORE_SESSION_REFUSED in hits:
         hits = [h for h in hits if not h.startswith(
             "Microsoft sign-in failed in-game")]
+    # No answer at all is not a refusal: signing in again needs the network
+    # that is missing.
+    if LICENCE_UNREACHABLE in hits:
+        hits = [h for h in hits if h != STORE_SESSION_REFUSED]
+    # A full device group is refused through the same service, and that
+    # message already says what to do about it.
+    refusal = _licence_service_refusal(text)
+    if refusal and LICENCE_REFUSED not in hits:
+        hits.append(refusal)
     # Positive evidence wins: if the engine logged its XUser patches or a
     # successful pre-auth, WineGDK XUser IS present — drop any "no XUser" hit so
     # a benign HRESULT elsewhere can't tell the user to reinstall a working

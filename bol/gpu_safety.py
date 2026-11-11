@@ -114,12 +114,28 @@ def _x11_session(env: Mapping[str, str]) -> bool:
     return bool(env.get("DISPLAY")) and not bool(env.get("WAYLAND_DISPLAY"))
 
 
+# Root-window properties that steamcompmgr itself writes on the Xwayland
+# server it runs. GAMESCOPECTRL_* and the other GAMESCOPE* names are a control
+# channel that the Steam client writes on whatever display it is on, an
+# ordinary desktop included, and they stay on the root until that X server
+# exits. Matching those took a KDE or GNOME desktop that had run Steam for a
+# Game Mode session and hid the launcher whenever the game started (#293).
+_GAMESCOPE_COMPOSITOR_ATOMS = frozenset({
+    b"GAMESCOPE_FOCUSABLE_APPS",
+    b"GAMESCOPE_FOCUSABLE_WINDOWS",
+    b"GAMESCOPE_FOCUSED_APP",
+    b"GAMESCOPE_FOCUSED_APP_GFX",
+    b"GAMESCOPE_FOCUSED_WINDOW",
+    b"GAMESCOPE_XWAYLAND_SERVER_ID",
+})
+
+
 def _gamescope_root_atoms(env: Mapping[str, str]) -> bool:
     """True when the X display's root window carries Gamescope's own atoms.
 
-    Gamescope names every property it owns ``GAMESCOPE_*``, so the compositor
-    identifies itself on the root window of the Xwayland server it runs. This
-    is protocol only: it opens no GPU, exactly like the RandR probe beside it.
+    The compositor identifies itself on the root window of the Xwayland server
+    it runs (see _GAMESCOPE_COMPOSITOR_ATOMS). This is protocol only: it opens
+    no GPU, exactly like the RandR probe beside it.
 
     Reading them matters because the environment is not a reliable witness. A
     Flatpak sandbox does not forward ``GAMESCOPE_WAYLAND_DISPLAY``, so in Steam
@@ -165,7 +181,7 @@ def _gamescope_root_atoms(env: Mapping[str, str]) -> bool:
                 if not name:
                     continue
                 try:
-                    if ctypes.string_at(name).startswith(b"GAMESCOPE"):
+                    if ctypes.string_at(name) in _GAMESCOPE_COMPOSITOR_ATOMS:
                         return True
                 finally:
                     xlib.XFree(ctypes.c_void_p(name))

@@ -16,7 +16,7 @@ from .games import (
     list_versions,
     remove_build,
 )
-from .gamesetup import do_setup
+from .gamesetup import do_setup, update_game_before_play
 from .launch import (
     direct_launch_readiness,
     launch,
@@ -205,6 +205,9 @@ def main():
     play = sub.add_parser("play", help="launch Minecraft")
     play.add_argument("--editor", action="store_true",
                       help="open Bedrock Editor instead of the game")
+    play.add_argument("--update", action="store_true",
+                      help="install the newest Minecraft build first (always "
+                           "done when Settings ▸ General has it switched on)")
     sp = sub.add_parser("setup", help="download & prepare Minecraft")
     sp.add_argument("--mc", metavar="EDITION",
                     help="Minecraft edition to install: release or preview")
@@ -329,6 +332,7 @@ def main():
             # A poweroff or a stopped scope with the game running lets the
             # session finish its teardown before the launcher goes.
             supervision.install()
+            update_game_before_play(always=a.update)
             launch(editor=a.editor)
         elif a.cmd == "shortcut":
             require_shortcuts_supported()

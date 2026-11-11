@@ -8,7 +8,7 @@ from .platform import config_home, data_home
 
 APP = "bedrock-on-linux"
 PRETTY = "BedrockOnLinux"
-VERSION = "2.2.9"
+VERSION = "2.3.1"
 # Published Flatpak identity; used to print a runnable command for that layout.
 FLATPAK_APP_ID = "io.github.wyze3306.BedrockOnLinux"
 
@@ -107,9 +107,9 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 # match the reviewed pins below.
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
 # The commit alone does not identify vendored follow-up patches.
-WINEGDK_SOURCE_MANIFEST_SHA256 = "954afa1bc968c36cd8379ea9a53a318261944d5e1dbeaceeba58e0c63fc3c432"
-WINEGDK_BUILD_REV = "wow64-archs-native20"
-# native20 carries the ntdll loader patches the Microsoft Store packages need:
+WINEGDK_SOURCE_MANIFEST_SHA256 = "e5b3763a60374f1a5b1506f459ad80f39fe302d2397f26e2d9b9d220af4e412b"
+WINEGDK_BUILD_REV = "wow64-archs-native22"
+# native22 carries the ntdll loader patches the Microsoft Store packages need:
 # 0007 maps the main image from a descriptor, 0008 from a path so it survives
 # the Steam Linux Runtime container. Their game executable stays encrypted on
 # disk, so an engine without them cannot start the game -- which is why an
@@ -137,9 +137,20 @@ WINEGDK_BUILD_REV = "wow64-archs-native20"
 # handles (0011). Built against Bullseye's libwayland, the listener has no
 # slot for the wheel event version 8 sends, and under the Wayland driver the
 # first turn of the mouse wheel aborted the game (#296).
-WINEGDK_ARCHIVE_SHA256 = "2f30533b249954438bf6b425631539c8d8036261ce25cffa0d1ea5d30f1d3e27"
+#
+# native21 lets a title built against a newer Gaming Services run (0012).
+# Minecraft Preview 1.26.70 asks for 7849, the runtime reports 6247, and the
+# version check refused it, so it quit before its window opened -- on some
+# launches only, because the switch that skips the check was read through
+# uninitialised variables (#274).
+#
+# native22 makes GetProcessMemoryInfo report PrivateUsage (0013). Wine left
+# the field unwritten, Minecraft read stack leftovers as its own memory use,
+# and when that looked huge it gave players added to the world a default
+# skin instead of theirs (#292).
+WINEGDK_ARCHIVE_SHA256 = "e98512e74b1c3f930fdd213b24ac4a01abfa3a6336276076a509530c540b2b13"
 # Build workflows verify this deterministic intermediate before reusing it.
-WINEGDK_PREFIX_SHA256 = "e76d21e706dec9775a41b176b48e69dade034a8248b6f4b9a169dc4c336e2600"
+WINEGDK_PREFIX_SHA256 = "06510f8fd802f6c8663c56221983d1f1fbd2d80dbece4818fe83692fa5040ab4"
 # The engine's own x86_64 GDK runtime -- WineGDK's xgameruntime.dll and the
 # xgameruntime.dll.threading it hands XThreading to -- as its
 # engine-manifest.json pins them under critical_files. macOS runs no engine,
@@ -176,7 +187,6 @@ DISCORD_SMALL_IMAGE = ""
 # own Microsoft account, obtains the title license and streams the MSIXVC
 # package from the official Xbox CDN. It replaced a third-party repository that
 # redistributed a DRM-stripped copy of the game. See third_party/xodus/README.md.
-XODUS_REPO = "xodus-gaming/xodus"
 XODUS_SOURCE_COMMIT = "64d39eb87a56c7d0d7e7fde0b233654ac5477b0f"
 # A patched binary is not the upstream commit's binary, so the rev names the
 # patches too: <commit12>-p<n>, for the n patch files in
@@ -184,11 +194,10 @@ XODUS_SOURCE_COMMIT = "64d39eb87a56c7d0d7e7fde0b233654ac5477b0f"
 # way, so adding a patch there and forgetting this makes the build produce an
 # archive the workflow's assert cannot find -- which is the intended failure,
 # not a silent replacement of a published one.
-XODUS_REV = "64d39eb87a56-p5"
-# Integrity pin for the CI-built xodus-cli archive, produced by the reviewed
-# build-xodus.yml run of this branch. The workflow refuses any archive that
-# does not reproduce these bytes.
-XODUS_ARCHIVE_SHA256 = "bb507341bcd2eb56406e9aafab2a58978510b396df5d51a577bb0ba08560f8d8"
+XODUS_REV = "64d39eb87a56-p11"
+# Integrity pin from the reviewed candidate build of the p11 archive.
+# https://github.com/Wyze3306/BedrockOnLinux/actions/runs/42488338212
+XODUS_ARCHIVE_SHA256 = "adb23afbcf6315b4278ec01e06ee9d512a3ea705d0ed182c26d9a1a5952d853a"
 XODUS_DIR = DATA / "xodus"
 XODUS_BIN = XODUS_DIR / "xodus-cli"
 # xodus-cli links wry/tao unconditionally, so libwebkit2gtk-4.1 has to be
@@ -241,7 +250,6 @@ LEGACY_XODUS_KEYRING = HOME / ".xodus-keyring.ron"
 # assets*.xboxlive.com, and Xodus still reads the package's own content id from
 # the downloaded header and asks Microsoft for that licence, so the account
 # still has to own Minecraft. It only restores the choice of build.
-GDK_LINKS_REPO = "MinecraftBedrockArchiver/GdkLinks"
 GDK_LINKS_URL = ("https://raw.githubusercontent.com/"
                  "MinecraftBedrockArchiver/GdkLinks/master/urls.json")
 # The CDN serves these over plain HTTP only. The payload is AES-XTS encrypted

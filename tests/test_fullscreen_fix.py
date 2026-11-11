@@ -7,6 +7,7 @@ launcher sends it one, and that it never does for a game started windowed.
 """
 # SPDX-License-Identifier: MIT
 
+import os
 import subprocess
 import tempfile
 import unittest
@@ -106,6 +107,23 @@ class NudgeTests(unittest.TestCase):
         self.assertTrue(argv[1].endswith(fullscreen_fix.EXE))
         self.assertEqual(run.call_args.kwargs["env"]["WINEPREFIX"], "/pfx")
         self.assertIn("resized 1600x900", logged)
+
+    def test_the_helper_finds_the_engines_own_libraries(self):
+        """ntdll.so needs libunwind.so.8, which the engine ships and a Guix
+        host lacks: without it every run ended in "could not load ntdll.so"
+        (#324). The proton script puts these first for the game."""
+        engine = Path("/engine")
+        with mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/host/lib"}):
+            env = winehelper.engine_env(engine, dict(os.environ))
+        self.assertEqual(env["LD_LIBRARY_PATH"].split(os.pathsep), [
+            "/engine/files/lib/x86_64-linux-gnu",
+            "/engine/files/lib/aarch64-linux-gnu",
+            "/engine/files/lib/i386-linux-gnu",
+            "/host/lib",
+        ])
+        with mock.patch.dict(os.environ, clear=True):
+            env = winehelper.engine_env(engine, {})
+        self.assertFalse(env["LD_LIBRARY_PATH"].endswith(os.pathsep))
 
     def test_the_helper_is_shipped_with_the_package(self):
         helper = Path(fullscreen_fix.__file__).with_name(fullscreen_fix.EXE)

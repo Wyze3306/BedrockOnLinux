@@ -1,0 +1,117 @@
+From 5ae685b61bd443c25312fe222d6e14397e01653c Mon Sep 17 00:00:00 2001
+From: seetch <19805061+seetch@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 21:27:57 +0300
+Subject: [PATCH 6/7] licensing: send a JWE delegation ticket without the d=
+ prefix
+
+Since 2026-10-12 the delegationcompact token Live issues for the
+www.microsoft.com MBI_SSL policy is a compact JWE (five segments, the
+second empty for alg: dir) instead of the opaque ticket it used to be.
+Token::from still prefixes it with "d=", and the licensing service now
+refuses every license request with
+
+  401 Unauthorized
+  InvalidMsaTicketFormat: There was a problem parsing the request since
+  the request had an invalid format for the MSA ticket.
+
+so no Store-installed game can be downloaded or started. The same
+request with the token sent as-is is answered 200 with the license.
+
+Keep the prefix for the opaque tickets and send a compact JOSE token
+(JWS or JWE) unprefixed. The tests cover both shapes and opaque tickets
+that only look dotted.
+
+Reported downstream as
+https://github.com/Wyze3306/BedrockOnLinux/issues/322.
+---
+ crates/xodus/src/models/secrets.rs | 64 ++++++++++++++++++++++++++++--
+ 1 file changed, 61 insertions(+), 3 deletions(-)
+
+diff --git a/crates/xodus/src/models/secrets.rs b/crates/xodus/src/models/secrets.rs
+index 3a6268c..f431aaa 100644
+--- a/crates/xodus/src/models/secrets.rs
++++ b/crates/xodus/src/models/secrets.rs
+@@ -58,19 +58,77 @@ impl From<soap::RequestSecurityTokenResponse> for Token {
+                     .unwrap()
+                     .value,
+             ),
+-            "urn:passport:delegationcompact" => Self::Compact(format!(
+-                "d={}",
++            "urn:passport:delegationcompact" => Self::Compact(delegation_ticket(
+                 value
+                     .requested_security_token
+                     .binary_security_token
+                     .unwrap()
+-                    .value
++                    .value,
+             )),
+             _ => unreachable!(),
+         }
+     }
+ }
+ 
++/// The MSA ticket a delegation-compact token is sent as.
++///
++/// The opaque tickets Live used to issue here are sent with a `d=` prefix.
++/// Since 2026-10-12 the same token type carries a compact JWE instead, and
++/// the licensing service rejects `d=<jwe>` with `InvalidMsaTicketFormat`
++/// (HTTP 401) while it accepts the token on its own, so it goes out unprefixed.
++fn delegation_ticket(value: String) -> String {
++    if is_jose_compact(&value) {
++        value
++    } else {
++        format!("d={value}")
++    }
++}
++
++/// Whether a token is a compact JWS (3 segments) or JWE (5 segments).
++///
++/// Live sends a JWE here, with an empty encrypted-key segment (`alg: dir`).
++/// The header segment is base64url JSON, so it always starts with `eyJ`.
++fn is_jose_compact(value: &str) -> bool {
++    let parts: Vec<&str> = value.split('.').collect();
++    let base64url = |part: &&str| {
++        part.bytes()
++            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
++    };
++    parts[0].starts_with("eyJ")
++        && matches!(parts.len(), 3 | 5)
++        && parts.iter().all(base64url)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn prefixes_an_opaque_delegation_ticket() {
++        assert_eq!(delegation_ticket("EwAoA+pvBAAU".to_string()), "d=EwAoA+pvBAAU");
++    }
++
++    #[test]
++    fn sends_a_jwe_delegation_ticket_as_is() {
++        // The shape Live issues since 2026-10-12: header..iv.ciphertext.tag
++        let jwe = "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..aXY.Y2lwaGVy_dGV4dA.dGFn";
++        assert_eq!(delegation_ticket(jwe.to_string()), jwe);
++    }
++
++    #[test]
++    fn sends_a_jws_delegation_ticket_as_is() {
++        let jws = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl";
++        assert_eq!(delegation_ticket(jws.to_string()), jws);
++    }
++
++    #[test]
++    fn does_not_take_an_opaque_ticket_for_a_jose_token() {
++        assert_eq!(delegation_ticket("eyJ.abc".to_string()), "d=eyJ.abc");
++        assert_eq!(delegation_ticket("eyJa+b.c.d".to_string()), "d=eyJa+b.c.d");
++        assert_eq!(delegation_ticket("EwA.b.c".to_string()), "d=EwA.b.c");
++    }
++}
++
+ #[derive(Debug, Serialize, Deserialize)]
+ pub struct TokenStore {
+     #[serde(flatten)]
+-- 
+2.56.0
+

@@ -117,13 +117,14 @@ class HostLibraryTests(unittest.TestCase):
             binary = Path(tmp) / "xodus-cli"
             binary.write_text(f"#!{SH}\nexit 0\n")
             binary.chmod(0o755)
-            self.assertTrue(webview.binary_loads(binary))
+            self.assertIsNone(webview.load_failure(binary))
 
             broken = Path(tmp) / "broken"
             broken.write_text(f"#!{SH}\nexit 127\n")
             broken.chmod(0o755)
-            self.assertFalse(webview.binary_loads(broken))
-            self.assertFalse(webview.binary_loads(Path(tmp) / "absent"))
+            self.assertIsNotNone(webview.load_failure(broken))
+            self.assertIsNotNone(
+                webview.load_failure(Path(tmp) / "absent"))
 
 
 class InstallTests(unittest.TestCase):
