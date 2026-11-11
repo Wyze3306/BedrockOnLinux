@@ -14,6 +14,13 @@
 
 ### Fixed
 
+- **Other players keep their own skins.** On servers, players and NPCs that
+  joined after you sometimes showed up with a random default skin and kept
+  it. The game asks Windows how much memory it is using to decide whether it
+  can afford more skins, and Wine left that answer unwritten, so now and then
+  the game believed it was almost out of memory. The engine (`native22`) now
+  gives the real figure. Found and fixed by @ItsClairton (#292).
+
 - **The Realms button of the title screen opens the Realms page again.** It
   answered "An error has occurred. Going back to the previous screen...". The
   launcher's own patch of the game's interface, the one that takes the "You

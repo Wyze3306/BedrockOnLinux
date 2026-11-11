@@ -1,0 +1,74 @@
+From: BedrockOnLinux contributors
+Subject: [PATCH] kernelbase: report PrivateUsage from GetProcessMemoryInfo
+
+GetProcessMemoryInfo never wrote PrivateUsage. Given a
+PROCESS_MEMORY_COUNTERS_EX it filled the short structure, set cb to the
+short size and returned TRUE, so the caller read whatever its stack held
+there. Minecraft calls it with the _EX size to estimate how much memory
+it has left: when the leftover looked like a huge figure, it stored a
+default skin for every player added to the world instead of theirs, at
+random and for the rest of the session (BedrockOnLinux issue #292).
+
+ntdll already answers ProcessVmCounters with VM_COUNTERS_EX. Ask for it,
+and when the caller's buffer has room for PrivateUsage, fill it and
+report the _EX size in cb, as Windows does. psapi.h gains the structure.
+
+Found and fixed by ItsClairton.
+---
+  dlls/kernelbase/debug.c |  9 +++++++--
+  include/psapi.h         | 15 +++++++++++++++
+  2 files changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/kernelbase/debug.c b/dlls/kernelbase/debug.c
+index d3f22435f55..4c1995db93c 100644
+--- a/dlls/kernelbase/debug.c
++++ b/dlls/kernelbase/debug.c
+@@ -1715,7 +1715,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH GetProcessImageFileNameW( HANDLE process, WCHAR *
+ BOOL WINAPI DECLSPEC_HOTPATCH GetProcessMemoryInfo( HANDLE process, PROCESS_MEMORY_COUNTERS *pmc,
+                                                     DWORD count )
+ {
+-    VM_COUNTERS vmc;
++    VM_COUNTERS_EX vmc;
+ 
+     if (count < sizeof(PROCESS_MEMORY_COUNTERS))
+     {
+@@ -1726,7 +1726,12 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetProcessMemoryInfo( HANDLE process, PROCESS_MEMO
+     if (!set_ntstatus( NtQueryInformationProcess( process, ProcessVmCounters, &vmc, sizeof(vmc), NULL )))
+         return FALSE;
+ 
+-    pmc->cb = sizeof(PROCESS_MEMORY_COUNTERS);
++    if (count >= sizeof(PROCESS_MEMORY_COUNTERS_EX))
++    {
++        ((PROCESS_MEMORY_COUNTERS_EX *)pmc)->PrivateUsage = vmc.PrivateUsage;
++        pmc->cb = sizeof(PROCESS_MEMORY_COUNTERS_EX);
++    }
++    else pmc->cb = sizeof(PROCESS_MEMORY_COUNTERS);
+     pmc->PageFaultCount = vmc.PageFaultCount;
+     pmc->PeakWorkingSetSize = vmc.PeakWorkingSetSize;
+     pmc->WorkingSetSize = vmc.WorkingSetSize;
+diff --git a/include/psapi.h b/include/psapi.h
+index 6dcb783934e..04954297486 100644
+--- a/include/psapi.h
++++ b/include/psapi.h
+@@ -45,6 +45,21 @@ typedef struct _PROCESS_MEMORY_COUNTERS {
+ } PROCESS_MEMORY_COUNTERS;
+ typedef PROCESS_MEMORY_COUNTERS *PPROCESS_MEMORY_COUNTERS;
+ 
++typedef struct _PROCESS_MEMORY_COUNTERS_EX {
++  DWORD  cb;
++  DWORD  PageFaultCount;
++  SIZE_T PeakWorkingSetSize;
++  SIZE_T WorkingSetSize;
++  SIZE_T QuotaPeakPagedPoolUsage;
++  SIZE_T QuotaPagedPoolUsage;
++  SIZE_T QuotaPeakNonPagedPoolUsage;
++  SIZE_T QuotaNonPagedPoolUsage;
++  SIZE_T PagefileUsage;
++  SIZE_T PeakPagefileUsage;
++  SIZE_T PrivateUsage;
++} PROCESS_MEMORY_COUNTERS_EX;
++typedef PROCESS_MEMORY_COUNTERS_EX *PPROCESS_MEMORY_COUNTERS_EX;
++
+ typedef union _PSAPI_WORKING_SET_EX_BLOCK {
+     ULONG_PTR Flags;
+     struct {

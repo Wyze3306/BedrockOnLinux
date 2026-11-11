@@ -47,6 +47,8 @@ readonly VENDORED_WAYLAND_SEAT_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/
 readonly VENDORED_WAYLAND_SEAT_PATCH_SHA256="ed550ec1c78d581fbd21d25da429b9b37fb137e19df7128056cb2ec5340a5c59"
 readonly VENDORED_GAMING_SERVICES_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0012-xgameruntime-run-titles-that-target-a-newer-gaming-services.patch"
 readonly VENDORED_GAMING_SERVICES_PATCH_SHA256="d43c0f2cf32b624bb12d6db890d6f9a3a45e72523837310d868bec78318f59ce"
+readonly VENDORED_PRIVATE_USAGE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0013-kernelbase-report-PrivateUsage-from-GetProcessMemoryInfo.patch"
+readonly VENDORED_PRIVATE_USAGE_PATCH_SHA256="850b8f80a23e1b9a5b25ab2b647125c7affe6650fe8f9c632678bba9dacae35e"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
@@ -220,6 +222,16 @@ echo "== Applying the Gaming Services version fix"
 git -C "$SRC" apply --check "$VENDORED_GAMING_SERVICES_PATCH" \
   || { echo "!! Gaming Services version patch does not apply" >&2; exit 1; }
 git -C "$SRC" apply "$VENDORED_GAMING_SERVICES_PATCH"
+
+echo "== Applying the GetProcessMemoryInfo PrivateUsage fix"
+[ -f "$VENDORED_PRIVATE_USAGE_PATCH" ] \
+  || { echo "!! missing PrivateUsage patch" >&2; exit 1; }
+[ "$(sha256sum "$VENDORED_PRIVATE_USAGE_PATCH" | cut -d' ' -f1)" = \
+  "$VENDORED_PRIVATE_USAGE_PATCH_SHA256" ] \
+  || { echo "!! PrivateUsage patch hash mismatch" >&2; exit 1; }
+git -C "$SRC" apply --check "$VENDORED_PRIVATE_USAGE_PATCH" \
+  || { echo "!! PrivateUsage patch does not apply" >&2; exit 1; }
+git -C "$SRC" apply "$VENDORED_PRIVATE_USAGE_PATCH"
 
 echo "== Verifying reviewed source hashes"
 [ -f "$SOURCE_SHA256SUMS" ] || { echo "!! missing SOURCE-SHA256SUMS" >&2; exit 1; }

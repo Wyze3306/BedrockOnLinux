@@ -59,6 +59,10 @@ GAMING_SERVICES_PATCH = (
     DELTA / "0012-xgameruntime-run-titles-that-target-a-newer-gaming-"
             "services.patch"
 )
+PRIVATE_USAGE_PATCH = (
+    DELTA / "0013-kernelbase-report-PrivateUsage-from-"
+            "GetProcessMemoryInfo.patch"
+)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -66,6 +70,7 @@ CHANGED_FILES = {
     "dlls/combase/dcom.idl",
     "dlls/combase/marshal.c",
     "dlls/combase/stubmanager.c",
+    "dlls/kernelbase/debug.c",
     "dlls/ntdll/unix/loader.c",
     "dlls/ole32/dcom.idl",
     "dlls/windows.storage.applicationdata/Makefile.in",
@@ -102,6 +107,7 @@ CHANGED_FILES = {
     "include/microsoft.ui.idl",
     "include/microsoft.windows.storage.pickers.idl",
     "include/objidlbase.idl",
+    "include/psapi.h",
     "include/windows.storage.pickers.idl",
     "include/xgame.idl",
     "include/xgameerr.h",
@@ -175,6 +181,10 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
             self._constant("VENDORED_GAMING_SERVICES_PATCH_SHA256"),
         )
         self.assertEqual(
+            hashlib.sha256(PRIVATE_USAGE_PATCH.read_bytes()).hexdigest(),
+            self._constant("VENDORED_PRIVATE_USAGE_PATCH_SHA256"),
+        )
+        self.assertEqual(
             hashlib.sha256(SOURCE_SUMS.read_bytes()).hexdigest(),
             self._constant("SOURCE_SHA256SUMS_SHA256"),
         )
@@ -198,7 +208,8 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
                      + XSYSTEM_PATCH.read_text()
                      + SAVE_PICKER_PATCH.read_text()
                      + WAYLAND_SEAT_PATCH.read_text()
-                     + GAMING_SERVICES_PATCH.read_text())
+                     + GAMING_SERVICES_PATCH.read_text()
+                     + PRIVATE_USAGE_PATCH.read_text())
         self.assertTrue(text.startswith(f"From {WINEGDK_SOURCE_COMMIT} "))
         changed = {
             left for left, right in re.findall(
@@ -839,6 +850,25 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         self.assertIn("return result == ERROR_SUCCESS && value != 0;",
                       additions)
         self.assertNotIn("FAILED( result )", additions)
+
+    def test_private_usage_reaches_a_caller_that_asked_for_it(self):
+        # #292: Minecraft read stack leftovers as its own memory use and
+        # replaced other players' skins with default ones.
+        text = PRIVATE_USAGE_PATCH.read_text()
+        additions = "\n".join(
+            line[1:] for line in text.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        self.assertIn("VM_COUNTERS_EX vmc;", additions)
+        self.assertIn("if (count >= sizeof(PROCESS_MEMORY_COUNTERS_EX))",
+                      additions)
+        self.assertIn("->PrivateUsage = vmc.PrivateUsage;", additions)
+        self.assertIn("pmc->cb = sizeof(PROCESS_MEMORY_COUNTERS_EX);",
+                      additions)
+        # A caller with the short structure still gets the short size.
+        self.assertIn("else pmc->cb = sizeof(PROCESS_MEMORY_COUNTERS);",
+                      additions)
+        self.assertIn("} PROCESS_MEMORY_COUNTERS_EX;", additions)
 
     def test_the_save_picker_is_what_every_export_activates(self):
         # #167: RoActivateInstance of this class failed with
