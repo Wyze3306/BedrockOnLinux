@@ -162,7 +162,8 @@ class PartnerRuntime(unittest.TestCase):
         self.assertEqual(tiles[0]["value"], "2")
         self.assertEqual(tiles[0]["type"], 0)
         self.assertEqual(tiles[0]["bolType"], 1)
-        self.assertEqual(tiles[0]["label"], "Linesia SkyFaction")
+        self.assertEqual(tiles[0]["label"], "Linesia")
+        self.assertEqual(tiles[0]["message"], "SKYFACTION")
         self.assertTrue(tiles[0]["image"].startswith("assets/bol-partner-"))
 
     def test_the_promoted_entry_leaves_the_players_own_list(self):

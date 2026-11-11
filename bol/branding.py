@@ -119,8 +119,8 @@ PARTNERS = (
         "key": "linesia",
         "host": "play.linesia.net",
         "port": 19132,
-        "label": "Linesia SkyFaction",
-        "message": "SkyFaction · Kitmap · PvP Faction · FR",
+        "label": "Linesia",
+        "message": "SKYFACTION",
         "description": (
             "Linesia is a French Minecraft Bedrock server: SkyFaction, "
             "Kitmap and PvP Faction, with islands, jobs, prestiges and "
