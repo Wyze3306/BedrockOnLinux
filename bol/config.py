@@ -141,7 +141,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native22"
 # the field unwritten, Minecraft read stack leftovers as its own memory use,
 # and when that looked huge it gave players added to the world a default
 # skin instead of theirs (#292).
-WINEGDK_ARCHIVE_SHA256 = "e98512e74b1c3f930fdd213b24ac4a01abfa3a6336276076a509530c540b2b13"
+WINEGDK_ARCHIVE_SHA256 = "46927aa8d180c7151a6240c5e2196136cd515041292dd848218ea809284cb3ed"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "7c590b712430d67760c97258b8310d34e29a7293b2e05852bde866d1655eb994"
 
