@@ -165,8 +165,8 @@ modules:
       #   git rev-parse vX.Y.Z^{commit}
       - type: git
         url: https://github.com/Wyze3306/BedrockOnLinux.git
-        tag: v2.3.0
-        commit: 56d1bb767ba42700b91994cfacb51746fc2d6cd8
+        tag: v2.3.1
+        commit: 5a384fd319cabb10615a9fd2046dd2f6b686c1ee
         x-checker-data:
           type: git
           tag-pattern: ^v([\d.]+)$
