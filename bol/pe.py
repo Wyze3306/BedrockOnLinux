@@ -125,6 +125,49 @@ class PE:
         return self.rva2off(r) if r is not None else None
 
 
+_MACHINE_AMD64 = 0x8664
+_MACHINE_ARM64 = 0xAA64
+# IMAGE_LOAD_CONFIG_DIRECTORY64.CHPEMetadataPointer, and the data directory
+# entry that locates that structure.
+_CHPE_METADATA = 0xC8
+_LOAD_CONFIG_DIR = 10
+
+
+def code_machine(path: Path):
+    """The processor a 64-bit PE's code is for: "x86_64", "arm64ec",
+    "arm64" or "other", and None when the file is not a readable PE32+.
+
+    The header alone does not tell x86-64 from ARM64EC: an ARM64EC image
+    says AMD64 there too, and carries hybrid (CHPE) metadata in its load
+    configuration instead. ARM64X images say ARM64."""
+    try:
+        pe = PE(path)
+    except (OSError, ValueError, struct.error):
+        return None
+    d = pe.data
+    try:
+        coff = struct.unpack_from("<I", d, 0x3C)[0] + 4
+        machine = struct.unpack_from("<H", d, coff)[0]
+        if machine == _MACHINE_ARM64:
+            return "arm64"
+        if machine != _MACHINE_AMD64:
+            return "other"
+        opt = coff + 20
+        if struct.unpack_from("<I", d, opt + 108)[0] <= _LOAD_CONFIG_DIR:
+            return "x86_64"
+        rva, size = struct.unpack_from(
+            "<II", d, opt + 112 + 8 * _LOAD_CONFIG_DIR)
+        off = pe.rva2off(rva) if rva and size else None
+        if off is None:
+            return "x86_64"
+        if struct.unpack_from("<I", d, off)[0] < _CHPE_METADATA + 8:
+            return "x86_64"
+        chpe = struct.unpack_from("<Q", d, off + _CHPE_METADATA)[0]
+    except struct.error:
+        return None
+    return "arm64ec" if chpe else "x86_64"
+
+
 def _backup_once(path: Path):
     bk = path.with_suffix(path.suffix + ".bol-orig")
     if not bk.exists():
