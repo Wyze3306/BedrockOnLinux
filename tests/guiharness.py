@@ -24,7 +24,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer
 from PySide6.QtWidgets import QApplication
 
-from bol import catalog, gui, log, xodus
+from bol import catalog, gui, log, storeart, xodus
 
 
 def qt_app():
@@ -59,6 +59,7 @@ def headless_window(store_signed_in=False, **settings):
         mock.patch.object(gui, "gh_releases", return_value=[]),
         mock.patch.object(xodus, "signed_in", return_value=store_signed_in),
         mock.patch.object(catalog, "featured", return_value={}),
+        mock.patch.object(storeart, "logos", return_value={}),
         mock.patch.object(catalog, "image", return_value=None),
         mock.patch.object(catalog, "installed_slugs", return_value=set()),
     ]

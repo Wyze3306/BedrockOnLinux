@@ -20,10 +20,10 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import (
-    QObject, QPoint, QRect, QSocketNotifier, Qt, QThread, QTimer, Signal,
+    QObject, QPoint, QPointF, QRect, QSize, QSocketNotifier, Qt, QThread, QTimer, Signal,
     Slot,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QGridLayout, QHBoxLayout, QInputDialog, QLabel,
@@ -45,6 +45,7 @@ from .games import (installed_builds, list_editions,
 from .gamesetup import do_setup
 from . import betterrtx, gpus
 from .inject import run_injector
+from . import icons
 from .gui_content import ContentPage
 from .gui_mods import ModsPage
 from .launch import direct_launch_readiness, launch, single_window_session
@@ -928,36 +929,47 @@ class Popup(QFrame):
 # Edition picker
 # ======================================================================
 
-# Each edition's badge: a colour and a glyph, so the games tell apart at a
-# glance in the dock and the menu.
-_EDITION_BADGES = {
-    "release": ("#43a047", "⛏"),
-    "preview": ("#d8a230", "🧪"),
-    "dungeons": ("#c4552c", "⚔"),
-    "legends": ("#6a4fc4", "🛡"),
-    "education": ("#2f7fd0", "🎓"),
-}
-
-
-def edition_pixmap(edition_id, size=28):
-    """A rounded badge for an edition; any unknown one gets a grey one."""
-    color, glyph = _EDITION_BADGES.get(edition_id, ("#5a6273", "◆"))
+def rounded_pixmap(source, size, radius=None):
+    """``source`` scaled to fill a ``size`` square with rounded corners."""
     ratio = 2
-    pixmap = QPixmap(size * ratio, size * ratio)
-    pixmap.setDevicePixelRatio(ratio)
-    pixmap.fill(Qt.transparent)
-    painter = QPainter(pixmap)
+    out = QPixmap(size * ratio, size * ratio)
+    out.setDevicePixelRatio(ratio)
+    out.fill(Qt.transparent)
+    scaled = source.scaled(size * ratio, size * ratio,
+                           Qt.KeepAspectRatioByExpanding,
+                           Qt.SmoothTransformation)
+    scaled.setDevicePixelRatio(ratio)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform)
+    path = QPainterPath()
+    r = size * 0.22 if radius is None else radius
+    path.addRoundedRect(0, 0, size, size, r, r)
+    painter.setClipPath(path)
+    painter.drawPixmap(QRect(0, 0, size, size), scaled)
+    painter.end()
+    return out
+
+
+def edition_pixmap(logo, size, theme):
+    """An edition's Store logo, rounded; until it is known, a quiet tile
+    with a controller drawn on it."""
+    if logo is not None and not logo.isNull():
+        return rounded_pixmap(logo, size)
+    ratio = 2
+    out = QPixmap(size * ratio, size * ratio)
+    out.setDevicePixelRatio(ratio)
+    out.fill(Qt.transparent)
+    painter = QPainter(out)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setPen(Qt.NoPen)
-    painter.setBrush(QColor(color))
-    painter.drawRoundedRect(0, 0, size, size, size * 0.28, size * 0.28)
-    font = painter.font()
-    font.setPixelSize(int(size * 0.56))
-    painter.setFont(font)
-    painter.setPen(QColor("white"))
-    painter.drawText(QRect(0, 0, size, size), Qt.AlignCenter, glyph)
+    painter.setBrush(QColor(theme.card3))
+    painter.drawRoundedRect(0, 0, size, size, size * 0.22, size * 0.22)
+    glyph = icons.pixmap("game", theme.sub, int(size * 0.62))
+    offset = (size - int(size * 0.62)) / 2
+    painter.drawPixmap(QPointF(offset, offset), glyph)
     painter.end()
-    return pixmap
+    return out
 
 
 def edition_caption(entry):
@@ -972,8 +984,10 @@ def edition_caption(entry):
 class EditionMenu(Popup):
     """The editions, one row each with its badge; opens from the dock."""
 
-    def __init__(self, parent, editions):
+    def __init__(self, parent, editions, logo_for):
         super().__init__(parent, width=270, height=12 + 52 * len(editions))
+        self._logo_for = logo_for
+        self.badges = {}
         self.setObjectName("Popup")
         v = QVBoxLayout(self)
         v.setContentsMargins(6, 6, 6, 6)
@@ -995,8 +1009,9 @@ class EditionMenu(Popup):
             row.setContentsMargins(10, 4, 10, 4)
             row.setSpacing(10)
             badge = QLabel()
-            badge.setPixmap(edition_pixmap(entry["id"], 30))
+            badge.setPixmap(logo_for(entry["id"], 32))
             badge.setAttribute(Qt.WA_TransparentForMouseEvents)
+            self.badges[entry["id"]] = badge
             row.addWidget(badge)
             words = QVBoxLayout()
             words.setSpacing(0)
@@ -1012,6 +1027,10 @@ class EditionMenu(Popup):
             self.group.addButton(b)
             self.buttons[entry["id"]] = b
             v.addWidget(b)
+
+    def repaint_logos(self):
+        for edition_id, badge in self.badges.items():
+            badge.setPixmap(self._logo_for(edition_id, 32))
 
 
 # ======================================================================
@@ -1452,6 +1471,7 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(50, self.refresh_versions)
         QTimer.singleShot(200, self.check_for_update_async)
+        QTimer.singleShot(300, self._load_edition_logos)
 
         if self.settings.get("show_changelog_on_startup", False):
             QTimer.singleShot(0, self.toggle_changelog)
@@ -1524,6 +1544,11 @@ class MainWindow(QMainWindow):
         self._paint_edition_toggle()
         for row in getattr(self, "_switches", ()):
             row.switch.set_theme(self.theme)
+        if getattr(self, "rail_buttons", None):
+            self._paint_rail_icons()
+        if getattr(self, "edition_menu", None) is not None:
+            self.edition_menu.repaint_logos()
+            self._paint_edition_field(self._checked_edition_id())
         if getattr(self, "nav", None) is not None:
             self.nav.set_accent(self.theme.accent)
         if getattr(self, "mods_page", None) is not None and \
@@ -1578,7 +1603,7 @@ class MainWindow(QMainWindow):
         self.rail_buttons = {}
         self._rail_texts = {}
 
-        def item(key, glyph, text, slot, tip):
+        def item(key, icon_name, text, slot, tip):
             b = QPushButton()
             b.setObjectName("NavItem")
             b.setCheckable(True)
@@ -1588,22 +1613,23 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False: slot())
             self.rail_group.addButton(b)
             self.rail_buttons[key] = b
-            self._rail_texts[key] = (glyph, text)
+            b.setIconSize(QSize(20, 20))
+            self._rail_texts[key] = (icon_name, text)
             v.addWidget(b)
             return b
 
-        item("home", "🏠", "Play", self.go_home, "Choose a version and play")
-        item("content", "📦", "Add-ons && Maps", self.open_content,
+        item("home", "home", "Play", self.go_home, "Choose a version and play")
+        item("content", "addons", "Add-ons && Maps", self.open_content,
              "Add-ons, maps, texture packs and skins from MCPEDL and "
              "CurseForge")
         # Kept under its old name: the Mods page was a pill of the top bar.
-        self.mods_card = item("mods", "🧩", "Mods", self.open_mods,
+        self.mods_card = item("mods", "mods", "Mods", self.open_mods,
                               "LeviLamina mods: browse, install, import")
-        item("profiles", "👥", "Profiles", self.open_profiles,
+        item("profiles", "profiles", "Profiles", self.open_profiles,
              "Separate sign-ins, worlds and settings")
-        item("settings", "⚙", "Settings", self.open_settings,
+        item("settings", "settings", "Settings", self.open_settings,
              "Launcher and game settings")
-        item("changelog", "✨", "What's New", self.open_changelog,
+        item("changelog", "news", "What's New", self.open_changelog,
              "What changed in each version")
         v.addStretch(1)
 
@@ -1612,7 +1638,7 @@ class MainWindow(QMainWindow):
         self.prof_card.setCursor(Qt.PointingHandCursor)
         pl = QHBoxLayout(self.prof_card); pl.setContentsMargins(10, 6, 8, 6)
         pl.setSpacing(8)
-        self.prof_icon = QLabel("👤")
+        self.prof_icon = QLabel()
         pl.addWidget(self.prof_icon)
         self.prof_label = QLabel(current_profile_name())
         self.prof_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -1675,15 +1701,28 @@ class MainWindow(QMainWindow):
         self.settings["rail_collapsed"] = collapsed
         self._paint_rail()
 
+    def _paint_rail_icons(self):
+        """Tint the menu's and the home tiles' icons for the theme."""
+        t = self.theme
+        for key, b in self.rail_buttons.items():
+            b.setIcon(icons.toggle_icon(self._rail_texts[key][0], t.sub,
+                                        t.fg, t.accent))
+        self.prof_icon.setPixmap(icons.pixmap("user", t.sub, 18))
+        for label, name in getattr(self, "_tile_icons", ()):
+            label.setPixmap(icons.pixmap(name, t.accent, 22))
+
     def _paint_rail(self):
         collapsed = self._rail_folded()
         self.rail.setFixedWidth(self.RAIL_NARROW if collapsed
                                 else self.RAIL_WIDE)
         for key, b in self.rail_buttons.items():
-            glyph, text = self._rail_texts[key]
-            b.setText(glyph if collapsed else f"{glyph}   {text}")
-            b.setStyleSheet("text-align:center; padding:0; font-size:18px;"
+            _icon, text = self._rail_texts[key]
+            b.setText("" if collapsed else f"  {text}")
+            b.setToolTip(text.replace("&&", "&") if collapsed
+                         else b.toolTip())
+            b.setStyleSheet("text-align:center; padding:0;"
                             if collapsed else "")
+        self._paint_rail_icons()
         self.rail_fold.setVisible(not collapsed)
         self.rail_unfold.setVisible(collapsed)
         self._rail_brand_row.setAlignment(Qt.AlignHCenter if collapsed
@@ -1701,7 +1740,7 @@ class MainWindow(QMainWindow):
             icon.setAlignment(Qt.AlignCenter)
             icon.setSizePolicy(QSizePolicy.Expanding if collapsed
                                else QSizePolicy.Fixed, QSizePolicy.Preferred)
-        self.prof_icon.setStyleSheet("font-size:16px;" if collapsed else "")
+
         self.prof_card.setToolTip(f"Profile: {current_profile_name()}")
         # Too narrow to unfold: the button says why instead of doing nothing.
         narrow = self.width() < self.RAIL_AUTO_FOLD
@@ -1806,16 +1845,18 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout(card)
         h.setContentsMargins(26, 22, 22, 22)
         h.setSpacing(22)
+        # The edition chosen next to PLAY: its Store logo and its name.
+        self.hero_icon = QLabel()
+        self.hero_icon.setFixedSize(104, 104)
         if self.icon_pixmap:
-            lbl = QLabel()
-            lbl.setPixmap(self.icon_pixmap.scaled(104, 104, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            h.addWidget(lbl, 0, Qt.AlignVCenter)
+            self.hero_icon.setPixmap(self.icon_pixmap.scaled(104, 104, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        h.addWidget(self.hero_icon, 0, Qt.AlignVCenter)
         titles = QVBoxLayout(); titles.setSpacing(4)
         titles.addStretch(1)
-        title = QLabel("Minecraft Bedrock"); title.setObjectName("Hero")
-        titles.addWidget(title)
-        sub = QLabel("Bedrock Edition for Linux"); sub.setObjectName("Sub")
-        titles.addWidget(sub)
+        self.hero_title = QLabel("Minecraft Bedrock"); self.hero_title.setObjectName("Hero")
+        titles.addWidget(self.hero_title)
+        self.hero_sub = QLabel("Bedrock Edition for Linux"); self.hero_sub.setObjectName("Sub")
+        titles.addWidget(self.hero_sub)
         self.selected_chip = _ChipLabel(); self.selected_chip.setObjectName("Chip")
         self.selected_chip.setText("")
         titles.addWidget(self.selected_chip, 0, Qt.AlignLeft)
@@ -1823,13 +1864,14 @@ class MainWindow(QMainWindow):
         h.addLayout(titles, 1)
 
         tiles = QGridLayout(); tiles.setSpacing(10)
+        self._tile_icons = []
         for index, (glyph, name, hint, slot) in enumerate((
-                ("📦", "Add-ons & Maps", "MCPEDL · CurseForge",
+                ("addons", "Add-ons & Maps", "MCPEDL · CurseForge",
                  self.open_content),
-                ("🧩", "Mods", "LeviLamina", self.open_mods),
-                ("📥", "Import a file", ".mcpack · .mcworld · .mcaddon",
+                ("mods", "Mods", "LeviLamina", self.open_mods),
+                ("import", "Import a file", ".mcpack · .mcworld · .mcaddon",
                  self._import_from_home),
-                ("🌍", "Worlds & packs", "Open the game folder",
+                ("folder", "Worlds & packs", "Open the game folder",
                  lambda: self._open_folder(game_content_dir())))):
             tiles.addWidget(self._home_tile(glyph, name, hint, slot),
                             index // 2, index % 2)
@@ -1853,7 +1895,9 @@ class MainWindow(QMainWindow):
         tile.setFixedSize(210, 64)
         tile.setToolTip(name)
         t = QHBoxLayout(tile); t.setContentsMargins(14, 8, 12, 8); t.setSpacing(10)
-        icon = QLabel(glyph); icon.setStyleSheet("font-size:22px;")
+        icon = QLabel(); icon.setFixedSize(22, 22)
+        icon.setPixmap(icons.pixmap(glyph, self.theme.accent, 22))
+        self._tile_icons.append((icon, glyph))
         t.addWidget(icon)
         words = QVBoxLayout(); words.setSpacing(0)
         label = QLabel(name); label.setStyleSheet("font-weight:700;")
@@ -1922,7 +1966,8 @@ class MainWindow(QMainWindow):
         self.edition_field.mousePressEvent = lambda e: self.open_edition_menu()
         h.addWidget(self.edition_field)
 
-        self.edition_menu = EditionMenu(self, editions)
+        self._edition_logos = {}
+        self.edition_menu = EditionMenu(self, editions, self.edition_logo)
         self.edition_group = self.edition_menu.group
         self.edition_buttons = self.edition_menu.buttons
         self._edition_entries = {e["id"]: e for e in editions}
@@ -1964,11 +2009,50 @@ class MainWindow(QMainWindow):
     def _paint_edition_toggle(self):
         pass  # QSS handles the checked-state colouring via #EditionRow:checked
 
+    # What the home banner calls each edition.
+    _HERO_NAMES = {
+        "release": ("Minecraft Bedrock", "Bedrock Edition for Linux"),
+        "preview": ("Minecraft Preview", "Bedrock's beta builds, on Linux"),
+    }
+
+    def edition_logo(self, edition_id, size):
+        return edition_pixmap(self._edition_logos.get(edition_id), size,
+                              self.theme)
+
+    def _load_edition_logos(self):
+        from . import storeart  # noqa: PLC0415 - network, worker only
+        editions = list(self._edition_entries.values())
+        worker = Worker(lambda: storeart.logos(editions))
+        worker.done.connect(self._edition_logos_loaded)
+        self._start_worker("edition-logos", worker)
+
+    def _edition_logos_loaded(self, logos):
+        for edition_id, data in (logos or {}).items():
+            pixmap = QPixmap()
+            if pixmap.loadFromData(data):
+                self._edition_logos[edition_id] = pixmap
+        self.edition_menu.repaint_logos()
+        self._paint_edition_field(self._checked_edition_id())
+
     def _paint_edition_field(self, edition_id):
         entry = self._edition_entries.get(edition_id) or {}
-        self.edition_badge.setPixmap(edition_pixmap(edition_id, 28))
+        self.edition_badge.setPixmap(self.edition_logo(edition_id, 30))
         self.edition_name.setText(entry.get("short") or entry.get("name")
                                   or edition_id)
+        if getattr(self, "hero_title", None) is None:
+            return
+        name = entry.get("name") or "Minecraft"
+        for suffix in (" for Windows", " - Windows"):
+            name = name.replace(suffix, "")
+        title, sub = self._HERO_NAMES.get(edition_id, (name, "On Linux"))
+        self.hero_title.setText(title)
+        self.hero_sub.setText(sub)
+        logo = self._edition_logos.get(edition_id)
+        if logo is not None:
+            self.hero_icon.setPixmap(rounded_pixmap(logo, 104, 22))
+        elif self.icon_pixmap:
+            self.hero_icon.setPixmap(self.icon_pixmap.scaled(
+                104, 104, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     def open_edition_menu(self):
         self.edition_menu.show_above(self.edition_field, gap=8)

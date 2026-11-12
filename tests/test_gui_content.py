@@ -107,7 +107,10 @@ class RailFoldTests(unittest.TestCase):
             self.assertIn("Settings", window.rail_buttons["settings"].text())
             window.rail_fold.click()
             self.assertEqual(window.rail.width(), window.RAIL_NARROW)
-            self.assertEqual(window.rail_buttons["settings"].text(), "⚙")
+            settings = window.rail_buttons["settings"]
+            self.assertEqual(settings.text(), "")
+            self.assertFalse(settings.icon().isNull())
+            self.assertEqual(settings.toolTip(), "Settings")
             self.assertFalse(window.prof_label.isVisibleTo(window.rail))
             self.assertTrue(saved.get("rail_collapsed"))
             window.rail_unfold.click()
