@@ -386,7 +386,9 @@ def windowed_vsync_problem(options, environ=None):
 # player's own locale. When the host lacks one of them it generates every
 # locale the game needs into a temporary directory, on every launch: measured
 # 3 to 6 seconds more before the game window on a French desktop with only
-# fr_FR.UTF-8 installed. Locales present on the host are used as they are.
+# fr_FR.UTF-8 installed. Locales present on the host are used as they are,
+# and since bol.slr_locales the launcher keeps the generated ones, so only a
+# copy it could not build costs anything.
 _CONTAINER_LOCALES = ("en_US.UTF-8",)
 _LOCALE_VARIABLES = ("LC_ALL", "LC_CTYPE", "LANG")
 
@@ -421,11 +423,15 @@ def locale_available(name, _libc=[]):
 
 
 def container_locale_problem(environ=None, available=None,
-                             flatpak_info=Path("/.flatpak-info")):
+                             flatpak_info=Path("/.flatpak-info"),
+                             kept_state=None):
     """Advice when the Steam Linux Runtime will build locales at each launch.
 
     Not under Flatpak: there the locales come from the Flatpak runtime, which
-    the player does not manage with the system's tools.
+    the player does not manage with the system's tools. Nor when the launcher
+    keeps a copy of them (bol.slr_locales), or will build one at the next
+    launch: only a copy it failed to build leaves the cost at every launch.
+    ``kept_state`` stands in for slr_locales.state() in tests.
     """
     source = os.environ if environ is None else environ
     if source.get("PRESSURE_VESSEL_GENERATE_LOCALES") == "0":
@@ -453,11 +459,17 @@ def container_locale_problem(environ=None, available=None,
             missing.append(name)
     if not missing:
         return None
+    if kept_state is None:
+        from . import slr_locales
+        kept_state = slr_locales.state(source, available=available)
+    if kept_state != "failed":
+        return None
     names = " and ".join(missing)
     return (
         f"Every launch waits a few seconds longer than it needs to: this "
-        f"system has no {names} locale, so the Steam Linux Runtime the game "
-        f"runs in builds it again each time it starts. Add it once at system "
+        f"system has no {names} locale, and the launcher could not keep the "
+        f"copy the Steam Linux Runtime builds (see slr-locales.log), so it "
+        f"builds it again each time the game starts. Add it once at system "
         f"level — on Debian, Ubuntu and Mint with 'sudo dpkg-reconfigure "
         f"locales', on Arch by enabling it in /etc/locale.gen and running "
         f"'sudo locale-gen', on Fedora with its glibc-langpack package. "
