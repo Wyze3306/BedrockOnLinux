@@ -182,7 +182,21 @@ kernelbase now asks for it, fills `PrivateUsage` when the caller's buffer has
 room for it and reports the `_EX` size in `cb`, as Windows does. `psapi.h`
 gains the structure.
 
+The `0015` and `0016` patches take two Wine calls Minecraft makes on every
+frame off its main thread, the one that builds each frame and caps the frame
+rate. `GetProcessMemoryInfo` opened `/proc/self/status`, read it through stdio
+and ran up to six `sscanf()` per line before closing it; ntdll now keeps the
+file open for its own process, rereads it with one `pread()` from offset 0 and
+picks the six fields out with `strncmp()` and `strtoull()`, for the same
+values. `get_timezone_info()`, behind `GetTimeZoneInformation`, ran
+`gmtime()`, `mktime()` and `localtime()` on each of the game's four calls per
+frame, and glibc stats the zone file in two of them; it now compares
+`time(NULL)` with the second it last checked, as `SystemTimeOfDayInformation`
+already does, and only then asks libc. Measured on the game's main thread at
+about 600 FPS, the two calls went from 2.8% and 1.9% of its time to almost
+nothing.
+
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
 native5 delta and its follow-ups. The Bullseye builder applies the reviewed r12
 and native patches when the target commit is unavailable, always applies `0002`
-through `0013`, then verifies the complete resulting source tree.
+through `0016`, then verifies the complete resulting source tree.

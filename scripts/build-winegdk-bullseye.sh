@@ -49,6 +49,10 @@ readonly VENDORED_GAMING_SERVICES_PATCH="$PROJECT_ROOT/third_party/winegdk-nativ
 readonly VENDORED_GAMING_SERVICES_PATCH_SHA256="d43c0f2cf32b624bb12d6db890d6f9a3a45e72523837310d868bec78318f59ce"
 readonly VENDORED_PRIVATE_USAGE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0013-kernelbase-report-PrivateUsage-from-GetProcessMemoryInfo.patch"
 readonly VENDORED_PRIVATE_USAGE_PATCH_SHA256="850b8f80a23e1b9a5b25ab2b647125c7affe6650fe8f9c632678bba9dacae35e"
+readonly VENDORED_VM_COUNTERS_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch"
+readonly VENDORED_VM_COUNTERS_PATCH_SHA256="9fa03ed50b2a5bfb68a60f55aa4b1ce4b7d842010c6b3f2c176177528a722db6"
+readonly VENDORED_TIME_ZONE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch"
+readonly VENDORED_TIME_ZONE_PATCH_SHA256="6054f33a5a95c5beaf12039dca8b303fdfa66c4e01fb95b75479659f0aebc2d9"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly SOURCE_SHA256SUMS_SHA256="e5b3763a60374f1a5b1506f459ad80f39fe302d2397f26e2d9b9d220af4e412b"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
@@ -586,6 +590,16 @@ fi
 [[ "$(sha256sum "$VENDORED_PRIVATE_USAGE_PATCH" | cut -d' ' -f1)" == \
     "$VENDORED_PRIVATE_USAGE_PATCH_SHA256" ]] ||
   die "vendored PrivateUsage patch SHA-256 mismatch"
+[[ -f "$VENDORED_VM_COUNTERS_PATCH" ]] ||
+  die "vendored process memory counters patch is missing"
+[[ "$(sha256sum "$VENDORED_VM_COUNTERS_PATCH" | cut -d' ' -f1)" == \
+    "$VENDORED_VM_COUNTERS_PATCH_SHA256" ]] ||
+  die "vendored process memory counters patch SHA-256 mismatch"
+[[ -f "$VENDORED_TIME_ZONE_PATCH" ]] ||
+  die "vendored time zone check patch is missing"
+[[ "$(sha256sum "$VENDORED_TIME_ZONE_PATCH" | cut -d' ' -f1)" == \
+    "$VENDORED_TIME_ZONE_PATCH_SHA256" ]] ||
+  die "vendored time zone check patch SHA-256 mismatch"
 [[ "$SOURCE_DATE_EPOCH" == "$EXPECTED_SOURCE_DATE_EPOCH" ]] ||
   die "WineGDK source timestamp changed: $SOURCE_DATE_EPOCH"
 
@@ -639,6 +653,8 @@ vendored_save_picker_patch_sha256=$VENDORED_SAVE_PICKER_PATCH_SHA256
 vendored_wayland_seat_patch_sha256=$VENDORED_WAYLAND_SEAT_PATCH_SHA256
 vendored_gaming_services_patch_sha256=$VENDORED_GAMING_SERVICES_PATCH_SHA256
 vendored_private_usage_patch_sha256=$VENDORED_PRIVATE_USAGE_PATCH_SHA256
+vendored_vm_counters_patch_sha256=$VENDORED_VM_COUNTERS_PATCH_SHA256
+vendored_time_zone_patch_sha256=$VENDORED_TIME_ZONE_PATCH_SHA256
 source_sha256sums_sha256=$SOURCE_SHA256SUMS_SHA256
 source_date_epoch=$SOURCE_DATE_EPOCH
 debian_suite=$DEBIAN_SUITE
@@ -731,6 +747,16 @@ git -C "$WORK_ROOT/source" apply --check "$VENDORED_PRIVATE_USAGE_PATCH" ||
   die "vendored PrivateUsage patch does not apply"
 git -C "$WORK_ROOT/source" apply "$VENDORED_PRIVATE_USAGE_PATCH" ||
   die "could not apply vendored PrivateUsage patch"
+printf '==> Applying the per-frame process memory counters fix\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_VM_COUNTERS_PATCH" ||
+  die "vendored process memory counters patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_VM_COUNTERS_PATCH" ||
+  die "could not apply vendored process memory counters patch"
+printf '==> Applying the per-frame time zone check fix\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_TIME_ZONE_PATCH" ||
+  die "vendored time zone check patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_TIME_ZONE_PATCH" ||
+  die "could not apply vendored time zone check patch"
 [[ -f "$SOURCE_SHA256SUMS" ]] || die "WineGDK source hash manifest is missing"
 [[ "$(sha256sum "$SOURCE_SHA256SUMS" | cut -d' ' -f1)" == \
     "$SOURCE_SHA256SUMS_SHA256" ]] ||

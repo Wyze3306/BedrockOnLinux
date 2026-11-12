@@ -49,6 +49,10 @@ readonly VENDORED_GAMING_SERVICES_PATCH="$PROJECT_ROOT/third_party/winegdk-nativ
 readonly VENDORED_GAMING_SERVICES_PATCH_SHA256="d43c0f2cf32b624bb12d6db890d6f9a3a45e72523837310d868bec78318f59ce"
 readonly VENDORED_PRIVATE_USAGE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0013-kernelbase-report-PrivateUsage-from-GetProcessMemoryInfo.patch"
 readonly VENDORED_PRIVATE_USAGE_PATCH_SHA256="850b8f80a23e1b9a5b25ab2b647125c7affe6650fe8f9c632678bba9dacae35e"
+readonly VENDORED_VM_COUNTERS_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch"
+readonly VENDORED_VM_COUNTERS_PATCH_SHA256="9fa03ed50b2a5bfb68a60f55aa4b1ce4b7d842010c6b3f2c176177528a722db6"
+readonly VENDORED_TIME_ZONE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch"
+readonly VENDORED_TIME_ZONE_PATCH_SHA256="6054f33a5a95c5beaf12039dca8b303fdfa66c4e01fb95b75479659f0aebc2d9"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
@@ -232,6 +236,26 @@ echo "== Applying the GetProcessMemoryInfo PrivateUsage fix"
 git -C "$SRC" apply --check "$VENDORED_PRIVATE_USAGE_PATCH" \
   || { echo "!! PrivateUsage patch does not apply" >&2; exit 1; }
 git -C "$SRC" apply "$VENDORED_PRIVATE_USAGE_PATCH"
+
+echo "== Applying the per-frame process memory counters fix"
+[ -f "$VENDORED_VM_COUNTERS_PATCH" ] \
+  || { echo "!! missing process memory counters patch" >&2; exit 1; }
+[ "$(sha256sum "$VENDORED_VM_COUNTERS_PATCH" | cut -d' ' -f1)" = \
+  "$VENDORED_VM_COUNTERS_PATCH_SHA256" ] \
+  || { echo "!! process memory counters patch hash mismatch" >&2; exit 1; }
+git -C "$SRC" apply --check "$VENDORED_VM_COUNTERS_PATCH" \
+  || { echo "!! process memory counters patch does not apply" >&2; exit 1; }
+git -C "$SRC" apply "$VENDORED_VM_COUNTERS_PATCH"
+
+echo "== Applying the per-frame time zone check fix"
+[ -f "$VENDORED_TIME_ZONE_PATCH" ] \
+  || { echo "!! missing time zone check patch" >&2; exit 1; }
+[ "$(sha256sum "$VENDORED_TIME_ZONE_PATCH" | cut -d' ' -f1)" = \
+  "$VENDORED_TIME_ZONE_PATCH_SHA256" ] \
+  || { echo "!! time zone check patch hash mismatch" >&2; exit 1; }
+git -C "$SRC" apply --check "$VENDORED_TIME_ZONE_PATCH" \
+  || { echo "!! time zone check patch does not apply" >&2; exit 1; }
+git -C "$SRC" apply "$VENDORED_TIME_ZONE_PATCH"
 
 echo "== Verifying reviewed source hashes"
 [ -f "$SOURCE_SHA256SUMS" ] || { echo "!! missing SOURCE-SHA256SUMS" >&2; exit 1; }
