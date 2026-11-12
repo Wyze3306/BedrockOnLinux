@@ -383,10 +383,25 @@ class SocialSnapshotTests(ServiceTestCase):
         self.addCleanup(patch.stop)
         return service
 
+    # The shape PeopleHub answers with for the multiplayersummary decoration,
+    # measured 2026-11-12: every friend has one, joinable or not.
+    NOTHING_TO_JOIN = {"joinableActivities": [], "partyDetails": [],
+                       "inParty": 0}
+    HOSTING = {"joinableActivities": [{
+        "sequenceNumber": "639300829398969168", "titleId": 896928775,
+        "joinRestriction": "Followed", "maxPlayers": 30, "currentPlayers": 1,
+        "groupId": "DBDC", "platform": None,
+        "activationInfo": {"win32": {"titleId": 1739947436}}}],
+        "partyDetails": [], "inParty": 0}
+
+    def test_it_asks_for_the_decoration_peoplehub_knows(self):
+        # "multiplayer" is silently ignored: every summary comes back null.
+        self.assertIn("/decoration/multiplayersummary,", presence.PEOPLEHUB_URL)
+
     def test_it_counts_friends_and_the_sessions_among_them(self):
         self._service_with_people([
-            {"gamertag": "a", "multiplayerSummary": None},
-            {"gamertag": "b", "multiplayerSummary": {"InMultiplayerSession": 1}},
+            {"gamertag": "a", "multiplayerSummary": self.NOTHING_TO_JOIN},
+            {"gamertag": "b", "multiplayerSummary": self.HOSTING},
             {"gamertag": "c"},
         ])
         snapshot = presence.social_snapshot(_credentials())
@@ -395,8 +410,19 @@ class SocialSnapshotTests(ServiceTestCase):
         self.assertEqual(snapshot.friends, 3)
         self.assertEqual(snapshot.in_session, 1)
 
-    def test_an_empty_session_record_is_not_a_session(self):
-        self._service_with_people([{"gamertag": "a", "multiplayerSummary": {}}])
+    def test_a_summary_with_nothing_to_join_is_not_a_session(self):
+        self._service_with_people([
+            {"gamertag": "a", "multiplayerSummary": self.NOTHING_TO_JOIN},
+            {"gamertag": "b", "multiplayerSummary": {}},
+            {"gamertag": "c", "multiplayerSummary": None},
+        ])
+        self.assertEqual(presence.social_snapshot(_credentials()).in_session, 0)
+
+    def test_a_joinable_session_of_another_game_is_not_a_world(self):
+        roblox = {"joinableActivities": [{"titleId": 1746894998}],
+                  "partyDetails": [], "inParty": 0}
+        self._service_with_people([
+            {"gamertag": "a", "multiplayerSummary": roblox}])
         self.assertEqual(presence.social_snapshot(_credentials()).in_session, 0)
 
     def test_a_refused_friends_list_is_reported_not_guessed_at(self):
