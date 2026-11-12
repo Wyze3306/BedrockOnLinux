@@ -18,6 +18,7 @@ from .games import (
     list_versions,
     prune_legacy_game_archives,
     use_game_dir,
+    uses_xbox_live,
 )
 from .log import BolError, desktop_notify, info, ok, warn
 from .prefix import (
@@ -107,13 +108,18 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
         edition, version = _auto_selection(s)
         use_game_dir(install_game(edition, version, progress, force=force))
     gd = Path(load_settings()["game_dir"])
+    # The Xbox Live DLL swaps and the title-screen patch are for Bedrock;
+    # Minecraft Education has neither XCurl nor Xbox Live to fix (#351).
+    xbox_live = uses_xbox_live(gd)
     if load_settings().get("proton_source") == "winegdk":
         ensure_winegdk(force, progress)
-        install_gdk_xbox_dlls(gd)
+        if xbox_live:
+            install_gdk_xbox_dlls(gd)
     else:
         ensure_proton(proton_tag, force, progress)
     ensure_umu(force)
-    fix_curl_ssl(gd)
+    if xbox_live:
+        fix_curl_ssl(gd)
     if not boot_prefix():
         raise BolError(
             "Could not initialise the Wine prefix, so setup stopped before "
@@ -121,6 +127,10 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
             f"{LOGS / 'native-login.log'} and re-run 'Install / Update'."
         )
     install_gameinput(active_prefix(), gd)
+    if not xbox_live:
+        ok("Setup complete — click PLAY, then sign in to Minecraft Education "
+           "with your school or work account.")
+        return
     hide_signin_button(gd)
     # Not "sign in in-game": that button reaches a sign-in the engine does
     # not implement, and telling people to use it is how #227/#228 were

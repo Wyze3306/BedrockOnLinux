@@ -1511,15 +1511,17 @@ class MainWindow(QMainWindow):
         self.edition_group.setExclusive(True)
         self.stable_btn = btn("Stable", None, kind="ghost", w=78, h=32)
         self.preview_btn = btn("Preview", None, kind="ghost", w=78, h=32)
-        for b in (self.stable_btn, self.preview_btn):
+        self.education_btn = btn("Education", None, kind="ghost", w=92, h=32,
+                                 tip="Minecraft Education: school and work accounts")
+        for b in (self.stable_btn, self.preview_btn, self.education_btn):
             b.setObjectName("Toggle")
             b.setCheckable(True)
-        self.edition_group.addButton(self.stable_btn)
-        self.edition_group.addButton(self.preview_btn)
-        efl.addWidget(self.stable_btn)
-        efl.addWidget(self.preview_btn)
+            self.edition_group.addButton(b)
+            efl.addWidget(b)
         self.stable_btn.clicked.connect(lambda: self.select_edition("release"))
         self.preview_btn.clicked.connect(lambda: self.select_edition("preview"))
+        self.education_btn.clicked.connect(
+            lambda: self.select_edition("education"))
         h.addWidget(ed_field)
 
         h.addStretch(1)
@@ -1533,9 +1535,47 @@ class MainWindow(QMainWindow):
         self.play_btn = btn("▶  PLAY", self.do_play, kind="play", w=120, h=52, tip="Play Game")
         h.addWidget(self.play_btn)
 
-        edition_id = "preview" if self.settings.get("show_betas", False) else "release"
-        (self.preview_btn if edition_id == "preview" else self.stable_btn).setChecked(True)
+        self._edition_button(self._saved_picker_edition()).setChecked(True)
         return dock
+
+    # Which edition the picker shows. "show_betas" is what releases before
+    # Education saved, and still says Stable or Preview on its own.
+    _PICKER_EDITION = "picker_edition"
+
+    def _saved_picker_edition(self):
+        saved = self.settings.get(self._PICKER_EDITION)
+        if saved in ("release", "preview", "education"):
+            return saved
+        return "preview" if self.settings.get("show_betas", False) else "release"
+
+    def _edition_button(self, edition_id):
+        return {"preview": self.preview_btn,
+                "education": self.education_btn}.get(edition_id,
+                                                      self.stable_btn)
+
+    def _shown_edition(self):
+        if self.education_btn.isChecked():
+            return "education"
+        return "preview" if self.preview_btn.isChecked() else "release"
+
+    @staticmethod
+    def _version_edition(v):
+        """The edition id of a picker entry (an edition dict or its id)."""
+        edition = v.get("edition")
+        if isinstance(edition, dict):
+            edition = edition.get("id")
+        return edition or ("preview" if v.get("beta") else "release")
+
+    @staticmethod
+    def _version_label(v):
+        """What the picker shows for an entry; never the same for two
+        editions, since the label is how a pick is found again."""
+        label = format_display_version(v["tag"], v["beta"])
+        if v["beta"]:
+            label += "  ·  BETA"
+        elif MainWindow._version_edition(v) == "education":
+            label += "  ·  EDU"
+        return label
 
     def _paint_edition_toggle(self):
         pass  # QSS handles the checked-state colouring via #Toggle:checked
@@ -1699,12 +1739,12 @@ class MainWindow(QMainWindow):
         self._update_selected_chip()
 
     def _edition_matches(self, v, wanted=None):
-        wanted = (wanted or ("preview" if self.preview_btn.isChecked() else "release")) == "preview"
-        return bool(v.get("beta", False)) == wanted
+        return self._version_edition(v) == (wanted or self._shown_edition())
 
     def select_edition(self, edition_id):
         self.settings = load_settings()
         self.settings["show_betas"] = edition_id == "preview"
+        self.settings[self._PICKER_EDITION] = edition_id
         save_settings(self.settings)
         matches = [l for l, v in zip(self.ui_state.get("labels") or [],
                                       self.ui_state.get("versions") or [])
@@ -1739,8 +1779,12 @@ class MainWindow(QMainWindow):
             changed = True
         if changed:
             save_settings(self.settings)
-        self.selected_chip.setText(f"  {display}{'  ·  BETA' if is_beta else ''}  ")
-        (self.preview_btn if is_beta else self.stable_btn).setChecked(True)
+        edition = (self._version_edition(picked) if picked
+                   else "preview" if is_beta else "release")
+        suffix = ("  ·  BETA" if is_beta
+                  else "  ·  EDU" if edition == "education" else "")
+        self.selected_chip.setText(f"  {display}{suffix}  ")
+        self._edition_button(edition).setChecked(True)
         self.theme.beta = is_beta
         self.apply_theme()
         cur_kill = self.ui_state.get("busy")
@@ -1750,8 +1794,7 @@ class MainWindow(QMainWindow):
         lab = self.ver_label.text()
         if not self.ui_state["versions"] or not lab:
             return None
-        labels = [format_display_version(v["tag"], v["beta"]) + ("  ·  BETA" if v["beta"] else "")
-                  for v in self.ui_state["versions"]]
+        labels = [self._version_label(v) for v in self.ui_state["versions"]]
         try:
             idx = labels.index(lab)
             return self.ui_state["versions"][idx]
@@ -1828,8 +1871,7 @@ class MainWindow(QMainWindow):
             log._LOG_SINK("xx no versions loaded")
             return
         self.ui_state["versions"] = versions
-        labels = [format_display_version(v["tag"], v["beta"]) + ("  ·  BETA" if v["beta"] else "")
-                  for v in versions]
+        labels = [self._version_label(v) for v in versions]
         self.ui_state["labels"] = labels
         if _alive(self.version_popup) and self.version_popup.isVisible():
             current = self.version_popup.list.currentItem()
@@ -1852,9 +1894,17 @@ class MainWindow(QMainWindow):
         build is the part that has to be rare -- it is a silent 2.5 GB
         download the next time PLAY is pressed.
         """
-        wanted = (load_settings().get("mc_version") or "").strip()
+        settings = load_settings()
+        wanted = (settings.get("mc_version") or "").strip()
         if not wanted:
             return 0
+        # Two editions can carry the same build number (Education follows
+        # Bedrock's): the one last played wins.
+        edition = (settings.get("mc_edition") or "").strip()
+        for index, version in enumerate(versions):
+            if version["tag"] == wanted and \
+                    MainWindow._version_edition(version) == edition:
+                return index
         for index, version in enumerate(versions):
             if version["tag"] == wanted:
                 return index
@@ -2534,7 +2584,10 @@ class MainWindow(QMainWindow):
             # is what issue #214 was reported with.
             self._store_login_already_open()
             return
-        if not self._online_sign_in_settled():
+        # The Xbox sign-in is Bedrock's; Minecraft Education asks for its
+        # own school or work account once it starts.
+        xbox_live = (ver.get("edition") or {}).get("xbox_live", True)
+        if xbox_live and not self._online_sign_in_settled():
             return
         if not self._preview_data_settled(ver):
             return
@@ -3979,14 +4032,15 @@ class MainWindow(QMainWindow):
             self.mods_page.opened()
             self._nav_follow_page(self.mods_page)
 
-    def select_build(self, version, beta):
+    def select_build(self, version, beta, edition=None):
         """Make the picker next to PLAY point at an installed build, as if it
         was picked there. False when the picker does not list it."""
+        edition = edition or ("preview" if beta else "release")
         for label, entry in zip(self.ui_state.get("labels") or [],
                                 self.ui_state.get("versions") or []):
-            if entry.get("tag") == version and bool(entry.get("beta")) == \
-                    bool(beta):
-                self.select_edition("preview" if beta else "release")
+            if entry.get("tag") == version and \
+                    self._version_edition(entry) == edition:
+                self.select_edition(edition)
                 self.set_version(label)
                 return True
         return False

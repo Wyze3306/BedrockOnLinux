@@ -44,6 +44,7 @@ from .fixups import (
     hide_signin_button,
 )
 from .gameinput import builtin_gameinput_override, install_gameinput
+from .games import uses_xbox_live
 from .gamesetup import (LICENCE_REFUSED, LICENCE_SERVICE_REFUSED,
                         LICENCE_UNREACHABLE, STORE_SESSION_REFUSED, diagnose)
 from .gpu_safety import (
@@ -108,6 +109,15 @@ _OFFLINE_MODE_NOTICE = (
     "offline mode — single-player worlds and LAN play work, while Realms, "
     "servers, the Marketplace and Xbox friends stay unavailable until "
     "Xbox Live sign-in succeeds."
+)
+
+# Minecraft Education's sign-in is the game's own (#351): a Microsoft 365
+# school or work account, in a window the game opens, never the Xbox Live
+# account the launcher links.
+EDUCATION_SIGNIN_NOTICE = (
+    "Minecraft Education signs in with your school or work account in a "
+    "window of its own once it starts; the Xbox account linked here is not "
+    "used for it."
 )
 
 # Asks Minecraft to open Bedrock Editor instead of the game (#286): the
@@ -842,8 +852,11 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     retire_idle_current_boot_marker()
     require_safe_graphics_session()
 
+    xbox_live = uses_xbox_live(gd)
     account, account_epoch = msa_session_snapshot()
-    tok = account.get("refresh_token")
+    # Nothing of the Xbox account goes near a game that does not use it: no
+    # token in its prefix, no Xbox pre-auth, no presence (#351).
+    tok = account.get("refresh_token") if xbox_live else None
     # The token refresh is a round trip to Microsoft that nothing below needs
     # until the Xbox pre-auth: it runs while the prefix is prepared.
     refresh = _start_msa_refresh(tok)
@@ -870,7 +883,9 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     # never for the game itself. Neither a missing account nor an unreachable
     # Xbox Live may keep single-player and LAN worlds from starting (#160).
     online = False
-    if not tok:
+    if not xbox_live:
+        info(EDUCATION_SIGNIN_NOTICE)
+    elif not tok:
         warn("No Microsoft account is linked, so Minecraft starts in "
              + _OFFLINE_MODE_NOTICE + " Use 'Sign in' to add one.")
     else:
@@ -902,11 +917,14 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     encrypted_exe = xodus.exe_is_encrypted(Path(exe))
     if not encrypted_exe:
         bump_stack_reserve(Path(exe))
-    hide_signin_button(Path(gd))
-    # Linux splashes on the title screen, partner servers under Featured
-    # Servers: re-applied each launch, since a game update brings the
-    # vanilla files back.
-    apply_branding(Path(gd))
+    if xbox_live:
+        # Bedrock's own title screen; Education's sign-in button is the only
+        # way into that game, and its menus are not Bedrock's.
+        hide_signin_button(Path(gd))
+        # Linux splashes on the title screen, partner servers under Featured
+        # Servers: re-applied each launch, since a game update brings the
+        # vanilla files back.
+        apply_branding(Path(gd))
     cmd, env = proton_umu_cmd(exe)
     # Required by the menu's indirect root-CBV updates (#27/#29/#30).
     _require_vkd3d_config(env, "force_raw_va_cbv")
@@ -1093,12 +1111,15 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     snapshot_game_options()
     # The Servers tab is read from disk at startup, so the servers this
     # launcher ships with have to be in the list before the game opens it.
-    seed_default_servers(prefix_idle=True)
-    # The account travelled into the prefix a few lines above, so the
-    # game signs itself in; the in-game button reaches a sign-in the
-    # engine does not implement and only ever fails (#227/#228).
-    info("Starting Minecraft … your account is already linked; "
-         "join your server from the Servers tab.")
+    if xbox_live:
+        seed_default_servers(prefix_idle=True)
+        # The account travelled into the prefix a few lines above, so the
+        # game signs itself in; the in-game button reaches a sign-in the
+        # engine does not implement and only ever fails (#227/#228).
+        info("Starting Minecraft … your account is already linked; "
+             "join your server from the Servers tab.")
+    else:
+        info("Starting Minecraft Education …")
     glog = open(LOGS / "minecraft.log", "w")
     # Everything above that writes a settings file has written it by now, so
     # what is written after this is the game's.

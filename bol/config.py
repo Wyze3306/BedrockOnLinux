@@ -249,6 +249,16 @@ MC_PRODUCTS = (
     {"id": "preview", "product": "9P5X4QVLC2XR", "channel": "preview",
      "content_id": "98bd2335-9b01-4e4c-bd05-ccc01614078b",
      "name": "Minecraft Preview for Windows", "beta": True},
+    # Not an Xbox title: a free Store app that Windows Update serves as a
+    # plain AppxBundle, signed in to with a school or work account inside the
+    # game (issue #351, bol.wustore). "xbox_live": False keeps the Xbox Live
+    # account, its pre-auth and the Bedrock UI patches away from it.
+    {"id": "education", "product": "9NBLGGH4R2R6", "channel": "education",
+     "source": "windows-update",
+     "family": "Microsoft.MinecraftEducationEdition_8wekyb3d8bbwe",
+     "wu_category": "df31e196-d4c7-4a25-8e23-2788c261f328",
+     "content_id": "ad6a119f-978a-62c1-5f10-c017dde2343a",
+     "name": "Minecraft Education", "beta": False, "xbox_live": False},
 )
 
 

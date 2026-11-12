@@ -196,6 +196,13 @@ def _report_launch_failure(message):
     desktop_notify(f"Minecraft did not start.\n{message}")
 
 
+def _plays_xbox_live():
+    """Whether PLAY starts a game that signs in through Xbox Live."""
+    from .games import uses_xbox_live
+    from .util import load_settings
+    return uses_xbox_live(load_settings().get("game_dir"))
+
+
 def main():
     p = argparse.ArgumentParser(prog=APP, description=f"{PRETTY} {VERSION}")
     sub = p.add_subparsers(dest="cmd")
@@ -209,7 +216,8 @@ def main():
                            "done when Settings ▸ General has it switched on)")
     sp = sub.add_parser("setup", help="download & prepare Minecraft")
     sp.add_argument("--mc", metavar="EDITION",
-                    help="Minecraft edition to install: release or preview")
+                    help="Minecraft edition to install: release, preview or "
+                         "education")
     sp.add_argument("--version", metavar="BUILD",
                     help="Bedrock build to install (default: the newest); "
                          "see 'versions'")
@@ -318,7 +326,7 @@ def main():
             # but it says so here rather than letting Realms, servers and
             # friends come up missing in-game with nothing having mentioned
             # a sign-in (#240).
-            if not msa_signed_in():
+            if not msa_signed_in() and _plays_xbox_live():
                 warn("Not signed in for online play: no Realms, no servers, "
                      "no friends and no Marketplace.")
                 info(f"Sign in with:  {APP} login")
@@ -348,12 +356,22 @@ def main():
             else:
                 for edition in list_editions(a.beta):
                     print(f"{edition['name']}  (--mc {edition['id']})")
-                    for build in list_versions(edition["id"],
-                                                ignore_cache=a.refresh):
+                    # One source out of reach costs its own edition, not the
+                    # others: Education comes from Windows Update, not Xodus.
+                    try:
+                        builds = list_versions(edition["id"],
+                                               ignore_cache=a.refresh)
+                    except Exception as exc:  # noqa: BLE001
+                        warn(f"{edition['name']}: the builds could not be "
+                             f"listed ({exc}).")
+                        continue
+                    for build in builds:
                         print(f"    {build['version']:<14}"
                               f"{'installed' if build['installed'] else ''}")
                 info("Builds are downloaded from Microsoft's own CDN with "
-                     "your account, which must own Minecraft.")
+                     "your account, which must own Minecraft. Minecraft "
+                     "Education comes from Windows Update and asks for a "
+                     "school or work account when it starts.")
         elif a.cmd == "store-login":
             from . import xodus as _xodus
             if _xodus.signed_in():

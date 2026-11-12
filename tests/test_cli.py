@@ -51,6 +51,7 @@ class CliTests(unittest.TestCase):
         output = io.StringIO()
         with mock.patch.object(sys, "argv", ["bedrock-on-linux", "play"]), \
                 mock.patch.object(cli, "msa_signed_in", return_value=False), \
+                mock.patch.object(cli, "_plays_xbox_live", return_value=True), \
                 mock.patch.object(cli, "launch") as launch, \
                 contextlib.redirect_stdout(output):
             cli.main()

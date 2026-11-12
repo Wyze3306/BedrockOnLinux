@@ -23,7 +23,7 @@ class ReadyLaunchHarness:
                                extra_settings=None, environ=None,
                                diagnosis=(), swap_guard=False,
                                signed_out=False, notices=None,
-                               editor=False):
+                               editor=False, manifest=None):
         content = root / "content"
         logs = root / "logs"
         data = root / "data"
@@ -31,6 +31,9 @@ class ReadyLaunchHarness:
         logs.mkdir(exist_ok=True)
         data.mkdir(exist_ok=True)
         (content / "Minecraft.Windows.exe").write_bytes(b"MZ")
+        if manifest is not None:
+            (content / "AppxManifest.xml").write_text(manifest,
+                                                      encoding="utf-8")
         settings = {"game_dir": str(content)}
         settings.update(extra_settings or {})
         # Discord presence opens a socket of its own: every launch test gets
@@ -152,9 +155,10 @@ class ReadyLaunchHarness:
             # what the auth steps were told, not only on the launch result.
             self.launch_mocks = {
                 name: getattr(launch, name)
-                for name in ("warn", "wine_reg_set_refresh_token",
+                for name in ("warn", "info", "wine_reg_set_refresh_token",
                              "ensure_login_deps", "xbl_preauth",
                              "hide_signin_button", "apply_branding",
+                             "msa_refresh", "seed_default_servers",
                              "_prefix_stably_idle_after_wrapper")
             }
             return launch._launch_once(lock_fds=lock_fds,
@@ -872,6 +876,54 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.launch_mocks["xbl_preauth"].assert_not_called()
         self.launch_mocks["ensure_login_deps"].assert_not_called()
         self.assertNotIn("WINEGDK_PREAUTH_DEVICE", observed["env"])
+
+    def test_education_is_kept_away_from_the_xbox_account(self):
+        """Minecraft Education signs in with a school or work account of its
+        own (#351): the Xbox account, its pre-auth, its presence and the
+        Bedrock title-screen patches have nothing to do with it."""
+        observed = {}
+        manifest = ('<Package><Identity Name="Microsoft.MinecraftEducation'
+                    'Edition" Version="1.26.3300.0" /></Package>')
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(
+                self._exercise_ready_launch(
+                    Path(td), self._successful_popen(observed),
+                    lambda: "owned-token", lambda _token: True,
+                    manifest=manifest,
+                ),
+                0,
+            )
+
+        for name in ("msa_refresh", "wine_reg_set_refresh_token",
+                     "ensure_login_deps", "xbl_preauth",
+                     "hide_signin_button", "apply_branding",
+                     "seed_default_servers"):
+            with self.subTest(step=name):
+                self.launch_mocks[name].assert_not_called()
+        self.assertEqual(self.xbl_calls, [])
+        self.assertNotIn("WINEGDK_PREAUTH_DEVICE", observed["env"])
+        # Not "offline mode": nothing is missing, the game signs in itself.
+        self.assertNotIn("offline mode", "\n".join(self._warnings()))
+        said = [str(call.args[0]) for call
+                in self.launch_mocks["info"].call_args_list if call.args]
+        self.assertIn(launch.EDUCATION_SIGNIN_NOTICE, said)
+
+    def test_bedrock_still_gets_the_xbox_account_and_its_patches(self):
+        observed = {}
+        manifest = ('<Package><Identity Name="Microsoft.MinecraftUWP" '
+                    'Version="1.26.5203.0" /></Package>')
+        with tempfile.TemporaryDirectory() as td:
+            self._exercise_ready_launch(
+                Path(td), self._successful_popen(observed),
+                lambda: "owned-token", lambda _token: True,
+                manifest=manifest,
+            )
+
+        self.launch_mocks["wine_reg_set_refresh_token"].assert_called_once()
+        self.launch_mocks["xbl_preauth"].assert_called_once()
+        self.launch_mocks["hide_signin_button"].assert_called_once()
+        self.launch_mocks["apply_branding"].assert_called_once()
+        self.launch_mocks["seed_default_servers"].assert_called_once()
 
     def test_unusable_preauth_payload_is_withheld_from_the_engine(self):
         for preauth, expected in ((True, True), (False, False)):
