@@ -35,7 +35,9 @@ export SOURCE_DATE_EPOCH
 # instead of the whole ~200 MB bundle. The repository comes from bol/config.py,
 # the same one the launcher's own updater asks, so a fork updates from its own
 # releases. The channel picks the tag: a nightly must follow the rolling
-# "nightly" prerelease rather than replace itself with the stable release.
+# "nightly" prerelease rather than replace itself with the stable release,
+# and a versioned pre-release follows its own tag: "latest" is the previous
+# stable release, which AppImageUpdate would install over it.
 # Setting BOL_APPIMAGE_UPDATE_INFO to the empty string builds an AppImage with
 # no update information at all.
 SELF_REPO="$(grep -m1 '^WINEGDK_PREBUILT_REPO = ' "$SRC/bol/config.py" | cut -d'"' -f2)"
@@ -44,8 +46,9 @@ SELF_REPO="$(grep -m1 '^WINEGDK_PREBUILT_REPO = ' "$SRC/bol/config.py" | cut -d'
   exit 1
 }
 case "${BOL_RELEASE_CHANNEL:-release}" in
-  nightly) UPDATE_TAG="nightly" ;;
-  *)       UPDATE_TAG="latest" ;;
+  nightly)    UPDATE_TAG="nightly" ;;
+  prerelease) UPDATE_TAG="v$(grep -m1 '^VERSION = ' "$SRC/bol/config.py" | cut -d'"' -f2)" ;;
+  *)          UPDATE_TAG="latest" ;;
 esac
 UPDATE_INFO="${BOL_APPIMAGE_UPDATE_INFO-gh-releases-zsync|${SELF_REPO%/*}|${SELF_REPO#*/}|${UPDATE_TAG}|BedrockOnLinux-*-x86_64.AppImage.zsync}"
 

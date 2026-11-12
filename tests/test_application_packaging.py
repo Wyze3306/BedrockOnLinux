@@ -96,8 +96,12 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
         self.assertIn("grep -m1 '^WINEGDK_PREBUILT_REPO = '", script)
         # A nightly follows the rolling prerelease; anything else follows the
         # newest stable release.
-        self.assertIn('nightly) UPDATE_TAG="nightly" ;;', script)
-        self.assertIn('*)       UPDATE_TAG="latest" ;;', script)
+        self.assertIn('nightly)    UPDATE_TAG="nightly" ;;', script)
+        self.assertIn('*)          UPDATE_TAG="latest" ;;', script)
+        # A versioned pre-release follows its own tag: "latest" is the
+        # previous stable release, which AppImageUpdate would install over it.
+        self.assertIn('prerelease) UPDATE_TAG="v$(grep -m1 \'^VERSION = \' '
+                      '"$SRC/bol/config.py" | cut -d\'"\' -f2)" ;;', script)
         self.assertIn('UPDATE_ARGS=(-u "$UPDATE_INFO")', script)
 
         # appimagetool names the sidecar after the destination but writes it

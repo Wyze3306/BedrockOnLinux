@@ -11,6 +11,8 @@
 #                       between releases, so building it would ship a Flatpak
 #                       that does not match the .deb/AppImage/.pyz next to it
 #                       and would fail that same audit.
+#   prerelease        — this working tree too: a versioned pre-release is
+#                       built from a branch the Flathub manifest does not pin.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,9 +26,9 @@ mkdir -p "$OUT"
 CHANNEL="${BOL_RELEASE_CHANNEL:-release}"
 case "$CHANNEL" in
   release) FLATPAK_NOTE="" ;;
-  nightly) FLATPAK_NOTE=" (working tree, not the pinned tag)" ;;
+  nightly|prerelease) FLATPAK_NOTE=" (working tree, not the pinned tag)" ;;
   *)
-    echo "!! BOL_RELEASE_CHANNEL must be 'release' or 'nightly', got '$CHANNEL'" >&2
+    echo "!! BOL_RELEASE_CHANNEL must be 'release', 'nightly' or 'prerelease', got '$CHANNEL'" >&2
     exit 1
     ;;
 esac
