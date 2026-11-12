@@ -19,8 +19,10 @@ from .log import info
 from .prefix import prefix_processes
 
 GAME_IMAGE = "minecraft.windows.exe"
-# Started for the game's WebView2, and of no use once the game has gone.
-LEFTOVER_IMAGES = ("microsoftedgeupdate.exe", "msedgewebview2.exe")
+# Started for the game -- by its WebView2, and by LeviLamina (bol.mods),
+# whose crash reporter watches it -- and of no use once the game has gone.
+LEFTOVER_IMAGES = ("microsoftedgeupdate.exe", "msedgewebview2.exe",
+                   "crashlogger.exe")
 
 # How long the game has to have been gone before its helpers are closed: a
 # game that restarts itself (a language change, an update) comes back well

@@ -58,6 +58,68 @@ class PE:
                 return struct.unpack_from("<I", d, af + 4 * od)[0]
         return None
 
+    def _directory(self, index):
+        e = struct.unpack_from("<I", self.data, 0x3C)[0]
+        opt = e + 24
+        rva, size = struct.unpack_from("<II", self.data, opt + 112 + 8 * index)
+        return rva, size
+
+    def _cstr(self, off):
+        end = self.data.index(b"\0", off)
+        return self.data[off:end].decode("latin-1")
+
+    def export_names(self):
+        """Every name this image exports."""
+        d = self.data
+        eo = self.rva2off(self.exp_rva) if self.exp_rva else None
+        if eo is None:
+            return set()
+        nn = struct.unpack_from("<I", d, eo + 24)[0]
+        an = self.rva2off(struct.unpack_from("<I", d, eo + 32)[0])
+        names = set()
+        for i in range(nn):
+            no = self.rva2off(struct.unpack_from("<I", d, an + 4 * i)[0])
+            if no is not None:
+                names.add(self._cstr(no))
+        return names
+
+    def imports(self):
+        """{lower-case DLL name: set of imported names} -- ordinal imports
+        as "#<n>" -- from both the import and the delay-import tables."""
+        d = self.data
+        out = {}
+        for index, entry_size, name_at, thunk_at in ((1, 20, 12, 0),
+                                                       (13, 32, 4, 16)):
+            rva, _size = self._directory(index)
+            base = self.rva2off(rva) if rva else None
+            if base is None:
+                continue
+            while base + entry_size <= len(d):
+                name_rva = struct.unpack_from("<I", d, base + name_at)[0]
+                thunk_rva = struct.unpack_from("<I", d, base + thunk_at)[0]
+                if index == 1 and not thunk_rva:
+                    thunk_rva = struct.unpack_from("<I", d, base + 16)[0]
+                if not name_rva:
+                    break
+                name_off = self.rva2off(name_rva)
+                thunk = self.rva2off(thunk_rva) if thunk_rva else None
+                if name_off is None:
+                    break
+                names = out.setdefault(self._cstr(name_off).lower(), set())
+                while thunk is not None and thunk + 8 <= len(d):
+                    value = struct.unpack_from("<Q", d, thunk)[0]
+                    if not value:
+                        break
+                    if value & (1 << 63):
+                        names.add("#%d" % (value & 0xFFFF))
+                    else:
+                        hint = self.rva2off(value & 0x7FFFFFFF)
+                        if hint is not None:
+                            names.add(self._cstr(hint + 2))
+                    thunk += 8
+                base += entry_size
+        return out
+
     def export_off(self, name):
         r = self.export_rva(name)
         return self.rva2off(r) if r is not None else None

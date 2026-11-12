@@ -44,6 +44,7 @@ from .games import installed_builds, list_editions, list_versions, remove_build
 from .gamesetup import do_setup
 from . import betterrtx, gpus
 from .inject import run_injector
+from .gui_mods import ModsPage
 from .launch import direct_launch_readiness, launch, single_window_session
 from . import saves
 from .navigation import ControllerNav
@@ -226,6 +227,30 @@ def icon_candidates(module_file=None):
 # Theme
 # ======================================================================
 
+def _chevron(color, up=False):
+    """A chevron for drop-downs, as a file Qt style sheets can point at.
+
+    Styling a combo box's drop-down takes its native arrow away, and a style
+    sheet only reads images from files. Written once per colour into the
+    cache; on any failure the arrow is simply missing, never the window.
+    """
+    from .config import CACHE  # noqa: PLC0415 - GUI-only helper
+    name = f"chevron-{'up' if up else 'down'}-{color.lstrip('#')}.svg"
+    path = CACHE / "ui" / name
+    points = "2,8 6,4 10,8" if up else "2,4 6,8 10,4"
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" '
+           'viewBox="0 0 12 12"><polyline points="' + points + '" fill="none" '
+           f'stroke="{color}" stroke-width="1.8" stroke-linecap="round" '
+           'stroke-linejoin="round"/></svg>')
+    try:
+        if not path.is_file() or path.read_text() != svg:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(svg)
+    except OSError:
+        return ""
+    return path.as_posix()
+
+
 @dataclass
 class Theme:
     """Palette used to generate the app's QSS."""
@@ -358,6 +383,9 @@ class Theme:
             font-weight: 700;
         }}
         QPushButton#Primary:hover {{ background: {self.accent_hov}; }}
+        QPushButton#Primary:disabled {{ background: {self.card3}; color: {self.muted}; }}
+        QPushButton#Ghost:disabled, QPushButton#GhostSmall:disabled,
+        QPushButton#DangerSmall:disabled {{ color: {self.muted}; }}
         QPushButton#Danger {{ background: {self.red}; color: white; }}
         QPushButton#Danger:hover {{ background: {self.red_hov}; }}
         QPushButton#Ghost {{ background: transparent; color: {self.sub}; }}
@@ -408,6 +436,63 @@ class Theme:
             selection-background-color: {self.accent};
         }}
         QLineEdit:focus {{ border: 1px solid {self.accent}; }}
+        QComboBox, QSpinBox {{
+            background: {self.card2};
+            color: {self.fg};
+            border: 1px solid {self.border};
+            border-radius: 10px;
+            padding: 5px 30px 5px 12px;
+            min-height: 20px;
+        }}
+        QSpinBox {{ padding-right: 22px; }}
+        QComboBox:hover, QSpinBox:hover {{
+            background: {self.card3};
+            border: 1px solid {self.sub};
+        }}
+        QComboBox:focus, QSpinBox:focus, QComboBox:on {{
+            border: 1px solid {self.accent};
+        }}
+        QComboBox:disabled, QSpinBox:disabled {{ color: {self.muted}; }}
+        QComboBox::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: center right;
+            width: 26px;
+            border: none;
+            background: transparent;
+        }}
+        QComboBox::down-arrow {{
+            image: url("{_chevron(self.sub)}");
+            width: 12px; height: 12px;
+        }}
+        QComboBox::down-arrow:on {{ image: url("{_chevron(self.accent, up=True)}"); }}
+        QSpinBox::up-button, QSpinBox::down-button {{
+            subcontrol-origin: border;
+            width: 20px;
+            border: none;
+            background: transparent;
+        }}
+        QSpinBox::up-button {{ subcontrol-position: top right; }}
+        QSpinBox::down-button {{ subcontrol-position: bottom right; }}
+        QSpinBox::up-arrow {{
+            image: url("{_chevron(self.sub, up=True)}"); width: 9px; height: 9px;
+        }}
+        QSpinBox::down-arrow {{
+            image: url("{_chevron(self.sub)}"); width: 9px; height: 9px;
+        }}
+        QComboBox QAbstractItemView {{
+            padding: 4px;
+            border-radius: 8px;
+        }}
+        QComboBox QAbstractItemView::item {{
+            min-height: 26px;
+            padding: 2px 10px;
+            border-radius: 6px;
+        }}
+        QComboBox QAbstractItemView::item:selected,
+        QComboBox QAbstractItemView::item:hover {{
+            background: {self.accent_dim};
+            color: {self.accent};
+        }}
         QListWidget {{
             background: {self.card2};
             border: none;
@@ -742,6 +827,7 @@ class SwitchRow(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         label = QLabel(text)
+        self.label = label
         lay.addWidget(label)
         lay.addStretch(1)
         self.switch = ToggleSwitch(theme or Theme())
@@ -1185,6 +1271,8 @@ class MainWindow(QMainWindow):
         self.settings_page = self._build_settings()
         self.changelog_page = self._build_changelog()
         self.profiles_page = self._build_profiles_page()
+        # Built the first time it is opened: most sessions never do.
+        self.mods_page = None
         self.stack.addWidget(self.hero_page)
         self.stack.addWidget(self.settings_page)
         self.stack.addWidget(self.changelog_page)
@@ -1286,6 +1374,9 @@ class MainWindow(QMainWindow):
             self.settings_btn.set_theme(self.theme)
         if getattr(self, "nav", None) is not None:
             self.nav.set_accent(self.theme.accent)
+        if getattr(self, "mods_page", None) is not None and \
+                self.stack.currentWidget() is self.mods_page:
+            self.mods_page.refresh_builds()
         if _alive(getattr(self, "accounts_menu", None)):
             self.accounts_menu.set_theme(self.theme)
             self._refresh_accounts()
@@ -1311,6 +1402,17 @@ class MainWindow(QMainWindow):
         bl.addWidget(gh_btn)
         row.addWidget(brand)
         row.addStretch(1)
+
+        # Mods page: LeviLamina and the levimc.org catalogue
+        self.mods_card = QFrame(); self.mods_card.setObjectName("Pill")
+        self.mods_card.setCursor(Qt.PointingHandCursor)
+        self.mods_card.setToolTip("LeviLamina mods: browse, install, import")
+        ml = QHBoxLayout(self.mods_card); ml.setContentsMargins(14, 6, 14, 6)
+        mods_label = QLabel("🧩  Mods")
+        mods_label.setStyleSheet("font-weight:700;")
+        ml.addWidget(mods_label)
+        self.mods_card.mousePressEvent = lambda e: self.toggle_mods()
+        row.addWidget(self.mods_card)
 
         # Profile switcher pill
         self.prof_card = QFrame(); self.prof_card.setObjectName("Pill")
@@ -3864,6 +3966,31 @@ class MainWindow(QMainWindow):
 
         return page
 
+    def toggle_mods(self):
+        if self.mods_page is not None and \
+                self.stack.currentWidget() is self.mods_page:
+            self.stack.setCurrentWidget(self.hero_page)
+            self._nav_follow_page()
+        else:
+            if self.mods_page is None:
+                self.mods_page = ModsPage(self)
+                self.stack.addWidget(self.mods_page)
+            self.stack.setCurrentWidget(self.mods_page)
+            self.mods_page.opened()
+            self._nav_follow_page(self.mods_page)
+
+    def select_build(self, version, beta):
+        """Make the picker next to PLAY point at an installed build, as if it
+        was picked there. False when the picker does not list it."""
+        for label, entry in zip(self.ui_state.get("labels") or [],
+                                self.ui_state.get("versions") or []):
+            if entry.get("tag") == version and bool(entry.get("beta")) == \
+                    bool(beta):
+                self.select_edition("preview" if beta else "release")
+                self.set_version(label)
+                return True
+        return False
+
     def toggle_profiles(self):
         if self.stack.currentWidget() is self.profiles_page:
             self.stack.setCurrentWidget(self.hero_page)
@@ -4258,6 +4385,9 @@ class MainWindow(QMainWindow):
             self.toggle_changelog()
         elif self.stack.currentWidget() is self.profiles_page:
             self.toggle_profiles()
+        elif self.mods_page is not None and \
+                self.stack.currentWidget() is self.mods_page:
+            self.toggle_mods()
 
     def _on_nav_devices(self, names):
         """A controller was plugged in or unplugged."""

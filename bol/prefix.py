@@ -538,9 +538,25 @@ def boot_prefix(prefix=None):
 
 
 def _environ_uses_prefix(environ, prefix):
-    """Match an exact NUL-delimited WINEPREFIX entry."""
-    target = b"WINEPREFIX=" + os.fsencode(str(prefix))
-    return target in environ.split(b"\0")
+    """Whether a process's NUL-delimited environment names this prefix.
+
+    The launcher's own processes (umu-run, the Steam Linux Runtime container)
+    carry ``WINEPREFIX=<prefix>`` exactly. Proton takes that path as its
+    compatdata folder and points Wine itself at ``<prefix>/pfx/``, trailing
+    slash included, so Minecraft and everything it starts carry that one.
+    Matching only the first saw the wrappers and never the game: the
+    leftover reaper never learnt Minecraft had run and left WebView2's
+    updater holding the session open, and force-stop and the "prefix still
+    busy" checks missed every Wine process.
+    """
+    base = os.fsencode(str(prefix)).rstrip(b"/")
+    wanted = (base, base + b"/pfx")
+    for entry in environ.split(b"\0"):
+        if entry.startswith(b"WINEPREFIX="):
+            value = entry[len(b"WINEPREFIX="):].rstrip(b"/")
+            if value in wanted:
+                return True
+    return False
 
 
 def prefix_processes(prefix: Path):

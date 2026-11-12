@@ -25,6 +25,7 @@ from .auth import (
 from . import (
     discord,
     fullscreen_fix,
+    mods,
     packcache,
     presence as xbl_presence,
     saves,
@@ -933,6 +934,9 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     if cur:
         overrides.append(cur)
     env["WINEDLLOVERRIDES"] = ";".join(overrides)
+    # LeviLamina, when this build has it and mods are on: its loader goes in
+    # front of the game, or comes out when they are off (bol.mods).
+    mods.prepare_launch(Path(gd), env)
     # WindowsAppRuntime framework MSIX cannot install under Wine.
     env["MICROSOFT_WINDOWSAPPRUNTIME_BOOTSTRAP_INITIALIZE_SHOWUI"] = "0"
     env["MICROSOFT_WINDOWSAPPRUNTIME_BOOTSTRAP_INITIALIZE_FAILFAST"] = "0"

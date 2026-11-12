@@ -58,6 +58,7 @@ jobs:
           "$CC" -c -O2 src/injector.c -o "$RUNNER_TEMP/injector.o"
           "$CC" -c -O2 -municode src/fullscreen-nudge.c -o "$RUNNER_TEMP/fullscreen-nudge.o"
           "$CC" -c -O2 -municode src/desktop-bridge.c -o "$RUNNER_TEMP/desktop-bridge.o"
+          "$CC" -c -O2 src/levi-loader.c -o "$RUNNER_TEMP/levi-loader.o"
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
