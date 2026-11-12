@@ -85,7 +85,7 @@ in-process: Raw Input on a hidden `GameInputRawInputWatcher` window,
 registered with `RIDEV_INPUTSINK` (so focus does not matter), and the
 pointer position from `GetCursorPos`. A companion DLL, `bedrock_input.dll`,
 kept in a fork of BedrockMCP
-([`companion/` on the `wine-input` branch](https://github.com/Wyze3306/BedrockMCP/tree/wine-input/companion)),
+([`companion/`](https://github.com/Wyze3306/BedrockMCP/tree/master/companion)),
 hooks those two calls: it gives the game a virtual pointer and posts
 synthetic `WM_INPUT` records for buttons, wheel and keys. Its MCP server,
 `bedrock-input`, offers `click_at(x, y)`, `drag`, `scroll`, `key` with
