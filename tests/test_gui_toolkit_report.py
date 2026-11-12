@@ -189,6 +189,15 @@ class DoctorPackageNameTests(unittest.TestCase):
                  if call.args and call.args[0].startswith("To install: ")]
         return lines[-1] if lines else None
 
+    def test_arch_is_told_its_own_cryptography_package(self):
+        line = self._install_line(
+            "pacman", have=lambda module: module != "cryptography")
+        self.assertEqual(line, "To install: sudo pacman -S python-cryptography")
+        line = self._install_line(
+            "apt-get", have=lambda module: module != "cryptography")
+        self.assertEqual(line,
+                         "To install: sudo apt install python3-cryptography")
+
     def test_a_qt_that_cannot_import_is_not_system_ready(self):
         # A stock openSUSE: PySide6 is there, libgthread-2_0-0 is not.
         line = self._install_line(

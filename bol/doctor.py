@@ -107,10 +107,10 @@ def doctor(acknowledge_gpu_crash=False):
     if acknowledge_gpu_crash and not _acknowledge_gpu_crash():
         return False
     info(f"{PRETTY} {VERSION} — system check")
-    hint = next((h for pm, h in (
+    manager, hint = next(((pm, h) for pm, h in (
         ("apt-get", "sudo apt install {}"), ("dnf", "sudo dnf install {}"),
         ("pacman", "sudo pacman -S {}"), ("zypper", "sudo zypper in {}"))
-        if shutil.which(pm)), "install: {}")
+        if shutil.which(pm)), (None, "install: {}"))
     miss = []
     print(f"  {'python3':12} : {sys.version.split()[0]}")
     # The game, the engine and xodus-cli are x86-64 programs (#250).
@@ -146,7 +146,9 @@ def doctor(acknowledge_gpu_crash=False):
     print(f"  {'cryptography':12} : "
           f"{'OK (login)' if cr_ok else 'MISSING (login)'}")
     if not cr_ok:
-        miss.append("python3-cryptography")
+        # Arch drops the "3": python3-cryptography is no package there.
+        miss.append("python-cryptography" if manager == "pacman"
+                    else "python3-cryptography")
     # Minecraft is downloaded from the Microsoft Store, and xodus-cli opens
     # that sign-in in an embedded WebKitGTK webview. Without the library it
     # cannot even start -- not the download and not an installed game, whose
