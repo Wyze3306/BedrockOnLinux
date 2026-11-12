@@ -8,7 +8,7 @@ import shutil
 import time
 from pathlib import Path
 
-from . import xodus
+from . import wustore, xodus
 from .config import CACHE, CONTENT, GAMES
 from .log import BolError, die, info, ok, warn
 from .util import load_settings, save_settings
@@ -87,20 +87,6 @@ def edition_exe(edition_entry):
     return edition_entry["exe"]
 
 
-def edition_for_dir(folder):
-    """The MC_PRODUCTS entry a build folder belongs to, or None.
-
-    Only the managed layout says: games/<edition>/<version>/. Anything else
-    is a Bedrock build from before the Store or one imported from elsewhere.
-    """
-    if not folder:
-        return None
-    parts = _managed_parts(Path(folder).expanduser())
-    if not parts or len(parts) < 2:
-        return None
-    return xodus.edition(parts[0])
-
-
 def selected_edition(settings=None):
     """The edition of the build the launcher would start next, or None."""
     settings = load_settings() if settings is None else settings
@@ -133,8 +119,7 @@ def list_versions(edition_id, ignore_cache=False, offline_ok=True):
     on_disk = _installed_versions(edition_id)
     store = (xodus.edition(edition_id) or {}).get("catalogue") == "store"
     try:
-        catalogue = xodus.version_catalogue(edition_id,
-                                            ignore_cache=ignore_cache)
+        catalogue = _catalogue(edition_id, ignore_cache)
     except Exception as exc:
         if not (offline_ok and on_disk):
             raise
@@ -156,6 +141,57 @@ def list_versions(edition_id, ignore_cache=False, offline_ok=True):
     out.sort(key=lambda entry: xodus.version_key(entry["version"]),
              reverse=True)
     return out
+
+
+def from_windows_update(edition):
+    """Whether an edition comes from Windows Update rather than Xodus."""
+    return (edition or {}).get("source") == "windows-update"
+
+
+def _catalogue(edition_id, ignore_cache=False):
+    """The builds the edition's own source lists, newest first."""
+    edition = xodus.edition(edition_id)
+    if from_windows_update(edition):
+        return wustore.version_catalogue(edition, ignore_cache=ignore_cache)
+    return xodus.version_catalogue(edition_id, ignore_cache=ignore_cache)
+
+
+def edition_for_dir(game_dir):
+    """The edition a game folder holds, or None when it cannot be told.
+
+    A build the launcher installed is named by its folder,
+    games/<edition>/<version>/; any other copy by the package identity in its
+    manifest -- an Education build dropped in by hand is still Education.
+    """
+    if not game_dir:
+        return None
+    folder = Path(game_dir).expanduser()
+    parts = _managed_parts(folder) or ()
+    if len(parts) >= 2 and xodus.edition(parts[0]):
+        return xodus.edition(parts[0])
+    for name in ("AppxManifest.xml", "appxmanifest.xml"):
+        try:
+            text = (folder / name).read_text(errors="ignore")
+        except OSError:
+            continue
+        match = re.search(r'<Identity[^>]*\bName="([^"]+)"', text)
+        if not match:
+            return None
+        return next((entry for entry in xodus.list_editions()
+                     if entry.get("family", "").split("_")[0]
+                     == match.group(1)), None)
+    return None
+
+
+def uses_xbox_live(game_dir):
+    """Whether the game in ``game_dir`` signs in through Xbox Live.
+
+    Every Bedrock build does, and it is the one this launcher's account,
+    pre-auth and UI patches are for; Minecraft Education signs in with a
+    school or work account of its own and must be left alone by all three.
+    """
+    edition = edition_for_dir(game_dir)
+    return edition is None or edition.get("xbox_live", True)
 
 
 def _installed_versions(edition_id):
@@ -289,18 +325,27 @@ def install_game(edition, version=None, progress=None, force=False):
     fallback = (None if root or not is_bedrock(edition)
                 else _configured_legacy_root())
 
-    info(f"{'Reinstalling' if root else 'Installing'} "
-         f"{_build_name(edition, entry['version'])} — this downloads it from "
-         "Microsoft with your own account …")
-    # Every mirror the index lists, not just the first: they carry the same
-    # package, so a truncated body from one is retryable on the next.
-    url = entry["urls"][0]
+    if from_windows_update(edition):
+        info(f"{'Reinstalling' if root else 'Installing'} {edition['name']} "
+             f"{entry['version']} — this downloads it from Microsoft's "
+             "Windows Update servers …")
+        url = (entry.get("package") or {}).get("moniker") or edition["product"]
+    else:
+        info(f"{'Reinstalling' if root else 'Installing'} "
+             f"{_build_name(edition, entry['version'])} — this downloads it "
+             "from Microsoft with your own account …")
+        # Every mirror the index lists, not just the first: they carry the
+        # same package, so a truncated body from one is retryable on the next.
+        url = entry["urls"][0] if entry["urls"] else edition["product"]
     try:
-        # xodus.install's defaults are Bedrock's; another title names the
-        # executable that marks its build, and itself in what goes wrong.
-        extra = ({} if is_bedrock(edition)
-                 else {"exe": exe, "title": edition["name"]})
-        xodus.install(entry["urls"], dest, progress, **extra)
+        if from_windows_update(edition):
+            wustore.install(edition, entry, dest, progress)
+        else:
+            # xodus.install's defaults are Bedrock's; another title names the
+            # executable that marks its build, and itself in what goes wrong.
+            extra = ({} if is_bedrock(edition)
+                     else {"exe": exe, "title": edition["name"]})
+            xodus.install(entry["urls"], dest, progress, **extra)
     except xodus.NotSignedIn:
         # Actionable, and only the caller can act: never fold this into the
         # fallback below, or the launcher quietly keeps starting the old build

@@ -1265,11 +1265,17 @@ def _version_label(v):
     is installed.
     """
     edition = v.get("edition")
-    if isinstance(edition, dict) and not is_bedrock(edition):
+    if isinstance(edition, dict) and edition.get("catalogue") == "store":
         name = edition.get("short") or edition.get("name") or "Minecraft"
         return f"{name}  ·  {v.get('build') or 'latest'}"
-    return (format_display_version(v["tag"], v["beta"])
-            + ("  ·  BETA" if v["beta"] else ""))
+    # Education follows Bedrock's build numbers, and the label is how a pick
+    # is found again: never the same for two editions.
+    label = format_display_version(v["tag"], v["beta"])
+    if v["beta"]:
+        label += "  ·  BETA"
+    elif _version_edition_id(v) == "education":
+        label += "  ·  EDU"
+    return label
 
 
 class MainWindow(QMainWindow):
@@ -1763,6 +1769,7 @@ class MainWindow(QMainWindow):
             self.edition_buttons[entry["id"]] = b
         self.stable_btn = self.edition_buttons["release"]
         self.preview_btn = self.edition_buttons["preview"]
+        self.education_btn = self.edition_buttons.get("education")
         h.addWidget(ed_field)
 
         h.addStretch(1)
@@ -1996,7 +2003,9 @@ class MainWindow(QMainWindow):
             changed = True
         if changed:
             save_settings(self.settings)
-        self.selected_chip.setText(f"  {display}{'  ·  BETA' if is_beta else ''}  ")
+        suffix = ("  ·  BETA" if is_beta
+                  else "  ·  EDU" if edition_id == "education" else "")
+        self.selected_chip.setText(f"  {display}{suffix}  ")
         self.edition_buttons.get(edition_id, self.stable_btn).setChecked(True)
         self.theme.beta = is_beta
         self.apply_theme()
@@ -2801,7 +2810,10 @@ class MainWindow(QMainWindow):
             # is what issue #214 was reported with.
             self._store_login_already_open()
             return
-        if not self._online_sign_in_settled():
+        # The Xbox sign-in is Bedrock's; Minecraft Education asks for its
+        # own school or work account once it starts.
+        xbox_live = (ver.get("edition") or {}).get("xbox_live", True)
+        if xbox_live and not self._online_sign_in_settled():
             return
         if not self._preview_data_settled(ver):
             return
@@ -4254,14 +4266,15 @@ class MainWindow(QMainWindow):
             self.mods_page.opened()
             self._nav_follow_page(self.mods_page)
 
-    def select_build(self, version, beta):
+    def select_build(self, version, beta, edition=None):
         """Make the picker next to PLAY point at an installed build, as if it
         was picked there. False when the picker does not list it."""
+        edition = edition or ("preview" if beta else "release")
         for label, entry in zip(self.ui_state.get("labels") or [],
                                 self.ui_state.get("versions") or []):
-            if entry.get("tag") == version and bool(entry.get("beta")) == \
-                    bool(beta):
-                self.select_edition("preview" if beta else "release")
+            if entry.get("tag") == version and \
+                    _version_edition_id(entry) == edition:
+                self.select_edition(edition)
                 self.set_version(label)
                 return True
         return False

@@ -27,6 +27,7 @@ from .games import (
     selected_edition,
     prune_legacy_game_archives,
     use_game_dir,
+    uses_xbox_live,
 )
 from .log import BolError, desktop_notify, info, ok, warn
 from .prefix import (
@@ -124,8 +125,10 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
     gd = Path(load_settings()["game_dir"])
     # The DLLs the game folder gets are Bedrock's own fixes -- its XCurl and
     # libHttpClient, its sign-in button. Another title keeps what it shipped
-    # with: those replacements were never tried on it.
+    # with: those replacements were never tried on it, and Minecraft
+    # Education has neither XCurl nor Xbox Live to fix (#351).
     bedrock = is_bedrock(edition_for_dir(gd))
+    xbox_live = uses_xbox_live(gd)
     if load_settings().get("proton_source") == "winegdk":
         ensure_winegdk(force, progress)
         if bedrock:
@@ -135,7 +138,7 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
     ensure_umu(force)
     if bedrock:
         fix_curl_ssl(gd)
-    else:
+    elif xbox_live:
         install_ca_bundle(gd)
     if not boot_prefix():
         raise BolError(
@@ -144,6 +147,10 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
             f"{LOGS / 'native-login.log'} and re-run 'Install / Update'."
         )
     install_gameinput(active_prefix(), gd)
+    if not xbox_live:
+        ok("Setup complete — click PLAY, then sign in to Minecraft Education "
+           "with your school or work account.")
+        return
     if bedrock:
         hide_signin_button(gd)
     # Not "sign in in-game": that button reaches a sign-in the engine does
@@ -468,8 +475,10 @@ def diagnose():
                     "PROTON_USE_WINED3D forces the legacy renderer, which "
                     "Minecraft's menu can crash on. Use the Renderer setting "
                     "instead." % ", ".join(overrides))
-    if not msa_signed_in():
-        played = selected_edition(load_settings())
+    played = selected_edition(load_settings())
+    # Minecraft Education signs in with a school or work account of its own:
+    # no Xbox account to miss (#351).
+    if not msa_signed_in() and (played or {}).get("xbox_live", True):
         if is_bedrock(played):
             hits.append("No Microsoft account linked — the game runs, but in "
                         "offline mode: single-player worlds and LAN play "
