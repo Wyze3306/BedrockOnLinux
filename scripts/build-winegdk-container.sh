@@ -55,6 +55,8 @@ readonly VENDORED_VM_COUNTERS_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0
 readonly VENDORED_VM_COUNTERS_PATCH_SHA256="9fa03ed50b2a5bfb68a60f55aa4b1ce4b7d842010c6b3f2c176177528a722db6"
 readonly VENDORED_TIME_ZONE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch"
 readonly VENDORED_TIME_ZONE_PATCH_SHA256="6054f33a5a95c5beaf12039dca8b303fdfa66c4e01fb95b75479659f0aebc2d9"
+readonly VENDORED_GAME_EVENT_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch"
+readonly VENDORED_GAME_EVENT_PATCH_SHA256="c791f7bcab535204649c27ade0d328f669134f6044a1130362aeb5df964b28ad"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
@@ -275,6 +277,20 @@ echo "== Verifying reviewed source hashes"
   || { echo "!! SOURCE-SHA256SUMS does not match the config pin" >&2; exit 1; }
 ( cd "$SRC" && sha256sum --strict -c "$SOURCE_SHA256SUMS" >/dev/null ) \
   || { echo "!! exported source does not match the reviewed native delta" >&2; exit 1; }
+
+# 0017 changes xgameruntime files SOURCE-SHA256SUMS pins, so it goes on top
+# of the verified tree; its files join the manifest with the next engine
+# revision, together with the WINEGDK_SOURCE_MANIFEST_SHA256 the launcher
+# checks the installed engine against.
+echo "== Applying the XGameEvent runtime class"
+[ -f "$VENDORED_GAME_EVENT_PATCH" ] \
+  || { echo "!! missing XGameEvent patch" >&2; exit 1; }
+[ "$(sha256sum "$VENDORED_GAME_EVENT_PATCH" | cut -d' ' -f1)" = \
+  "$VENDORED_GAME_EVENT_PATCH_SHA256" ] \
+  || { echo "!! XGameEvent patch hash mismatch" >&2; exit 1; }
+git -C "$SRC" apply --check "$VENDORED_GAME_EVENT_PATCH" \
+  || { echo "!! XGameEvent patch does not apply" >&2; exit 1; }
+git -C "$SRC" apply "$VENDORED_GAME_EVENT_PATCH"
 
 echo "== Configuring + building WineGDK (i386 + x86_64)"
 ( cd "$BUILD"

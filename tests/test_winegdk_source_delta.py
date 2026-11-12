@@ -73,6 +73,12 @@ VM_COUNTERS_PATCH = (
 TIME_ZONE_PATCH = (
     DELTA / "0016-ntdll-check-the-time-zone-at-most-once-a-second.patch"
 )
+GAME_EVENT_PATCH = (
+    DELTA / "0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch"
+)
+# Applied after the SOURCE-SHA256SUMS check, because they change files the
+# manifest pins; their files join it with the next engine revision.
+PATCHES_AFTER_SOURCE_CHECK = {GAME_EVENT_PATCH}
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -197,6 +203,10 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         self.assertEqual(
             hashlib.sha256(FSYNC_PATCH.read_bytes()).hexdigest(),
             self._constant("VENDORED_FSYNC_PATCH_SHA256"),
+        )
+        self.assertEqual(
+            hashlib.sha256(GAME_EVENT_PATCH.read_bytes()).hexdigest(),
+            self._constant("VENDORED_GAME_EVENT_PATCH_SHA256"),
         )
         self.assertEqual(
             hashlib.sha256(SOURCE_SUMS.read_bytes()).hexdigest(),
@@ -1004,6 +1014,86 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
                         text.index("tm = gmtime(&year_start);"))
         # Both paths that leave a valid cache record the check.
         self.assertEqual(additions.count("last_check = now;"), 2)
+
+    @staticmethod
+    def _changed_files(path):
+        return set(re.findall(r"^diff --git a/(\S+) b/\1$", path.read_text(),
+                              re.MULTILINE))
+
+    def test_game_events_reach_the_launcher(self):
+        # #152: QueryApiImpl refused this class with E_NOTIMPL, XSAPI dropped
+        # every event the game wrote, and no achievement ever unlocked.
+        additions = self._additions(GAME_EVENT_PATCH)
+        self.assertIn(
+            "DEFINE_GUID(CLSID_XGameEventImpl, 0xbbfbdcc7, 0xbfe7, 0x409b, "
+            "0xa5, 0xca, 0xed, 0xf0, 0x54, 0x96, 0x0b, 0x4d);",
+            additions)
+        self.assertIn("IsEqualGUID( runtimeClassId, &CLSID_XGameEventImpl )",
+                      additions)
+        self.assertIn("*out = x_game_event_get();", additions)
+        self.assertIn("GDKComponent/System/XGameEvent.c", additions)
+        # The file bol/gameevents.py reads and forwards.
+        self.assertIn('L"BOL_GAME_EVENT_LOG"', additions)
+        self.assertIn('"BOL_GAME_EVENT_LOG"',
+                      (ROOT / "bol" / "gameevents.py").read_text())
+
+    def test_late_patches_touch_pinned_files_only_after_the_source_check(self):
+        """SOURCE-SHA256SUMS still verifies the tree it describes.
+
+        Pinning new hashes moves WINEGDK_SOURCE_MANIFEST_SHA256, which the
+        launcher checks the installed engine against, so a patch that changes
+        a pinned file goes on top of the verified tree until the next engine
+        revision moves both together.
+        """
+        late = sorted(
+            path for path in DELTA.glob("*.patch")
+            if path.name[:4] >= "0014"
+        )
+        self.assertIn(GAME_EVENT_PATCH, late)
+        for path in late:
+            changed = self._changed_files(path)
+            with self.subTest(patch=path.name):
+                if path in PATCHES_AFTER_SOURCE_CHECK:
+                    self.assertTrue(changed & PINNED_SOURCE_FILES)
+                else:
+                    self.assertFalse(changed & PINNED_SOURCE_FILES,
+                                     changed & PINNED_SOURCE_FILES)
+        self.assertEqual(
+            self._changed_files(GAME_EVENT_PATCH) & PINNED_SOURCE_FILES,
+            {"dlls/xgameruntime/main.c", "dlls/xgameruntime/private.h",
+             "dlls/xgameruntime/Makefile.in"},
+        )
+        check = 'sha256sum --strict -c "$SOURCE_SHA256SUMS"'
+        for script in (SCRIPT, CONTAINER_SCRIPT):
+            text = script.read_text()
+            verified = text.index(check)
+            for path in late:
+                with self.subTest(script=script.name, patch=path.name):
+                    name = re.search(
+                        r'^readonly (VENDORED_\w+_PATCH)="[^"]*/'
+                        + re.escape(path.name) + '"$',
+                        text, re.MULTILINE).group(1)
+                    applied = text.index(f'apply "${name}"')
+                    if path in PATCHES_AFTER_SOURCE_CHECK:
+                        self.assertLess(verified, applied)
+                    else:
+                        self.assertLess(applied, verified)
+            with self.subTest(script=script.name):
+                self.assertLess(verified,
+                                text.index('apply "$VENDORED_GAME_EVENT_PATCH"'))
+                self.assertLess(
+                    text.index('apply --check "$VENDORED_GAME_EVENT_PATCH"'),
+                    text.index('apply "$VENDORED_GAME_EVENT_PATCH"'))
+
+    def test_packager_requires_game_events_in_both_architectures(self):
+        text = PACKAGER.read_text()
+        arch_loop = text.index('for arch in "${ARCHES[@]}"; do',
+                               text.index("# The native engine must expose"))
+        marker = text.index(
+            'has_text "$xgdk" "short write of an event record"', arch_loop)
+        self.assertLess(marker, text.index("\ndone", arch_loop))
+        self.assertIn('WARN( "short write of an event record',
+                      self._additions(GAME_EVENT_PATCH))
 
     def test_every_vendored_patch_is_applied_and_attested(self):
         """A patch in third_party ships only if the builders apply it.

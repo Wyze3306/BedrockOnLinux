@@ -331,6 +331,7 @@ WINEGDK_NATIVE_PROVENANCE_FILES=(
   0014-ntdll-server-fall-back-to-fsync-without-ntsync.patch
   0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch
   0016-ntdll-check-the-time-zone-at-most-once-a-second.patch
+  0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch
 )
 
 verify_sha256() {
@@ -383,7 +384,7 @@ verify_winegdk_source_provenance() {
     "ee0543f11737a11f5edec389967bb41482c7f5eda3807c24d171dd6bf6301274" \
     "WineGDK r12 source delta"
   verify_sha256 "$native_root/README.md" \
-    "065b1b4ad787dc71c82bf90f60bf4bd37bc33ee1ffe72e28307a9cfbc261c5db" \
+    "252529901ecc1de4a50472891bd4235901b26b1fc9b03553947a51d6c8ce14fe" \
     "WineGDK native5 source-delta README"
   verify_sha256 "$native_root/SOURCE-SHA256SUMS" \
     "e5b3763a60374f1a5b1506f459ad80f39fe302d2397f26e2d9b9d220af4e412b" \
@@ -452,6 +453,10 @@ verify_winegdk_source_provenance() {
     "$native_root/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch" \
     "6054f33a5a95c5beaf12039dca8b303fdfa66c4e01fb95b75479659f0aebc2d9" \
     "WineGDK time zone check"
+  verify_sha256 \
+    "$native_root/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch" \
+    "c791f7bcab535204649c27ade0d328f669134f6044a1130362aeb5df964b28ad" \
+    "WineGDK XGameEvent runtime class"
 }
 
 has_marker() {
@@ -741,6 +746,8 @@ for arch in "${ARCHES[@]}"; do
     echo "!! WineGDK native XUser request path missing for $arch" >&2; exit 1; }
   has_text "$xgdk" "unsupported GDK QueryApiImpl class" || {
     echo "!! WineGDK native interface diagnostics missing for $arch" >&2; exit 1; }
+  has_text "$xgdk" "short write of an event record" || {
+    echo "!! WineGDK XGameEvent runtime class (0017) missing for $arch" >&2; exit 1; }
   storage="$STAGED_ENGINE/files/lib/wine/$arch/windows.storage.dll"
   [[ -f "$storage" ]] || {
     echo "!! WineGDK windows.storage.dll missing for $arch" >&2; exit 1; }
@@ -944,6 +951,7 @@ for relative_root, names in (
         "native5/0014-ntdll-server-fall-back-to-fsync-without-ntsync.patch",
         "native5/0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch",
         "native5/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch",
+        "native5/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch",
     )),
     (gdk_proton_provenance_root, ("provenance.env",)),
 ):

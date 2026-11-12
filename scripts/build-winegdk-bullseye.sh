@@ -55,6 +55,8 @@ readonly VENDORED_VM_COUNTERS_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0
 readonly VENDORED_VM_COUNTERS_PATCH_SHA256="9fa03ed50b2a5bfb68a60f55aa4b1ce4b7d842010c6b3f2c176177528a722db6"
 readonly VENDORED_TIME_ZONE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch"
 readonly VENDORED_TIME_ZONE_PATCH_SHA256="6054f33a5a95c5beaf12039dca8b303fdfa66c4e01fb95b75479659f0aebc2d9"
+readonly VENDORED_GAME_EVENT_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch"
+readonly VENDORED_GAME_EVENT_PATCH_SHA256="c791f7bcab535204649c27ade0d328f669134f6044a1130362aeb5df964b28ad"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly SOURCE_SHA256SUMS_SHA256="e5b3763a60374f1a5b1506f459ad80f39fe302d2397f26e2d9b9d220af4e412b"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
@@ -611,6 +613,11 @@ fi
 [[ "$(sha256sum "$VENDORED_TIME_ZONE_PATCH" | cut -d' ' -f1)" == \
     "$VENDORED_TIME_ZONE_PATCH_SHA256" ]] ||
   die "vendored time zone check patch SHA-256 mismatch"
+[[ -f "$VENDORED_GAME_EVENT_PATCH" ]] ||
+  die "vendored XGameEvent patch is missing"
+[[ "$(sha256sum "$VENDORED_GAME_EVENT_PATCH" | cut -d' ' -f1)" == \
+    "$VENDORED_GAME_EVENT_PATCH_SHA256" ]] ||
+  die "vendored XGameEvent patch SHA-256 mismatch"
 [[ "$SOURCE_DATE_EPOCH" == "$EXPECTED_SOURCE_DATE_EPOCH" ]] ||
   die "WineGDK source timestamp changed: $SOURCE_DATE_EPOCH"
 
@@ -667,6 +674,7 @@ vendored_private_usage_patch_sha256=$VENDORED_PRIVATE_USAGE_PATCH_SHA256
 vendored_fsync_patch_sha256=$VENDORED_FSYNC_PATCH_SHA256
 vendored_vm_counters_patch_sha256=$VENDORED_VM_COUNTERS_PATCH_SHA256
 vendored_time_zone_patch_sha256=$VENDORED_TIME_ZONE_PATCH_SHA256
+vendored_game_event_patch_sha256=$VENDORED_GAME_EVENT_PATCH_SHA256
 source_sha256sums_sha256=$SOURCE_SHA256SUMS_SHA256
 source_date_epoch=$SOURCE_DATE_EPOCH
 debian_suite=$DEBIAN_SUITE
@@ -782,6 +790,15 @@ git -C "$WORK_ROOT/source" apply "$VENDORED_TIME_ZONE_PATCH" ||
   cd "$WORK_ROOT/source"
   sha256sum --strict -c "$SOURCE_SHA256SUMS" >/dev/null
 ) || die "exported WineGDK source does not match the reviewed native delta"
+# 0017 changes xgameruntime files SOURCE-SHA256SUMS pins, so it goes on top
+# of the verified tree; its files join the manifest with the next engine
+# revision, together with the WINEGDK_SOURCE_MANIFEST_SHA256 the launcher
+# checks the installed engine against.
+printf '==> Applying the XGameEvent runtime class\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_GAME_EVENT_PATCH" ||
+  die "vendored XGameEvent patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_GAME_EVENT_PATCH" ||
+  die "could not apply vendored XGameEvent patch"
 
 printf '==> Building WineGDK in Bullseye\n'
 BOL_WINEGDK_INTERNAL=1 unshare "${USER_NAMESPACE_ARGS[@]}" \
