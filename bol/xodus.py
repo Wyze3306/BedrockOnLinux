@@ -218,6 +218,11 @@ _LOADER_ERROR = re.compile(
 _WARNED = {}
 
 
+# The one "version" of a title the Store alone serves: the build it serves
+# today. Its folder is games/<edition>/current/, updated in place.
+STORE_BUILD = "current"
+
+
 def edition(edition_id):
     """The MC_PRODUCTS entry for an edition id, or None."""
     return next((e for e in MC_PRODUCTS if e["id"] == edition_id), None)
@@ -272,6 +277,12 @@ def version_catalogue(edition_id, ignore_cache=False):
     entry = edition(edition_id)
     if entry is None:
         return []
+    if entry.get("catalogue") == "store":
+        # No index knows these titles, and none is needed: the Store serves
+        # one build, GetBasePackage names it, and `xodus-cli streaming
+        # <product-id>` downloads it -- or the delta to it, over the build
+        # already in the folder. So there is one entry, the product itself.
+        return [{"version": STORE_BUILD, "urls": [entry["product"]]}]
     try:
         payload = _fetch_with_fallback(
             "gdk-links.json", GDK_LINKS_URL,
@@ -851,21 +862,83 @@ def _bytes(value, unit):
         return 0
 
 
-def game_root(dest):
+BEDROCK_EXE = "Minecraft.Windows.exe"
+_MANIFESTS = ("appxmanifest.xml", "AppxManifest.xml")
+_GAME_CONFIGS = ("MicrosoftGame.config", "microsoftgame.config")
+# <Executable Name="Minecraft.Windows.exe" Id="Game" .../> in MicrosoftGame
+# .config, the file every GDK package carries and the one the Gaming Services
+# read to start a title. Attribute order is not fixed.
+_EXECUTABLE = re.compile(r"<Executable\b[^>]*?\bName\s*=\s*\"([^\"]+)\"",
+                         re.I | re.S)
+_APPX_EXECUTABLE = re.compile(
+    r"<Application\b[^>]*?\bExecutable\s*=\s*\"([^\"]+)\"", re.I | re.S)
+
+
+def declared_executable(folder):
+    """The executable a package says it starts, relative to ``folder``.
+
+    MicrosoftGame.config first, which is what a GDK title is started from,
+    then the Appx manifest's <Application Executable=...>. Returned with
+    forward slashes, or None when neither file names one. A Bedrock build
+    always says Minecraft.Windows.exe; the point of reading it is the titles
+    whose executable nothing else here can know in advance.
+    """
+    folder = Path(folder)
+    for names, pattern in ((_GAME_CONFIGS, _EXECUTABLE),
+                           (_MANIFESTS, _APPX_EXECUTABLE)):
+        for name in names:
+            try:
+                text = (folder / name).read_text(encoding="utf-8",
+                                                 errors="ignore")
+            except OSError:
+                continue
+            match = pattern.search(text)
+            if match:
+                relative = match.group(1).strip().replace("\\", "/")
+                relative = relative.lstrip("/")
+                if relative and ".." not in relative.split("/"):
+                    return relative
+    return None
+
+
+def game_root(dest, exe=BEDROCK_EXE):
     """Folder of a complete build under ``dest``, else None.
 
     This is the shape ``xodus-cli streaming`` leaves behind, so it lives here
     rather than in the caller: a bare exe with no manifest beside it is a
     truncated install, not a build.
+
+    ``exe`` is the executable that marks a build -- Minecraft.Windows.exe for
+    Bedrock. None means the one the package declares (declared_executable),
+    for a title whose executable is only known from its own files: then the
+    folder holding the manifest is the build, provided what it declares is
+    really there.
     """
     dest = Path(dest)
     if not dest.exists():
         return None
-    for exe in dest.rglob("Minecraft.Windows.exe"):
-        if any((exe.parent / m).exists()
-               for m in ("appxmanifest.xml", "AppxManifest.xml")):
-            return exe.parent
+    if exe is None:
+        for manifest in sorted(
+                (path for name in _MANIFESTS for path in dest.rglob(name)),
+                key=lambda path: len(path.parts)):
+            folder = manifest.parent
+            declared = declared_executable(folder)
+            if declared and (folder / declared).is_file():
+                return folder
+        return None
+    for found in dest.rglob(exe):
+        if any((found.parent / m).exists() for m in _MANIFESTS):
+            return found.parent
     return None
+
+
+def game_executable(game_dir, exe=BEDROCK_EXE):
+    """The executable to start in a build folder (``exe`` as for game_root)."""
+    game_dir = Path(game_dir)
+    if exe is None:
+        declared = declared_executable(game_dir)
+        return game_dir / declared if declared else None
+    return game_dir / exe
 
 
 def has_package_cache(directory):
@@ -881,7 +954,7 @@ def has_package_cache(directory):
         return False
 
 
-def lost_package_cache(game_dir):
+def lost_package_cache(game_dir, exe=BEDROCK_EXE):
     """Whether ``game_dir`` holds a build it can no longer decrypt.
 
     A Store build keeps its executable as ciphertext and the package beside it
@@ -896,13 +969,13 @@ def lost_package_cache(game_dir):
     and needs no package at all, so it is never reported here.
     """
     game_dir = Path(game_dir)
-    exe = game_dir / "Minecraft.Windows.exe"
-    if not exe.is_file() or not exe_is_encrypted(exe):
+    exe = game_executable(game_dir, exe)
+    if exe is None or not exe.is_file() or not exe_is_encrypted(exe):
         return False
     return not has_package_cache(game_dir)
 
 
-def _drop_cache(dest):
+def _drop_cache(dest, exe=BEDROCK_EXE):
     """Delete the package cache xodus-cli left behind in ``dest``.
 
     xodus-cli caches the encrypted package beside the game -- as
@@ -919,7 +992,7 @@ def _drop_cache(dest):
     """
     dest = Path(dest)
     stale = list(dest.glob(_PACKAGE_CACHE_TMP))
-    if game_root(dest) is None:
+    if game_root(dest, exe) is None:
         stale += list(dest.glob(PACKAGE_CACHE))
     for path in stale:
         try:
@@ -1124,14 +1197,15 @@ def _unresolved_advice(hosts):
             "another DNS server, lets the download through.")
 
 
-def _raise_unretryable(text, dest=None, needed=0):
+def _raise_unretryable(text, dest=None, needed=0, title=None):
     """Raise for the download failures another mirror cannot fix."""
     if _DEVICE_LIMIT.search(text):
         raise XodusError(_DEVICE_LIMIT_MESSAGE)
     if _NOT_OWNED.search(text):
         raise NotOwned(
-            "The linked Microsoft account does not own this edition of "
-            "Minecraft. Buy or redeem it on the same account, then try again.")
+            "The linked Microsoft account does not own "
+            + (title if title else "this edition of Minecraft")
+            + ". Buy or redeem it on the same account, then try again.")
     if _SESSION_REFUSED.search(text) and not _NO_NETWORK.search(text):
         raise XodusError(_SESSION_REFUSED_MESSAGE)
     if _NO_CREDENTIALS.search(text):
@@ -1158,7 +1232,7 @@ def _raise_unretryable(text, dest=None, needed=0):
         raise XodusError(loader)
 
 
-def install(product, dest: Path, progress=None):
+def install(product, dest: Path, progress=None, exe=BEDROCK_EXE, title=None):
     """Download + decrypt an edition into ``dest``.
 
     ``product`` is a Store product id, a CDN package URL, or the list of mirror
@@ -1205,7 +1279,7 @@ def install(product, dest: Path, progress=None):
     # be resumed -- it truncates its work cache at every start -- so all it
     # can still do is make the delta look empty, which is a download that
     # "succeeds" and installs nothing at all.
-    _drop_cache(dest)
+    _drop_cache(dest, exe)
 
     # Only for a download of the whole package: an update to a build already
     # here fetches a delta of unknown size, and refusing that on the whole
@@ -1213,7 +1287,7 @@ def install(product, dest: Path, progress=None):
     # that lost its package is not an update -- there is no cache left to
     # delta against, so the entire 2+ GiB comes down again (issue #216).
     needed = 0
-    if game_root(dest) is None or lost_package_cache(dest):
+    if game_root(dest, exe) is None or lost_package_cache(dest, exe):
         needed = _room_needed(_package_size(sources))
         free = _free_space(dest)
         if _short_of_room(needed, free):
@@ -1226,7 +1300,8 @@ def install(product, dest: Path, progress=None):
     log = _open_download_log(dest)
     try:
         return _stream_until_installed(
-            binary, dest, plan, races_left, needed, progress, log)
+            binary, dest, plan, races_left, needed, progress, log,
+            exe=exe, title=title)
     finally:
         if log:
             try:
@@ -1236,10 +1311,11 @@ def install(product, dest: Path, progress=None):
 
 
 def _stream_until_installed(binary, dest, plan, races_left, needed, progress,
-                            log):
+                            log, exe=BEDROCK_EXE, title=None):
     """Run the mirrors in ``plan`` until one of them installs the build."""
     failure = ""
     attempt = 0
+    label = title or "Minecraft"
     record = _record_to(log)
     unresolved = []
     dns_failed = False
@@ -1250,18 +1326,18 @@ def _stream_until_installed(binary, dest, plan, races_left, needed, progress,
         _note(log, f"\n== attempt {attempt}: {source}")
         code, tail = _run_streaming(cmd, progress, record)
         _note(log, f"-- exit {code}")
-        root = game_root(dest)
+        root = game_root(dest, exe)
         if code == 0 and root is not None and has_package_cache(dest):
             _note(log, "-- installed")
             return dest
-        _drop_cache(dest)
+        _drop_cache(dest, exe)
         text = "\n".join(tail)
         line = _failure_line(tail)
         # Whatever it exited with. Most of the paths that end a download early
         # -- no licence, no room, an expired session -- print their reason and
         # then exit 0 anyway, so classifying only the non-zero exits reported
         # an account that does not own Minecraft as "installed no game".
-        _raise_unretryable(text, dest, needed)
+        _raise_unretryable(text, dest, needed, title)
         dns_failed = bool(_DNS_FAILURE.search(text))
         if dns_failed:
             host = _DNS_HOST.search(text)
@@ -1279,7 +1355,7 @@ def _stream_until_installed(binary, dest, plan, races_left, needed, progress,
         # resumed from makes the delta look empty. Treat that as the failure it
         # is, or the caller starts a game directory that was never written.
         if code == 0 and root is None:
-            failure = ("The Minecraft download installed no game"
+            failure = (f"The {label} download installed no game"
                        + (f": {line}" if line else
                           f" and printed no reason for it — what it did print "
                           f"is in {DOWNLOAD_LOG}."))
@@ -1290,11 +1366,11 @@ def _stream_until_installed(binary, dest, plan, races_left, needed, progress,
             # here that used to read as a finished install, and the game only
             # failed hours later, at launch, on the package that was never
             # written. It is not installed until it can be decrypted.
-            failure = ("The Minecraft download did not complete"
+            failure = (f"The {label} download did not complete"
                        + (f": {line}" if line else
                           ", so the game cannot be decrypted."))
         else:
-            failure = "The Minecraft download failed" + (
+            failure = f"The {label} download failed" + (
                 f": {line}" if line else ".")
         if raced and races_left:
             races_left -= 1

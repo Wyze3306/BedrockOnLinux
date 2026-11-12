@@ -36,6 +36,18 @@ Product ids, resolved through DisplayCatalog:
 |---|---|---|
 | Minecraft for Windows | `9NBLGGH2JHXJ` | `7792d9ce-355a-493c-afbd-768f4a77c3b0` |
 | Minecraft Preview for Windows | `9P5X4QVLC2XR` | `98bd2335-9b01-4e4c-bd05-ccc01614078b` |
+| Minecraft Dungeons (`Microsoft.Lovika_8wekyb3d8bbwe`) | `9P8MK4NC0LJB` | `911f6225-c9c8-4641-a6db-29d4ccafc666` |
+| Minecraft Legends (`Microsoft.BadgerWin10_8wekyb3d8bbwe`) | `9N98Z825TNFW` | `f8afac2c-44cd-4302-afc3-b6dc979e6656` |
+
+Dungeons and Legends are not in the GdkLinks index, so the launcher installs
+them with `xodus-cli streaming <product-id>` into one folder,
+`games/<edition>/current/`, and reads the executable from the package's
+`MicrosoftGame.config`. `streaming` picks the first `.msixvc` the Store lists
+for the product (the `.msixvc.phf` beside it does not match), and asks for the
+licence once the remote XVD header is parsed, so an account that does not own
+the title is refused before any game data is downloaded. Minecraft Dungeons
+II (`9PM3J18QM4Q3`) is a pre-order with no package yet; Minecraft: Story Mode
+was delisted and only ever shipped as an Xbox console XVC.
 
 The Xbox CDN only serves the *current* build of a product id — there is no
 back catalogue. This is why the launcher offers Release and Preview rather

@@ -155,7 +155,8 @@ class ReadyLaunchHarness:
                 for name in ("warn", "wine_reg_set_refresh_token",
                              "ensure_login_deps", "xbl_preauth",
                              "hide_signin_button", "apply_branding",
-                             "_prefix_stably_idle_after_wrapper")
+                             "_prefix_stably_idle_after_wrapper",
+                             "proton_umu_cmd")
             }
             return launch._launch_once(lock_fds=lock_fds,
                                        on_started=on_started,

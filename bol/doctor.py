@@ -3,7 +3,6 @@
 
 import shutil
 import sys
-from pathlib import Path
 
 from . import deps, discord, fixups, gamepad, hostarch, presence, webview
 from .config import DATA, PRETTY, VERSION
@@ -153,11 +152,20 @@ def doctor(acknowledge_gpu_crash=False):
     # keeps the game executable as ciphertext and the only copy of the plain
     # one is made, at every launch, out of the package file beside it -- so a
     # game directory that lost it is unplayable while looking complete.
-    game_dir = (load_settings().get("game_dir") or "").strip()
-    if game_dir and xodus.exe_is_encrypted(
-            Path(game_dir) / "Minecraft.Windows.exe"):
+    from .games import edition_exe, game_executable, is_bedrock, \
+        selected_edition
+
+    settings = load_settings()
+    game_dir = (settings.get("game_dir") or "").strip()
+    edition = selected_edition(settings)
+    game_exe = game_executable(game_dir, edition) if game_dir else None
+    if not is_bedrock(edition):
+        print(f"  {'title':12} : {edition['name']} (Minecraft for "
+              "Windows' own checks are skipped)")
+    if game_exe is not None and xodus.exe_is_encrypted(game_exe):
         print(f"  {'mc package':12} : "
-              + ("OK" if not xodus.lost_package_cache(game_dir) else
+              + ("OK" if not xodus.lost_package_cache(
+                  game_dir, edition_exe(edition)) else
                  f"MISSING ({xodus.PACKAGE_CACHE} in {game_dir}) — "
                  "press PLAY to download this build again"))
     # Whether the installed build still carries the two HBUI patches that
@@ -166,10 +174,12 @@ def doctor(acknowledge_gpu_crash=False):
     # and the anchors stop matching -- and nothing else notices: the game
     # starts, setup reports success, and only the Play screen behaves as
     # though no patch had run (#227/#228/#229).
-    signin_summary, signin_problem = fixups.hbui_signin_gate_status(game_dir)
-    print(f"  {'sign-in ui':12} : {signin_summary}")
-    if signin_problem:
-        warn(signin_problem)
+    if is_bedrock(edition):
+        signin_summary, signin_problem = fixups.hbui_signin_gate_status(
+            game_dir)
+        print(f"  {'sign-in ui':12} : {signin_summary}")
+        if signin_problem:
+            warn(signin_problem)
     # Which controllers the launcher window itself can be driven with. The
     # game reads its own pad through GameInput inside the prefix, so a blank
     # here says nothing about playing -- only about navigating the launcher

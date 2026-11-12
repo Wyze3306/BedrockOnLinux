@@ -1537,11 +1537,34 @@ def seed_default_servers(prefix=None, prefix_idle=None,
     return added
 
 
+def _game_process_names():
+    """The executable names a running game shows in its command line.
+
+    Minecraft.Windows.exe always, and the selected build's own executable
+    when it is another title of the family (Minecraft Dungeons, Legends).
+    """
+    names = {b"Minecraft.Windows.exe"}
+    try:
+        from .games import game_executable, selected_edition
+        from .util import load_settings
+
+        settings = load_settings()
+        game_dir = settings.get("game_dir")
+        if game_dir:
+            exe = game_executable(game_dir, selected_edition(settings))
+            if exe is not None:
+                names.add(exe.name.encode())
+    except Exception:
+        pass
+    return names
+
+
 def _mc_running():
+    names = _game_process_names()
     for pid in prefix_processes(active_prefix()):
         try:
             cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
-            if b"Minecraft.Windows.exe" in cmdline:
+            if any(name in cmdline for name in names):
                 return True
         except OSError:
             continue

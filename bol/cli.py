@@ -12,9 +12,11 @@ from .content import cmd_import
 from .doctor import doctor
 from .games import (
     installed_builds,
+    is_bedrock,
     list_editions,
     list_versions,
     remove_build,
+    selected_edition,
 )
 from .gamesetup import do_setup, update_game_before_play
 from .launch import (
@@ -80,6 +82,19 @@ _BUILDS_KEEP_NOTE = (
     "Worlds, settings, screenshots and packs are kept with your profile, not "
     "in these folders, so removing a build removes only the download."
 )
+
+
+def _build_label(build):
+    """How 'versions' names one installable build.
+
+    A title only the Store serves has a single entry, "current": the build
+    the Store has today. Once it is installed, its own number says more.
+    """
+    from .xodus import STORE_BUILD
+
+    if build["version"] == STORE_BUILD:
+        return build.get("build") or "latest from the Microsoft Store"
+    return build["version"]
 
 
 def _list_installed_builds():
@@ -209,7 +224,9 @@ def main():
                            "done when Settings ▸ General has it switched on)")
     sp = sub.add_parser("setup", help="download & prepare Minecraft")
     sp.add_argument("--mc", metavar="EDITION",
-                    help="Minecraft edition to install: release or preview")
+                    help="edition to install: release, preview, or another "
+                         "Minecraft title of the Microsoft Store (dungeons, "
+                         "legends); see 'versions'")
     sp.add_argument("--version", metavar="BUILD",
                     help="Bedrock build to install (default: the newest); "
                          "see 'versions'")
@@ -320,7 +337,9 @@ def main():
             # a sign-in (#240).
             if not msa_signed_in():
                 warn("Not signed in for online play: no Realms, no servers, "
-                     "no friends and no Marketplace.")
+                     "no friends and no Marketplace."
+                     if is_bedrock(selected_edition()) else
+                     "Not signed in: the game cannot reach Xbox Live.")
                 info(f"Sign in with:  {APP} login")
             # A poweroff or a stopped scope with the game running lets the
             # session finish its teardown before the launcher goes.
@@ -350,7 +369,7 @@ def main():
                     print(f"{edition['name']}  (--mc {edition['id']})")
                     for build in list_versions(edition["id"],
                                                 ignore_cache=a.refresh):
-                        print(f"    {build['version']:<14}"
+                        print(f"    {_build_label(build):<14}"
                               f"{'installed' if build['installed'] else ''}")
                 info("Builds are downloaded from Microsoft's own CDN with "
                      "your account, which must own Minecraft.")

@@ -30,11 +30,12 @@ from .pe import apply_patch
 from .prefix import active_prefix
 from .util import asset_url, download, gh_releases, run
 
-def fix_curl_ssl(game_dir: Path):
-    """GDK's XCurl.dll is broken under Wine — swap in MinGW libcurl — and
-    GDK-Proton requires a CA bundle at etc/ssl/certs/ca-bundle.crt next to
-    the game, else every TLS call (Xbox/online) fails and the server join
-    hangs forever. Cert step runs every time (idempotent)."""
+def install_ca_bundle(game_dir: Path):
+    """The CA bundle GDK-Proton looks for beside a game, at
+    etc/ssl/certs/ca-bundle.crt. Only a file of certificates: unlike the
+    libcurl swap below it changes nothing the game ships, so every title of
+    the family gets it."""
+    game_dir = Path(game_dir)
     cacert = CACHE / "cacert.pem"
     if not cacert.exists():
         download(CACERT_URL, cacert, "SSL certificates")
@@ -42,6 +43,14 @@ def fix_curl_ssl(game_dir: Path):
         crt = base / "etc" / "ssl" / "certs" / "ca-bundle.crt"
         crt.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(cacert, crt)
+
+
+def fix_curl_ssl(game_dir: Path):
+    """GDK's XCurl.dll is broken under Wine — swap in MinGW libcurl — and
+    GDK-Proton requires a CA bundle at etc/ssl/certs/ca-bundle.crt next to
+    the game, else every TLS call (Xbox/online) fails and the server join
+    hangs forever. Cert step runs every time (idempotent)."""
+    install_ca_bundle(game_dir)
     if (game_dir / "XCurl.dll.bol-orig").exists():
         return
     info("Installing libcurl + certificates …")

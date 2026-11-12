@@ -8,14 +8,23 @@ from . import hostarch
 from .auth import msa_signed_in
 from .config import LOGS
 from .deps import ensure_login_deps
-from .fixups import fix_curl_ssl, hide_signin_button, install_gdk_xbox_dlls
+from .fixups import (
+    fix_curl_ssl,
+    hide_signin_button,
+    install_ca_bundle,
+    install_gdk_xbox_dlls,
+)
 from .gameinput import install_gameinput
 from .config import GAMES
 from .games import (
     _auto_selection,
     _game_root,
+    edition_exe,
+    edition_for_dir,
     install_game,
+    is_bedrock,
     list_versions,
+    selected_edition,
     prune_legacy_game_archives,
     use_game_dir,
 )
@@ -86,6 +95,12 @@ def update_game_before_play(always=False, setup=None, versions=None):
     return newest
 
 
+def _build_root(folder):
+    """The complete build in ``folder``, for whichever title it holds."""
+    folder = Path(folder).expanduser()
+    return _game_root(folder, edition_exe(edition_for_dir(folder)))
+
+
 def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
               force=False, progress=None):
     # Everything setup downloads is x86-64; say so before the first of them
@@ -100,20 +115,28 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
     if mc_edition:
         use_game_dir(install_game(mc_edition, mc_version, progress,
                                   force=force))
-    elif game_dir and _game_root(Path(game_dir).expanduser()):
+    elif game_dir and _build_root(game_dir):
         use_game_dir(game_dir)
     cur = load_settings().get("game_dir")
-    if not cur or not _game_root(Path(cur)):
+    if not cur or not _build_root(cur):
         edition, version = _auto_selection(s)
         use_game_dir(install_game(edition, version, progress, force=force))
     gd = Path(load_settings()["game_dir"])
+    # The DLLs the game folder gets are Bedrock's own fixes -- its XCurl and
+    # libHttpClient, its sign-in button. Another title keeps what it shipped
+    # with: those replacements were never tried on it.
+    bedrock = is_bedrock(edition_for_dir(gd))
     if load_settings().get("proton_source") == "winegdk":
         ensure_winegdk(force, progress)
-        install_gdk_xbox_dlls(gd)
+        if bedrock:
+            install_gdk_xbox_dlls(gd)
     else:
         ensure_proton(proton_tag, force, progress)
     ensure_umu(force)
-    fix_curl_ssl(gd)
+    if bedrock:
+        fix_curl_ssl(gd)
+    else:
+        install_ca_bundle(gd)
     if not boot_prefix():
         raise BolError(
             "Could not initialise the Wine prefix, so setup stopped before "
@@ -121,7 +144,8 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
             f"{LOGS / 'native-login.log'} and re-run 'Install / Update'."
         )
     install_gameinput(active_prefix(), gd)
-    hide_signin_button(gd)
+    if bedrock:
+        hide_signin_button(gd)
     # Not "sign in in-game": that button reaches a sign-in the engine does
     # not implement, and telling people to use it is how #227/#228 were
     # filed. The account is linked here, and PLAY carries it into the
@@ -445,10 +469,16 @@ def diagnose():
                     "Minecraft's menu can crash on. Use the Renderer setting "
                     "instead." % ", ".join(overrides))
     if not msa_signed_in():
-        hits.append("No Microsoft account linked — the game runs, but in "
-                    "offline mode: single-player worlds and LAN play only. "
-                    "Click 'Sign in' before PLAY for Realms, servers, the "
-                    "Marketplace and Xbox friends.")
+        played = selected_edition(load_settings())
+        if is_bedrock(played):
+            hits.append("No Microsoft account linked — the game runs, but in "
+                        "offline mode: single-player worlds and LAN play "
+                        "only. Click 'Sign in' before PLAY for Realms, "
+                        "servers, the Marketplace and Xbox friends.")
+        else:
+            hits.append(f"No Microsoft account linked — {played['name']} "
+                        "cannot sign in to Xbox Live. Click 'Sign in' "
+                        "before PLAY.")
     if hits:
         warn("Likely cause:")
         for h in dict.fromkeys(hits):
