@@ -436,6 +436,25 @@ class QtRuntimeDependencyTests(unittest.TestCase):
             "build-deb.sh does not declare these, so the launcher aborts "
             f"before it can report anything: {missing}")
 
+    def test_the_rpm_requires_nothing_by_a_single_distributions_name(self):
+        # "webkit2gtk4.1" is Fedora's name: openSUSE calls the same library
+        # libwebkit2gtk-4_1-0, and zypper refused the whole package ("nothing
+        # provides 'webkit2gtk4.1'"). A soname, a file path, or a name every
+        # RPM distribution shares is what a Requires may say.
+        shared = {"python3", "python3-cryptography", "tar", "zstd",
+                  "xdg-utils", "ca-certificates"}
+        for line in self._declared_rpm().splitlines():
+            if not line.startswith("Requires:"):
+                continue
+            wanted = line.split(":", 1)[1].strip()
+            with self.subTest(requires=wanted):
+                self.assertTrue(
+                    wanted.endswith("()(64bit)") or wanted.startswith("/")
+                    or wanted.startswith("(")
+                    or wanted.split()[0] in shared, wanted)
+        self.assertIn("Requires:       libwebkit2gtk-4.1.so.0()(64bit)",
+                      self._declared_rpm())
+
     def test_the_rpm_declares_every_library_the_xcb_plugin_loads(self):
         script = self._declared_rpm()
         missing = sorted(
