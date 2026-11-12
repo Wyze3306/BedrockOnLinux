@@ -97,7 +97,10 @@ def _report_shared_leftovers(sub, prefix=None):
 
 def _safe_component(name):
     """A filesystem-safe folder name derived from a pack/world name."""
-    name = re.sub(r"[^\w .()\-]+", "_", (name or "").strip()) or "imported"
+    # Pack names often carry the game's colour codes (§c, §l): drop them
+    # rather than turn each into an underscore.
+    name = re.sub(r"§.?", "", name or "")
+    name = re.sub(r"[^\w .()\-]+", "_", name.strip()) or "imported"
     return name[:96]
 
 
@@ -151,10 +154,71 @@ def _install_pack_tree(pack_root: Path, prefix, fallback_name: str):
     return sub, dest
 
 
-def import_content(src, prefix=None):
+def _extract(archive, dest: Path):
+    """Unpack a zip into ``dest``, refusing entries that would leave it."""
+    with zipfile.ZipFile(archive) as z:
+        for m in z.infolist():
+            p = PurePosixPath(m.filename)
+            if p.is_absolute() or ".." in p.parts:
+                raise ValueError(f"unsafe path in zip archive: {m.filename}")
+        z.extractall(dest)
+
+
+def _hoist_single_folder(dest: Path, marker: str):
+    """Lift a world zipped inside one folder of its own up into ``dest``.
+
+    Many .mcworld files are zipped from the folder above the world, so the
+    archive holds ``My World/level.dat`` and the game, which looks for
+    ``level.dat`` at the top, never lists it.
+    """
+    if (dest / marker).exists():
+        return
+    entries = [e for e in dest.iterdir() if e.name != "__MACOSX"]
+    if len(entries) != 1 or not entries[0].is_dir() or \
+            not (entries[0] / marker).exists():
+        return
+    inner = entries[0]
+    for child in list(inner.iterdir()):
+        shutil.move(str(child), str(dest / child.name))
+    inner.rmdir()
+    shutil.rmtree(dest / "__MACOSX", ignore_errors=True)
+
+
+_NESTED_PACKS = (".mcpack", ".mcaddon", ".zip")
+_NESTED_WORLDS = (".mcworld", ".mctemplate")
+
+
+def _expand_nested(root: Path, depth=3):
+    """Unpack the archives an add-on carries inside itself, in place.
+
+    A .mcaddon is normally a zip of .mcpack files (one behaviour pack, one
+    resource pack), not of the packs' folders, so its manifests are only
+    found once those are unpacked too. Worlds bundled with an add-on are
+    returned to be imported as worlds.
+    """
+    for _ in range(depth):
+        nested = [f for f in root.rglob("*") if f.is_file()
+                  and f.suffix.lower() in _NESTED_PACKS
+                  and zipfile.is_zipfile(f)]
+        if not nested:
+            break
+        for archive in nested:
+            folder = _unique_path(archive.with_name(archive.stem))
+            folder.mkdir(parents=True)
+            _extract(archive, folder)
+            archive.unlink()
+    worlds = sorted(f for f in root.rglob("*") if f.is_file()
+                    and f.suffix.lower() in _NESTED_WORLDS
+                    and zipfile.is_zipfile(f))
+    return worlds
+
+
+def import_content(src, prefix=None, destinations=None):
     """Import a .mcpack/.mcaddon/.mcworld/.mctemplate/.mcskin into the game.
 
-    Returns a list of human-readable result strings.
+    Returns a list of human-readable result strings. A list passed as
+    ``destinations`` receives the folder each item was unpacked into, for a
+    caller that wants to take them out again (bol.catalog).
     """
     src = Path(src).expanduser()
     if not src.is_file():
@@ -170,13 +234,11 @@ def import_content(src, prefix=None):
         dest = _unique_path(_content_dir(sub, prefix) / sub
                             / _safe_component(stem))
         dest.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(src) as z:
-            for m in z.infolist():
-                p = PurePosixPath(m.filename)
-                if p.is_absolute() or ".." in p.parts:
-                    raise ValueError(f"unsafe path in zip archive: {m.filename}")
-            z.extractall(dest)
+        _extract(src, dest)
+        _hoist_single_folder(dest, "level.dat")
         kind = "world" if ext == ".mcworld" else "world template"
+        if destinations is not None:
+            destinations.append(dest)
         results.append(f"{kind}: {dest.name}")
         ok(f"Imported {kind} → {dest}")
         _report_shared_leftovers(sub, prefix)
@@ -186,12 +248,10 @@ def import_content(src, prefix=None):
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True, exist_ok=True)
     try:
-        with zipfile.ZipFile(src) as z:
-            for m in z.infolist():
-                p = PurePosixPath(m.filename)
-                if p.is_absolute() or ".." in p.parts:
-                    raise ValueError(f"unsafe path in zip archive: {m.filename}")
-            z.extractall(tmp)
+        _extract(src, tmp)
+        worlds = _expand_nested(tmp)
+        for world in worlds:
+            results += import_content(world, prefix, destinations)
         manifests = sorted(tmp.rglob("manifest.json"),
                            key=lambda p: len(p.parts))
         claimed, roots = [], []
@@ -201,10 +261,12 @@ def import_content(src, prefix=None):
                 continue
             claimed.append(r)
             roots.append(r)
-        if not roots:
+        if not roots and not worlds:
             die(f"No manifest.json in {src.name} — not a valid pack/addon.")
         for r in roots:
             sub, dest = _install_pack_tree(r, prefix, stem)
+            if destinations is not None:
+                destinations.append(dest)
             label = sub.rstrip("s").replace("_", " ")
             results.append(f"{label}: {dest.name}")
             ok(f"Imported {label} → {dest}")

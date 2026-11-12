@@ -194,3 +194,85 @@ def test_preview_imports_into_its_own_shared_folder(tmp_path):
     with mock.patch.object(perfcheck, "_launched_edition", return_value=None):
         assert "/Minecraft Bedrock/Users/Shared/" in str(
             content._mojang_dir(tmp_path))
+
+
+def _pack_manifest(name, module_type):
+    return {
+        "format_version": 2,
+        "header": {"name": name, "description": "test",
+                   "uuid": "11111111-2222-3333-4444-%012d" % len(name),
+                   "version": [1, 0, 0]},
+        "modules": [{"type": module_type,
+                     "uuid": "55555555-6666-7777-8888-%012d" % len(name),
+                     "version": [1, 0, 0]}],
+    }
+
+
+def test_an_addon_made_of_mcpack_files_installs_each_pack(tmp_path):
+    """A .mcaddon is a zip of .mcpack files, not of the packs' folders."""
+    prefix = tmp_path / "prefix"
+    bp = _archive(tmp_path / "Thing_BP.mcpack",
+                  _pack_manifest("Thing BP", "data"))
+    rp = _archive(tmp_path / "Thing_RP.mcpack",
+                  _pack_manifest("Thing RP", "resources"))
+    addon = tmp_path / "Thing.mcaddon"
+    with zipfile.ZipFile(addon, "w") as package:
+        package.write(bp, "Thing_BP.mcpack")
+        package.write(rp, "Thing_RP.mcpack")
+    destinations = []
+
+    result = content.import_content(addon, prefix=prefix,
+                                    destinations=destinations)
+
+    shared = content._mojang_dir(prefix)
+    assert sorted(result) == ["behavior pack: Thing BP",
+                              "resource pack: Thing RP"]
+    assert (shared / "behavior_packs" / "Thing BP" / "manifest.json").is_file()
+    assert (shared / "resource_packs" / "Thing RP" / "manifest.json").is_file()
+    assert sorted(p.name for p in destinations) == ["Thing BP", "Thing RP"]
+
+
+def test_a_world_bundled_in_an_addon_is_imported_as_a_world(tmp_path):
+    prefix = tmp_path / "prefix"
+    account = _signed_in(prefix)
+    world = _template(tmp_path / "Arena.mcworld", name="Arena")
+    pack = _archive(tmp_path / "Arena_BP.mcpack",
+                    _pack_manifest("Arena BP", "data"))
+    addon = tmp_path / "Arena.mcaddon"
+    with zipfile.ZipFile(addon, "w") as package:
+        package.write(world, "Arena.mcworld")
+        package.write(pack, "Arena_BP.mcpack")
+
+    result = content.import_content(addon, prefix=prefix)
+
+    assert "world: Arena" in result
+    assert "behavior pack: Arena BP" in result
+    assert (account / "minecraftWorlds" / "Arena" / "level.dat").is_file()
+
+
+def test_a_world_zipped_inside_its_own_folder_is_lifted_out(tmp_path):
+    """The game only lists a world whose level.dat is at the top."""
+    prefix = tmp_path / "prefix"
+    account = _signed_in(prefix)
+    archive = tmp_path / "Castle.mcworld"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("Castle Map/level.dat", "")
+        package.writestr("Castle Map/levelname.txt", "Castle")
+        package.writestr("Castle Map/db/CURRENT", "")
+
+    content.import_content(archive, prefix=prefix)
+
+    world = account / "minecraftWorlds" / "Castle"
+    assert (world / "level.dat").is_file()
+    assert (world / "db" / "CURRENT").is_file()
+    assert not (world / "Castle Map").exists()
+
+
+def test_colour_codes_do_not_end_up_in_folder_names(tmp_path):
+    prefix = tmp_path / "prefix"
+    archive = _archive(tmp_path / "x.mcpack",
+                       _pack_manifest("§cPart §bII §lTools", "data"))
+
+    result = content.import_content(archive, prefix=prefix)
+
+    assert result == ["behavior pack: Part II Tools"]
