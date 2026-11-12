@@ -515,14 +515,16 @@ class FakeWindows:
     nowhere a compositor could present them.
     """
 
-    def __init__(self, tree, classes, root=1, hidden=()):
+    def __init__(self, tree, classes, root=1, hidden=(), positions=None):
         self.tree = tree
         self.classes = classes
         self._root = root
         self.hidden = set(hidden)
+        self.positions = dict(positions or {})
         self.properties = {}
         self.flushes = 0
         self.visited = []
+        self.moves = []
 
     def root(self):
         return self._root
@@ -544,6 +546,13 @@ class FakeWindows:
     def iconify(self, window):
         self.iconified = getattr(self, "iconified", []) + [window]
         return True
+
+    def position(self, window):
+        return self.positions.get(window)
+
+    def move(self, window, x, y):
+        self.moves.append((window, x, y))
+        self.positions[window] = (x, y)
 
     def flush(self):
         self.flushes += 1
@@ -759,6 +768,54 @@ class IconifyTests(unittest.TestCase):
         with mock.patch.dict(x11.os.environ, {"DISPLAY": ""}):
             self.assertEqual(x11.iconify_windows("explorer.exe"), 0)
         self.assertEqual(x11.iconify_windows(""), 0)
+
+
+class PlaceChildWindowsTests(unittest.TestCase):
+    """The game's picture follows its client area in Wine's virtual desktop
+    (#202): Wine creates the X window the game draws in below the title bar
+    it draws, and never moves it when fullscreen takes the bar away."""
+
+    GAME = 0x1200001
+
+    def test_the_picture_moves_to_the_client_area(self):
+        windows = FakeWindows({self.GAME: (0x1000042,)}, {},
+                              positions={0x1000042: (4, 30)})
+        self.assertEqual(
+            x11.place_child_windows(self.GAME, 3, 3, windows=windows), 1)
+        self.assertEqual(windows.moves, [(0x1000042, 3, 3)])
+        self.assertEqual(windows.flushes, 1)
+
+    def test_a_picture_already_in_place_is_left_alone(self):
+        windows = FakeWindows({self.GAME: (0x1000042,)}, {},
+                              positions={0x1000042: (3, 3)})
+        self.assertEqual(
+            x11.place_child_windows(self.GAME, 3, 3, windows=windows), 0)
+        self.assertEqual(windows.moves, [])
+        self.assertEqual(windows.flushes, 0)
+
+    def test_only_windows_without_a_class_are_moved(self):
+        # Anything with a WM_CLASS is some program's toplevel, not Wine's
+        # client area.
+        windows = FakeWindows({self.GAME: (7, 8)}, {7: (GAME_CLASS,)},
+                              positions={7: (4, 30), 8: (4, 30)})
+        self.assertEqual(
+            x11.place_child_windows(self.GAME, 0, 0, windows=windows), 1)
+        self.assertEqual(windows.moves, [(8, 0, 0)])
+
+    def test_nothing_to_place_yet_is_not_done(self):
+        windows = FakeWindows({}, {})
+        self.assertIsNone(
+            x11.place_child_windows(self.GAME, 3, 3, windows=windows))
+        windows = FakeWindows({self.GAME: (7,)}, {7: (GAME_CLASS,)})
+        self.assertIsNone(
+            x11.place_child_windows(self.GAME, 3, 3, windows=windows))
+
+    def test_no_display_is_nothing_to_place(self):
+        with mock.patch.dict(x11.os.environ, {"DISPLAY": ""}):
+            self.assertIsNone(x11.place_child_windows(self.GAME, 3, 3))
+        with mock.patch.object(x11, "_load_xlib", return_value=None):
+            self.assertIsNone(
+                x11.place_child_windows(self.GAME, 3, 3, display=":7"))
 
 
 if __name__ == "__main__":

@@ -332,6 +332,8 @@ def _load_xlib():
         xlib.XIconifyWindow.restype = ctypes.c_int
         xlib.XIconifyWindow.argtypes = [
             ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int]
+        xlib.XMoveWindow.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
         return xlib
     except (OSError, AttributeError):
         return None
@@ -416,6 +418,19 @@ class _XlibWindows:
         return bool(self._lib.XIconifyWindow(
             self._display, ctypes.c_ulong(window),
             self._lib.XDefaultScreen(self._display)))
+
+    def position(self, window):
+        """Where `window` sits inside its parent, as (x, y); or None."""
+        attributes = _XWindowAttributes()
+        if not self._lib.XGetWindowAttributes(
+                self._display, ctypes.c_ulong(window),
+                ctypes.byref(attributes)):
+            return None
+        return attributes.x, attributes.y
+
+    def move(self, window, x, y):
+        """Move `window` to (x, y) inside its parent."""
+        self._lib.XMoveWindow(self._display, ctypes.c_ulong(window), x, y)
 
     def flush(self):
         self._lib.XSync(self._display, False)
@@ -597,3 +612,38 @@ def iconify_windows(wm_class, display=None, windows=None):
             return iconify_windows(wanted, windows=opened)
     except Exception:
         return 0
+
+
+def place_child_windows(window, x, y, display=None, windows=None):
+    """Put the class-less X windows inside `window` at (x, y); how many moved.
+
+    Those are the windows Wine draws a client area into: they carry no
+    WM_CLASS, which every toplevel has. None, rather than 0, when there is
+    nothing to place yet -- no such window, no display or no libX11 -- so a
+    caller can tell "already in place" from "try again later".
+    """
+    if windows is not None:
+        children = [child for child in windows.children(window)
+                    if not windows.wm_classes(child)]
+        if not children:
+            return None
+        moved = 0
+        for child in children:
+            at = windows.position(child)
+            if at is not None and at != (x, y):
+                windows.move(child, x, y)
+                moved += 1
+        if moved:
+            windows.flush()
+        return moved
+    target = str(display if display is not None
+                 else os.environ.get("DISPLAY", "")).strip()
+    if not target:
+        return None
+    try:
+        with _x_windows(target) as opened:
+            if opened is None:
+                return None
+            return place_child_windows(window, x, y, windows=opened)
+    except Exception:
+        return None
