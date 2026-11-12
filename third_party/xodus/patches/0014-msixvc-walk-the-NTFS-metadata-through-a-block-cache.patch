@@ -1,0 +1,245 @@
+From ab72b5c35e84684ef33dc65c19a56b1dbc4908f8 Mon Sep 17 00:00:00 2001
+From: Wyze3306 <contact.wyze3306@gmail.com>
+Date: Thu, 12 Nov 2026 14:49:17 +0100
+Subject: [PATCH 14/14] msixvc: walk the NTFS metadata through a block cache
+
+`run` and `streaming` find the files of a package without a segment table
+by walking its NTFS metadata, which the ntfs crate reads a file record at a
+time through XvdStream, and XvdStream asks for the stream position before
+every read. The reader under it is a SyncIoBridge on a tokio file, so each
+read and each position query was a task on tokio's blocking pool: for a
+Minecraft package (12 898 files) 31 000 reads of 4 KiB, 60 000 seeks and
+390 000 futex calls, 0.8 s of every launch.
+
+Put a cache of 256 KiB blocks under XvdStream. It reads the package a block
+at a time, keeps the sixteen most recent, and answers seeks and position
+queries without touching the reader. The walk itself is unchanged: on six
+Minecraft and Minecraft Preview packages, 1.26.52 to 1.26.70, it finds the
+same files at the same offsets with the same hashes, in 0.07 to 0.16 s.
+---
+ crates/msixvc/src/xvd.rs | 193 ++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 191 insertions(+), 2 deletions(-)
+
+diff --git a/crates/msixvc/src/xvd.rs b/crates/msixvc/src/xvd.rs
+index 79344a7..3967647 100644
+--- a/crates/msixvc/src/xvd.rs
++++ b/crates/msixvc/src/xvd.rs
+@@ -1,5 +1,5 @@
+ use std::cmp::min;
+-use std::collections::HashMap;
++use std::collections::{HashMap, VecDeque};
+ use std::fmt::Debug;
+ use std::io::{self, Error, ErrorKind, Read, Seek, SeekFrom, Write};
+ 
+@@ -172,6 +172,107 @@ impl Debug for XvdEncryptionInfo {
+     }
+ }
+ 
++/// Reads its inner reader a whole block at a time, keeps the last few blocks,
++/// and seeks without touching it.
++///
++/// The NTFS walk in `parse_ntfs_segment_metadata` reads the package a file
++/// record at a time, and `XvdStream` asks for the stream position before
++/// every read. Through a `SyncIoBridge` on a tokio file, each of those was a
++/// task on tokio's blocking pool: 31 000 reads and 60 000 seeks for a
++/// Minecraft package, most of a second of every launch.
++struct BlockCache<R> {
++    inner: R,
++    pos: u64,
++    /// Most recently used first.
++    blocks: VecDeque<CachedBlock>,
++}
++
++struct CachedBlock {
++    index: u64,
++    data: Vec<u8>,
++}
++
++impl<R> BlockCache<R> {
++    const BLOCK: u64 = 256 << 10;
++    const BLOCKS: usize = 16;
++
++    fn new(inner: R) -> Self {
++        Self {
++            inner,
++            pos: 0,
++            blocks: VecDeque::with_capacity(Self::BLOCKS),
++        }
++    }
++}
++
++impl<R: Read + Seek> BlockCache<R> {
++    /// Block `index`, read from the inner reader unless it is cached. Only
++    /// the last block of the inner reader is shorter than `BLOCK`.
++    fn block(&mut self, index: u64) -> io::Result<&[u8]> {
++        match self.blocks.iter().position(|b| b.index == index) {
++            Some(0) => (),
++            Some(at) => {
++                let block = self.blocks.remove(at).expect("position is in range");
++                self.blocks.push_front(block);
++            }
++            None => {
++                self.inner.seek(SeekFrom::Start(index * Self::BLOCK))?;
++                let mut data = vec![0u8; Self::BLOCK as usize];
++                let mut filled = 0;
++                while filled < data.len() {
++                    match self.inner.read(&mut data[filled..]) {
++                        Ok(0) => break,
++                        Ok(n) => filled += n,
++                        Err(err) if err.kind() == ErrorKind::Interrupted => (),
++                        Err(err) => return Err(err),
++                    }
++                }
++                data.truncate(filled);
++                if self.blocks.len() == Self::BLOCKS {
++                    self.blocks.pop_back();
++                }
++                self.blocks.push_front(CachedBlock { index, data });
++            }
++        }
++        Ok(&self.blocks[0].data)
++    }
++}
++
++impl<R: Read + Seek> Read for BlockCache<R> {
++    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++        let mut done = 0;
++        while done < buf.len() {
++            let index = self.pos / Self::BLOCK;
++            let offset = (self.pos % Self::BLOCK) as usize;
++            let n = {
++                let block = self.block(index)?;
++                if offset >= block.len() {
++                    break;
++                }
++                let n = (block.len() - offset).min(buf.len() - done);
++                buf[done..done + n].copy_from_slice(&block[offset..offset + n]);
++                n
++            };
++            done += n;
++            self.pos += n as u64;
++        }
++        Ok(done)
++    }
++}
++
++impl<R: Seek> Seek for BlockCache<R> {
++    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
++        self.pos = match pos {
++            SeekFrom::Start(n) => n,
++            SeekFrom::Current(delta) => self.pos.checked_add_signed(delta).ok_or_else(|| {
++                Error::new(ErrorKind::InvalidInput, "invalid seek before the start")
++            })?,
++            SeekFrom::End(_) => self.inner.seek(pos)?,
++        };
++        Ok(self.pos)
++    }
++}
++
+ struct XvdStream<R> {
+     inner: R,
+     offset: u64,
+@@ -695,7 +796,7 @@ impl XvdFile {
+             let block_size = 4096;
+             let drive = SyncSubstream::new(
+                 XvdStream {
+-                    inner: SyncIoBridge::new(file),
++                    inner: BlockCache::new(SyncIoBridge::new(file)),
+                     offset: drive_data_offset,
+                     end_offset: drive_data_offset + drive_plain_len,
+                     encryption_info: None,
+@@ -1398,3 +1499,91 @@ mod tests {
+         assert_eq!(reader.inner.position(), file_len);
+     }
+ }
++
++// Apart from `tests`: tokio's extension traits there would make every std
++// read and seek below ambiguous.
++#[cfg(test)]
++mod block_cache_tests {
++    use std::io::{self, Cursor, Read, Seek, SeekFrom};
++
++    use super::BlockCache;
++    use crate::layout::PAGE_SIZE;
++
++    /// A std reader that counts the calls reaching it.
++    struct CountingStream {
++        inner: Cursor<Vec<u8>>,
++        reads: usize,
++        seeks: usize,
++    }
++
++    impl Read for CountingStream {
++        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++            self.reads += 1;
++            self.inner.read(buf)
++        }
++    }
++
++    impl Seek for CountingStream {
++        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
++            self.seeks += 1;
++            self.inner.seek(pos)
++        }
++    }
++
++    fn pattern(len: usize) -> Vec<u8> {
++        (0..len).map(|n| (n * 7 % 253) as u8).collect()
++    }
++
++    #[test]
++    fn block_cache_reads_what_the_reader_holds() {
++        let block = BlockCache::<()>::BLOCK;
++        let data = pattern(4 * block as usize + 123);
++        let mut plain = Cursor::new(data.clone());
++        let mut cached = BlockCache::new(Cursor::new(data));
++        // Inside a block, across a boundary, back to an evicted block, across
++        // the short last block and past the end.
++        let steps: &[(SeekFrom, usize)] = &[
++            (SeekFrom::Start(10), 100),
++            (SeekFrom::Start(block - 7), 4096),
++            (SeekFrom::Current(-3000), 2 * block as usize),
++            (SeekFrom::Start(0), 1),
++            (SeekFrom::End(-50), 4096),
++            (SeekFrom::Start(4 * block + 200), 10),
++        ];
++        for (seek, len) in steps {
++            let a = plain.seek(*seek).unwrap();
++            let b = cached.seek(*seek).unwrap();
++            assert_eq!(a, b);
++            let mut want = vec![0u8; *len];
++            let mut got = vec![0u8; *len];
++            let n = plain.read(&mut want).unwrap();
++            let m = cached.read(&mut got).unwrap();
++            assert_eq!(n, m, "after {seek:?}");
++            assert!(want[..n] == got[..m], "after {seek:?}");
++            assert_eq!(
++                plain.stream_position().unwrap(),
++                cached.stream_position().unwrap()
++            );
++        }
++    }
++
++    #[test]
++    fn block_cache_reads_a_block_at_a_time() {
++        // The NTFS walk asks for the position before each small read. Through
++        // the cache, a megabyte of 4 KiB reads is four block reads and no
++        // seek of its own; straight on the reader it was 256 of each.
++        let block = BlockCache::<()>::BLOCK as usize;
++        let mut cached = BlockCache::new(CountingStream {
++            inner: Cursor::new(pattern(4 * block)),
++            reads: 0,
++            seeks: 0,
++        });
++        let mut page = [0u8; PAGE_SIZE];
++        for _ in 0..4 * block / PAGE_SIZE {
++            cached.stream_position().unwrap();
++            cached.read_exact(&mut page).unwrap();
++        }
++        assert_eq!(cached.inner.seeks, 4);
++        assert_eq!(cached.inner.reads, 4);
++    }
++}
+-- 
+2.47.3
+
