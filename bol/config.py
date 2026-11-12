@@ -146,7 +146,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native23"
 # (#202), falls back to fsync on kernels without ntsync (0014), takes two
 # per-frame Wine calls off Minecraft's main thread (0015, 0016) and serves
 # the XGameEvent class achievements are graded from (0017, #152).
-WINEGDK_ARCHIVE_SHA256 = "46927aa8d180c7151a6240c5e2196136cd515041292dd848218ea809284cb3ed"
+WINEGDK_ARCHIVE_SHA256 = "67be80852e20d74fb5d936de4350fd8b7406f1f0955f5f722bbd2ba38abd5f8c"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "02fccb6a4e65ef7a8646b6752efe49473dbf3d89e2b1394ea1ae582ffc8371af"
 
