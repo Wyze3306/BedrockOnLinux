@@ -50,14 +50,14 @@
   translations (`pack.name`) get their real name, and colour codes no
   longer end up in folder names.
 
-- **The game starts about 1.7 seconds sooner after PLAY.** Before Wine
+- **The game starts close to two seconds sooner after PLAY.** Before Wine
   starts, xodus-cli finds the game's files in the downloaded package, fetches
   the licence and decrypts the executable, and two of those steps spent most
   of their time on 4 KiB reads and writes, each handed to another thread.
-  They now go through a block cache and 4 MiB buffers. From start to the
-  hand-over to Wine, for 1.26.60: 3.2 s down to 1.5 s (median of five), and
-  CPU time from 2.5 s to 0.6 s. The decrypted executable is byte for byte
-  the same.
+  They now go through a block cache and 4 MiB buffers. From xodus-cli's
+  start to the hand-over to Wine, in real launches of 1.26.52: 4.3 s down
+  to 2.4 s (medians), with CPU time down from 2.5 s to 0.6 s. The decrypted
+  executable is byte for byte the same.
 - **Minecraft downloads and starts on Debian 12, Ubuntu 22.04 and the
   distributions built on it (Linux Mint 21, Pop!_OS 22.04, Zorin OS 17) and
   Fedora 39.** xodus-cli, which downloads the game and decrypts it at every
