@@ -40,6 +40,7 @@ reports 59.95 Hz for it.
 | not at all | 137 [131–144] | 141 [133–147] |
 | at 60 FPS, the display's own rate | 89 [81–94] | 80 [73–85] |
 | at 59.82 FPS, by the launcher (this change) | 75 [57–92] | 74 [62–89] |
+| at 60 FPS by the game's own Max Framerate | 70 [63–76] | 69 [57–79] |
 
 The paced rows spread wider: a frame paced just under the refresh lands
 anywhere from just before a refresh to just after one, as its phase slides.
@@ -83,12 +84,19 @@ and vkd3d-proton isolates the swap chain from the game:
 - **The virtual desktop is not the delay.** *Keep the mouse inside the
   window* measures the same as a plain window, in the game and in the test
   application.
-- **Pacing the game under the display's rate empties the queue.** With
-  vkd3d-proton's limiter holding the game, frames no longer pile up behind
-  vsync: 139 → 75 ms, and still 74 ms 90 s later. It only holds while the
-  limit stays under the rate the display really runs at, since any frame
-  produced faster than the display takes them stays in the queue: at the
-  display's own 60 FPS the result wanders (89, then 80 ms).
+- **Pacing the game at the display's rate empties the queue.** Unpaced, the
+  game renders as fast as images come back: it waits 11.6 ms (median) in
+  `vkAcquireNextImageKHR` for one, all three being held by Xwayland and
+  gamescope, and the frame it then draws waits behind the other two. Paced
+  by any limiter at the display's rate, that wait drops to 0.01 ms and the
+  queue with it: 139 → 75 ms, still 74 ms 90 s later. The launcher's pace is
+  just under the rate the display runs at, since there the display always
+  takes frames faster than the game makes them and no queue can build up
+  again; at the display's own rate the two clocks drift against each other,
+  and vkd3d-proton's limiter at 60 FPS measured 89, then 80 ms. The game's
+  own Max Framerate at 60 does as well as the pace (70, then 69 ms), but it
+  waits by spinning a whole core in Wine's message loop, which is why the
+  launcher swaps it for vkd3d-proton's.
 - **winewayland halves it.** With true presentation feedback from the
   compositor the present-wait means *shown*, and the frame reaches the
   screen one refresh after the game presents it: 73 ms against 154 for the
