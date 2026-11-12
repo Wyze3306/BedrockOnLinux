@@ -132,7 +132,8 @@ jobs:
         if: ${{ !inputs.rebuild_from_source }}
         run: |
           mkdir -p "${{ runner.temp }}/vk-dl"
-          gh release download vkd3d-3.0.1-nv-dgc -R "${{ github.repository }}" \
+          tag="$(scripts/vkd3d-release-tag.sh)"
+          gh release download "$tag" -R "${{ github.repository }}" \
             -p 'vkd3d-universal-*.tar.gz*' -D "${{ runner.temp }}/vk-dl"
           gh attestation verify "${{ runner.temp }}/vk-dl/vkd3d-universal-3.0.1-nv-dgc.tar.gz" \
             -R "${{ github.repository }}"

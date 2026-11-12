@@ -11,6 +11,7 @@ SUBMODULE_LOCK="$PROVENANCE_DIR/submodules.lock"
 EXPECTED_HASHES="$PROVENANCE_DIR/OUTPUT-SHA256SUMS"
 REVERT_PATCH="$PROVENANCE_DIR/restore-nv-dgc.patch"
 OCCLUSION_PATCH="$PROVENANCE_DIR/fix-occluded-frame-latency.patch"
+LIMITER_PATCH="$PROVENANCE_DIR/fix-frame-limiter-busy-wait.patch"
 LICENSE_FILE="$PROVENANCE_DIR/COPYING.LGPL-2.1"
 README_FILE="$PROVENANCE_DIR/README.md"
 BUILD_RECIPE="$PROJECT_ROOT/scripts/build-vkd3d-universal.sh"
@@ -37,7 +38,7 @@ EOF
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
 [[ -f "$LOCK_FILE" && -f "$SUBMODULE_LOCK" && \
    -f "$EXPECTED_HASHES" && -f "$REVERT_PATCH" && \
-   -f "$OCCLUSION_PATCH" && \
+   -f "$OCCLUSION_PATCH" && -f "$LIMITER_PATCH" && \
    -f "$LICENSE_FILE" && -f "$README_FILE" && \
    -f "$BUILD_RECIPE" ]] || die "incomplete vkd3d provenance bundle"
 
@@ -106,6 +107,8 @@ assert_equal "vendored revert patch" "$(hash_file "$REVERT_PATCH")" \
   "$VKD3D_REVERT_PATCH_SHA256"
 assert_equal "vendored occlusion patch" "$(hash_file "$OCCLUSION_PATCH")" \
   "$VKD3D_OCCLUSION_PATCH_SHA256"
+assert_equal "vendored frame-limiter patch" "$(hash_file "$LIMITER_PATCH")" \
+  "$VKD3D_LIMITER_PATCH_SHA256"
 assert_equal "upstream licence" "$(hash_file "$LICENSE_FILE")" \
   "$VKD3D_LICENSE_SHA256"
 assert_equal "submodule lock" "$(hash_file "$SUBMODULE_LOCK")" \
@@ -207,6 +210,10 @@ echo "== Applying the occluded frame-latency fix"
 git -C "$SOURCE_DIR" apply --index --whitespace=nowarn "$OCCLUSION_PATCH" || die \
   "vendored occlusion patch does not apply to the pinned source"
 
+echo "== Applying the frame-limiter busy-wait fix"
+git -C "$SOURCE_DIR" apply --index --whitespace=nowarn "$LIMITER_PATCH" || die \
+  "vendored frame-limiter patch does not apply to the pinned source"
+
 build_arch() {
   local arch="$1" cross_file="$2" bindir="$3" epoch="$4"
   local build_dir="$OUTPUT_DIR/build.$arch"
@@ -251,7 +258,8 @@ echo "== Verifying reviewed r11 DLL hashes"
 PROVENANCE_OUT="$OUTPUT_DIR/provenance"
 mkdir -p "$PROVENANCE_OUT"
 install -m 0644 "$LOCK_FILE" "$SUBMODULE_LOCK" "$EXPECTED_HASHES" \
-  "$REVERT_PATCH" "$OCCLUSION_PATCH" "$LICENSE_FILE" "$README_FILE" \
+  "$REVERT_PATCH" "$OCCLUSION_PATCH" "$LIMITER_PATCH" "$LICENSE_FILE" \
+  "$README_FILE" \
   "$BUILD_RECIPE" "$PROVENANCE_OUT/"
 {
   printf 'git: %s\n' "$(git --version)"
