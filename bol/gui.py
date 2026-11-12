@@ -40,7 +40,8 @@ from .config import (
 from .relocation import migrate_data, paths_overlap, DIRS_TO_MOVE, FILES_TO_MOVE
 from .content import game_content_dir, import_content
 from .doctor import acknowledge_gpu_crash, gpu_crash_acknowledgement_status
-from .games import installed_builds, list_editions, list_versions, remove_build
+from .games import (installed_builds, is_bedrock, list_editions,
+                    list_versions, remove_build)
 from .gamesetup import do_setup
 from . import betterrtx, gpus
 from .inject import run_injector
@@ -1246,6 +1247,31 @@ class LaunchWorker(QThread):
                 self.failed.emit(message)
 
 
+def _version_edition_id(v):
+    """The edition id of one picker entry, whatever shape it was given in."""
+    edition = (v or {}).get("edition")
+    if isinstance(edition, dict):
+        return edition.get("id") or "release"
+    if isinstance(edition, str) and edition:
+        return edition
+    return "preview" if (v or {}).get("beta") else "release"
+
+
+def _version_label(v):
+    """What the picker shows for one entry.
+
+    A Bedrock build by its shortened number. Another title has one entry,
+    the build the Store serves: its name, and that build's number once it
+    is installed.
+    """
+    edition = v.get("edition")
+    if isinstance(edition, dict) and not is_bedrock(edition):
+        name = edition.get("short") or edition.get("name") or "Minecraft"
+        return f"{name}  ·  {v.get('build') or 'latest'}"
+    return (format_display_version(v["tag"], v["beta"])
+            + ("  ·  BETA" if v["beta"] else ""))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1720,17 +1746,23 @@ class MainWindow(QMainWindow):
         efl = QHBoxLayout(ed_field); efl.setContentsMargins(6, 8, 6, 8)
         self.edition_group = QButtonGroup(self)
         self.edition_group.setExclusive(True)
-        self.stable_btn = btn("Stable", None, kind="ghost", w=78, h=32)
-        self.preview_btn = btn("Preview", None, kind="ghost", w=78, h=32)
-        for b in (self.stable_btn, self.preview_btn):
+        # One toggle per edition: Stable and Preview, then the other titles
+        # of the family the Store sells (Minecraft Dungeons, Legends).
+        self.edition_buttons = {}
+        for entry in list_editions(include_beta=True):
+            label = entry.get("short") or entry["name"]
+            b = btn(label, None, kind="ghost",
+                    w=78 if is_bedrock(entry) else 92, h=32)
             b.setObjectName("Toggle")
             b.setCheckable(True)
-        self.edition_group.addButton(self.stable_btn)
-        self.edition_group.addButton(self.preview_btn)
-        efl.addWidget(self.stable_btn)
-        efl.addWidget(self.preview_btn)
-        self.stable_btn.clicked.connect(lambda: self.select_edition("release"))
-        self.preview_btn.clicked.connect(lambda: self.select_edition("preview"))
+            self.edition_group.addButton(b)
+            efl.addWidget(b)
+            b.clicked.connect(
+                lambda _checked=False, eid=entry["id"]:
+                self.select_edition(eid))
+            self.edition_buttons[entry["id"]] = b
+        self.stable_btn = self.edition_buttons["release"]
+        self.preview_btn = self.edition_buttons["preview"]
         h.addWidget(ed_field)
 
         h.addStretch(1)
@@ -1744,8 +1776,11 @@ class MainWindow(QMainWindow):
         self.play_btn = btn("▶  PLAY", self.do_play, kind="play", w=120, h=52, tip="Play Game")
         h.addWidget(self.play_btn)
 
-        edition_id = "preview" if self.settings.get("show_betas", False) else "release"
-        (self.preview_btn if edition_id == "preview" else self.stable_btn).setChecked(True)
+        edition_id = self.settings.get("ui_edition")
+        if edition_id not in self.edition_buttons:
+            edition_id = ("preview" if self.settings.get("show_betas", False)
+                          else "release")
+        self.edition_buttons[edition_id].setChecked(True)
         return dock
 
     def _paint_edition_toggle(self):
@@ -1909,13 +1944,19 @@ class MainWindow(QMainWindow):
         self.ver_label.setText(label)
         self._update_selected_chip()
 
+    def _checked_edition_id(self):
+        for edition_id, button in getattr(self, "edition_buttons", {}).items():
+            if button.isChecked():
+                return edition_id
+        return "release"
+
     def _edition_matches(self, v, wanted=None):
-        wanted = (wanted or ("preview" if self.preview_btn.isChecked() else "release")) == "preview"
-        return bool(v.get("beta", False)) == wanted
+        return _version_edition_id(v) == (wanted or self._checked_edition_id())
 
     def select_edition(self, edition_id):
         self.settings = load_settings()
         self.settings["show_betas"] = edition_id == "preview"
+        self.settings["ui_edition"] = edition_id
         save_settings(self.settings)
         matches = [l for l, v in zip(self.ui_state.get("labels") or [],
                                       self.ui_state.get("versions") or [])
@@ -1930,7 +1971,10 @@ class MainWindow(QMainWindow):
         if not lab or lab == "Loading…":
             self.selected_chip.setText("")
             return
-        is_beta = "BETA" in lab
+        picked = self.selected_version()
+        edition_id = (_version_edition_id(picked) if picked else
+                      ("preview" if "BETA" in lab else "release"))
+        is_beta = edition_id == "preview"
         self.settings = load_settings()
         changed = False
         if self.settings.get("ui_is_beta") != is_beta:
@@ -1943,15 +1987,17 @@ class MainWindow(QMainWindow):
         # restarted after playing an older build quietly downloaded another
         # 2.5 GB of game nobody had asked for (#214).
         display = lab.split("  ")[0]
-        picked = self.selected_version()
         cur_mc_ver = picked["tag"] if picked else display
         if self.settings.get("mc_version") != cur_mc_ver:
             self.settings["mc_version"] = cur_mc_ver
             changed = True
+        if picked and self.settings.get("ui_edition") != edition_id:
+            self.settings["ui_edition"] = edition_id
+            changed = True
         if changed:
             save_settings(self.settings)
         self.selected_chip.setText(f"  {display}{'  ·  BETA' if is_beta else ''}  ")
-        (self.preview_btn if is_beta else self.stable_btn).setChecked(True)
+        self.edition_buttons.get(edition_id, self.stable_btn).setChecked(True)
         self.theme.beta = is_beta
         self.apply_theme()
         cur_kill = self.ui_state.get("busy")
@@ -1961,7 +2007,7 @@ class MainWindow(QMainWindow):
         lab = self.ver_label.text()
         if not self.ui_state["versions"] or not lab:
             return None
-        labels = [format_display_version(v["tag"], v["beta"]) + ("  ·  BETA" if v["beta"] else "")
+        labels = [_version_label(v)
                   for v in self.ui_state["versions"]]
         try:
             idx = labels.index(lab)
@@ -1995,7 +2041,8 @@ class MainWindow(QMainWindow):
                     continue
                 for b in builds:
                     versions.append({"tag": b["version"], "beta": ed.get("beta", False),
-                                      "edition": ed, "installed": b.get("installed", False)})
+                                      "edition": ed, "installed": b.get("installed", False),
+                                      "build": b.get("build")})
             return versions
 
         if ignore_cache:
@@ -2039,7 +2086,7 @@ class MainWindow(QMainWindow):
             log._LOG_SINK("xx no versions loaded")
             return
         self.ui_state["versions"] = versions
-        labels = [format_display_version(v["tag"], v["beta"]) + ("  ·  BETA" if v["beta"] else "")
+        labels = [_version_label(v)
                   for v in versions]
         self.ui_state["labels"] = labels
         if _alive(self.version_popup) and self.version_popup.isVisible():
@@ -2063,9 +2110,18 @@ class MainWindow(QMainWindow):
         build is the part that has to be rare -- it is a silent 2.5 GB
         download the next time PLAY is pressed.
         """
-        wanted = (load_settings().get("mc_version") or "").strip()
+        settings = load_settings()
+        wanted = (settings.get("mc_version") or "").strip()
         if not wanted:
             return 0
+        # Every title the Store alone serves has the same tag ("current"),
+        # so the edition picks between them; then the tag alone, as before.
+        edition = (settings.get("ui_edition") or settings.get("mc_edition")
+                   or "").strip()
+        for index, version in enumerate(versions):
+            if version["tag"] == wanted and edition and \
+                    _version_edition_id(version) == edition:
+                return index
         for index, version in enumerate(versions):
             if version["tag"] == wanted:
                 return index

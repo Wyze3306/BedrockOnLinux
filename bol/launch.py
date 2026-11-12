@@ -44,6 +44,7 @@ from .fixups import (
     hide_signin_button,
 )
 from .gameinput import builtin_gameinput_override, install_gameinput
+from .games import game_executable, is_bedrock, selected_edition
 from .gamesetup import (LICENCE_REFUSED, LICENCE_SERVICE_REFUSED,
                         LICENCE_UNREACHABLE, STORE_SESSION_REFUSED, diagnose)
 from .gpu_safety import (
@@ -820,11 +821,91 @@ def _finish_msa_refresh(refresh, tok, account_epoch):
     return fresh, tok, refresh_unreachable
 
 
+def _selected_game(settings):
+    """(edition entry, game folder, executable path) for the selected build.
+
+    The entry is None for a Bedrock build outside the managed folder; the
+    executable is None when nothing that would start is there.
+    """
+    gd = settings.get("game_dir")
+    edition = selected_edition(settings)
+    exe = game_executable(gd, edition) if gd else None
+    if exe is not None and not exe.is_file():
+        exe = None
+    return edition, gd, exe
+
+
+def _prepare_bedrock_session(settings, frame_limit):
+    """Minecraft's own files, put right before it starts; its saves edition.
+
+    Every step here reads or writes something of Bedrock's -- options.txt,
+    the worlds, the server list, the resource pack cache -- so none of it
+    runs for another title.
+    """
+    # Repair a settings file a previous crash cut off before the game reads
+    # it, hand its frame limit to the launcher's limiter when that one paces
+    # the session — or put back one an interrupted session set aside when
+    # nothing does — then keep a copy of what the game is about to start
+    # rewriting (#175). Safe to declare idle: _prepare_launch_engine()
+    # refused to get this far with a live prefix and the game has not been
+    # started yet, so nothing that writes options.txt can be running,
+    # whatever wineboot left behind.
+    restore_truncated_game_options(prefix_idle=True)
+    # Before anything the game reads is changed for this session: Preview
+    # gets a copy of the stable game's data if it has none of its own, and a
+    # build other than the last one to open this data gets a backup of it
+    # first. A launch never fails over a backup; it says so instead.
+    try:
+        edition, _version = saves.before_launch(settings)
+    except Exception as exc:
+        edition = None
+        warn(f"Your worlds and settings could not be backed up before this "
+             f"launch ({type(exc).__name__}: {exc}).")
+    # Server resource packs left behind by newer versions of themselves: the
+    # prefix's Temp is never cleaned under Wine. The game is not running yet.
+    try:
+        removed, freed = packcache.prune(active_prefix())
+        if removed:
+            info(f"Removed {removed} outdated server resource pack "
+                 f"version{'s' if removed != 1 else ''} "
+                 f"({freed / 2 ** 20:.0f} MB) from the game's cache.")
+    except Exception as exc:
+        warn(f"The game's resource pack cache could not be tidied "
+             f"({type(exc).__name__}: {exc}).")
+    if frame_limit:
+        _set_aside_game_frame_limit()
+    else:
+        # A Max Framerate an interrupted session set aside goes back now:
+        # nothing holds it this session, and the game would otherwise start
+        # with no limit at all (#314).
+        restore_game_frame_limits(prefix_idle=True)
+    snapshot_game_options()
+    # The Servers tab is read from disk at startup, so the servers this
+    # launcher ships with have to be in the list before the game opens it.
+    seed_default_servers(prefix_idle=True)
+    # The account travelled into the prefix before this was called, so the
+    # game signs itself in; the in-game button reaches a sign-in the
+    # engine does not implement and only ever fails (#227/#228).
+    info("Starting Minecraft … your account is already linked; "
+         "join your server from the Servers tab.")
+    return edition
+
+
 def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     s = load_settings()
-    gd = s.get("game_dir")
-    if not gd or not Path(gd, "Minecraft.Windows.exe").exists():
+    edition_entry, gd, game_exe = _selected_game(s)
+    if not gd or game_exe is None:
         die("No game — choose a Minecraft version first.")
+    # Everything the launcher does to Minecraft itself -- its options.txt,
+    # its HBUI, LeviLamina, the Editor, the server list, world backups, the
+    # PlayFab pre-auth, Xbox presence under Minecraft's title -- is Bedrock's.
+    # Another title of the family gets the engine, the prefix, the GPU and
+    # input setup, and nothing else.
+    bedrock = is_bedrock(edition_entry)
+    title = "Minecraft" if bedrock else edition_entry["name"]
+    if editor and not bedrock:
+        die(f"Bedrock Editor is part of Minecraft for Windows, not of "
+            f"{title}.")
     if not proton_path():
         die("GDK-Proton missing — run Install / Update.")
     # Engine preparation is GPU-free and may repair state from an older build.
@@ -872,7 +953,20 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     online = False
     if not tok:
         warn("No Microsoft account is linked, so Minecraft starts in "
-             + _OFFLINE_MODE_NOTICE + " Use 'Sign in' to add one.")
+             + _OFFLINE_MODE_NOTICE + " Use 'Sign in' to add one."
+             if bedrock else
+             f"No Microsoft account is linked, so {title} cannot sign in to "
+             "Xbox Live. Use 'Sign in' to add one.")
+    elif not bedrock:
+        # The account goes into the prefix for the engine's XUser, which is
+        # how a GDK title signs in. The pre-auth below is not: it mints
+        # Minecraft's PlayFab and multiplayer tokens, which are Minecraft's
+        # own and would only send another title chasing them.
+        if not wine_reg_set_refresh_token(tok):
+            die("Could not write the Microsoft login token into the Wine "
+                "prefix. The offline registry was left unchanged; use Repair "
+                "and try again.")
+        ensure_login_deps()
     else:
         if not wine_reg_set_refresh_token(tok):
             die("Could not write the Microsoft login token into the Wine "
@@ -895,18 +989,19 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
                    "again.")
                 + " Minecraft starts in " + _OFFLINE_MODE_NOTICE
             )
-    exe = str(CONTENT / "Minecraft.Windows.exe")
+    exe = str(CONTENT / game_exe.relative_to(gd))
     # A Microsoft Store package keeps the executable encrypted at rest, so
     # there is no PE header on disk to edit and no image for Wine to open. Both
     # are handled after Xodus decrypts it into anonymous memory, below.
     encrypted_exe = xodus.exe_is_encrypted(Path(exe))
-    if not encrypted_exe:
-        bump_stack_reserve(Path(exe))
-    hide_signin_button(Path(gd))
-    # Linux splashes on the title screen, partner servers under Featured
-    # Servers: re-applied each launch, since a game update brings the
-    # vanilla files back.
-    apply_branding(Path(gd))
+    if bedrock:
+        if not encrypted_exe:
+            bump_stack_reserve(Path(exe))
+        hide_signin_button(Path(gd))
+        # Linux splashes on the title screen, partner servers under Featured
+        # Servers: re-applied each launch, since a game update brings the
+        # vanilla files back.
+        apply_branding(Path(gd))
     cmd, env = proton_umu_cmd(exe)
     # Required by the menu's indirect root-CBV updates (#27/#29/#30).
     _require_vkd3d_config(env, "force_raw_va_cbv")
@@ -914,10 +1009,13 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     # The Advanced custom-environment field is applied at the end of this
     # function, far too late to be read here, so overlay it explicitly: it is
     # where BOL_FRAME_RATE is documented, and the supported way to set it.
+    # The limiter takes over Minecraft's own Max Framerate, read from its
+    # options.txt; another title has no such file, and its own setting.
     frame_limit = _configure_frame_rate_limit(
         env, s, active_prefix(),
         environ={**os.environ,
-                 **custom_env_map(s.get("custom_env") or "")})
+                 **custom_env_map(s.get("custom_env") or "")}) \
+        if bedrock else None
     diag = (s.get("diagnostics", False) or os.environ.get("BOL_DIAG") == "1")
     xlog = os.environ.get("BOL_XCURL_LOG")
     if xlog == "1" or (xlog is None and diag):
@@ -936,7 +1034,8 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     env["WINEDLLOVERRIDES"] = ";".join(overrides)
     # LeviLamina, when this build has it and mods are on: its loader goes in
     # front of the game, or comes out when they are off (bol.mods).
-    mods.prepare_launch(Path(gd), env)
+    if bedrock:
+        mods.prepare_launch(Path(gd), env)
     # WindowsAppRuntime framework MSIX cannot install under Wine.
     env["MICROSOFT_WINDOWSAPPRUNTIME_BOOTSTRAP_INITIALIZE_SHOWUI"] = "0"
     env["MICROSOFT_WINDOWSAPPRUNTIME_BOOTSTRAP_INITIALIZE_FAILFAST"] = "0"
@@ -965,7 +1064,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     # cannot complete instead of settling into offline mode.
     if online and preauth.exists():
         env["WINEGDK_PREAUTH_DEVICE"] = "Z:" + str(preauth).replace("/", "\\")
-    rp = s.get("xsts_rp")
+    rp = s.get("xsts_rp") if bedrock else None
     if rp:
         host = s.get("xsts_rp_host") or "b980a380.minecraft.playfabapi.com"
         san = "".join(c.upper() if c.isalnum() else "_" for c in host)
@@ -1053,52 +1152,11 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     cmd = _keep_game_out_of_swap(cmd, env)
     # Prevent diagnosis from attributing stale Proton logs to this launch.
     _clear_previous_proton_logs()
-    # Repair a settings file a previous crash cut off before the game reads
-    # it, hand its frame limit to the launcher's limiter when that one paces
-    # the session — or put back one an interrupted session set aside when
-    # nothing does — then keep a copy of what the game is about to start
-    # rewriting (#175). Safe to declare idle: _prepare_launch_engine()
-    # refused to get this far with a live prefix and the game has not been
-    # started yet, so nothing that writes options.txt can be running,
-    # whatever wineboot left behind.
-    restore_truncated_game_options(prefix_idle=True)
-    # Before anything the game reads is changed for this session: Preview
-    # gets a copy of the stable game's data if it has none of its own, and a
-    # build other than the last one to open this data gets a backup of it
-    # first. A launch never fails over a backup; it says so instead.
-    try:
-        edition, _version = saves.before_launch(s)
-    except Exception as exc:
-        edition = None
-        warn(f"Your worlds and settings could not be backed up before this "
-             f"launch ({type(exc).__name__}: {exc}).")
-    # Server resource packs left behind by newer versions of themselves: the
-    # prefix's Temp is never cleaned under Wine. The game is not running yet.
-    try:
-        removed, freed = packcache.prune(active_prefix())
-        if removed:
-            info(f"Removed {removed} outdated server resource pack "
-                 f"version{'s' if removed != 1 else ''} "
-                 f"({freed / 2 ** 20:.0f} MB) from the game's cache.")
-    except Exception as exc:
-        warn(f"The game's resource pack cache could not be tidied "
-             f"({type(exc).__name__}: {exc}).")
-    if frame_limit:
-        _set_aside_game_frame_limit()
+    edition = None
+    if bedrock:
+        edition = _prepare_bedrock_session(s, frame_limit)
     else:
-        # A Max Framerate an interrupted session set aside goes back now:
-        # nothing holds it this session, and the game would otherwise start
-        # with no limit at all (#314).
-        restore_game_frame_limits(prefix_idle=True)
-    snapshot_game_options()
-    # The Servers tab is read from disk at startup, so the servers this
-    # launcher ships with have to be in the list before the game opens it.
-    seed_default_servers(prefix_idle=True)
-    # The account travelled into the prefix a few lines above, so the
-    # game signs itself in; the in-game button reaches a sign-in the
-    # engine does not implement and only ever fails (#227/#228).
-    info("Starting Minecraft … your account is already linked; "
-         "join your server from the Servers tab.")
+        info(f"Starting {title} …")
     glog = open(LOGS / "minecraft.log", "w")
     # Everything above that writes a settings file has written it by now, so
     # what is written after this is the game's.
@@ -1157,16 +1215,19 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         # it: a direct-launch shortcut and Game Mode both come through
         # `bol play`, which has no GUI worker to hang the watcher off.
         try:
-            _warn_injection_on_wined3d(s)
-            start_auto_inject(s)
+            if bedrock:
+                _warn_injection_on_wined3d(s)
+                start_auto_inject(s)
         except Exception as inject_error:
             warn("Automatic DLL injection could not be started (%s)."
                  % type(inject_error).__name__)
         # Started in fullscreen, the game keeps a frame the size of its
         # maximized window until it is resized once its menu is up (#283).
         try:
-            fullscreen_fix.start(environ={
-                **os.environ, **custom_env_map(s.get("custom_env") or "")})
+            if bedrock:
+                fullscreen_fix.start(environ={
+                    **os.environ,
+                    **custom_env_map(s.get("custom_env") or "")})
         except Exception as nudge_error:
             warn("The fullscreen resize watcher could not be started (%s)."
                  % type(nudge_error).__name__)
@@ -1183,12 +1244,13 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         # Say on Discord what is being played, for as long as it is played:
         # the launcher is found by word of mouth, and this is it saying its
         # own name. Settings turns it off, and it never affects the game.
-        presence = discord.start_session(s, started_at=started)
+        presence = discord.start_session(s, started_at=started) \
+            if bedrock else discord.Session()
         # And say it on Xbox Live, which is the half that other players act
         # on: nothing in the game publishes presence under Wine, so without
         # this the account reads "Offline" to its own dressing room and to
         # every friend, and no one can join or invite it (#238, #243).
-        if online:
+        if online and bedrock:
             xbl = xbl_presence.start_session(s)
             xbl_presence.warn_if_unavailable(xbl, s)
         announced = False
@@ -1235,7 +1297,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
                     tag_game_window = None
                 if not announced and time.time() - started > 8:
                     announced = True
-                    ok("Minecraft is running — close the game window to come "
+                    ok(f"{title} is running — close the game window to come "
                        "back here.")
     finally:
         stopping = supervision.stop_requested_for() is not None
@@ -1283,11 +1345,12 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         if prefix_idle is None:
             prefix_idle = _prefix_stably_idle_after_wrapper()
         # Read before the lines below rewrite a settings file themselves.
-        signed_out = bool(tok and game_returned and saves.ran_signed_out(
-            edition, session_started))
-        restore_truncated_game_options(prefix_idle=prefix_idle)
-        patch_options(prefix_idle=prefix_idle)
-        restore_game_frame_limits(prefix_idle=prefix_idle)
+        signed_out = bool(bedrock and tok and game_returned
+                          and saves.ran_signed_out(edition, session_started))
+        if bedrock:
+            restore_truncated_game_options(prefix_idle=prefix_idle)
+            patch_options(prefix_idle=prefix_idle)
+            restore_game_frame_limits(prefix_idle=prefix_idle)
         logs = sorted(LOGS.glob("steam-*.log"),
                       key=lambda p: p.stat().st_mtime if p.exists() else 0)
         if logs:
@@ -1376,8 +1439,8 @@ def direct_launch_readiness():
     and token files only, no network and no Wine process.
     """
     pending = []
-    game_dir = load_settings().get("game_dir")
-    if not game_dir or not Path(game_dir, "Minecraft.Windows.exe").exists():
+    _edition, game_dir, game_exe = _selected_game(load_settings())
+    if not game_dir or game_exe is None:
         pending.append(
             "No Minecraft version is installed yet. Open the launcher once "
             "and install one; the shortcut only starts a prepared "

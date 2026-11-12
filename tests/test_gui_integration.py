@@ -379,6 +379,70 @@ class TestRememberedVersion:
         assert saved["mc_version"] == "1.26.44.3"
 
 
+class TestOtherTitlesInThePicker:
+    """Minecraft Dungeons and Legends beside Stable and Preview."""
+
+    RELEASE = {"id": "release", "name": "Minecraft for Windows", "beta": False}
+
+    def _versions(self):
+        from bol import xodus
+        return [
+            {"tag": "1.26.63.1", "beta": False, "edition": self.RELEASE,
+             "installed": True},
+            {"tag": "current", "beta": False,
+             "edition": xodus.edition("dungeons"), "installed": True,
+             "build": "1.17.0.0"},
+            {"tag": "current", "beta": False,
+             "edition": xodus.edition("legends"), "installed": False,
+             "build": None},
+        ]
+
+    def test_each_edition_has_a_toggle(self, main_window):
+        buttons = main_window.edition_buttons
+        assert list(buttons)[:2] == ["release", "preview"]
+        assert buttons["dungeons"].text() == "Dungeons"
+        assert buttons["legends"].text() == "Legends"
+        assert main_window.stable_btn is buttons["release"]
+        assert main_window.preview_btn is buttons["preview"]
+
+    def test_labels_name_the_title_and_its_build(self):
+        from bol.gui import _version_label
+        versions = self._versions()
+        assert _version_label(versions[1]) == "Dungeons  ·  1.17.0.0"
+        assert _version_label(versions[2]) == "Legends  ·  latest"
+        assert _version_label(versions[0]) == "26.63"
+
+    def test_edition_of_an_entry_in_every_shape(self):
+        from bol.gui import _version_edition_id
+        assert _version_edition_id({"edition": {"id": "dungeons"}}) == \
+            "dungeons"
+        assert _version_edition_id({"edition": "release"}) == "release"
+        assert _version_edition_id({"beta": True}) == "preview"
+        assert _version_edition_id(None) == "release"
+
+    def test_choosing_dungeons_shows_and_saves_dungeons(self, main_window):
+        saved = {}
+        with mock.patch("bol.gui.load_settings", lambda: dict(saved)), \
+                mock.patch("bol.gui.save_settings", saved.update):
+            main_window._on_versions_loaded(self._versions())
+            main_window.edition_buttons["dungeons"].click()
+            picked = main_window.selected_version()
+        assert picked["edition"]["id"] == "dungeons"
+        assert main_window.edition_buttons["dungeons"].isChecked()
+        assert saved["mc_version"] == "current"
+        assert saved["ui_edition"] == "dungeons"
+        assert saved["show_betas"] is False
+
+    def test_the_saved_title_is_offered_again(self, main_window):
+        with mock.patch("bol.gui.load_settings",
+                        lambda: {"mc_version": "current",
+                                 "ui_edition": "legends"}):
+            main_window._on_versions_loaded(self._versions())
+            picked = main_window.selected_version()
+        assert picked["edition"]["id"] == "legends"
+        assert main_window.edition_buttons["legends"].isChecked()
+
+
 # ======================================================================
 # Settings Persistence Tests
 # ======================================================================

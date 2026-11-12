@@ -60,6 +60,58 @@ def list_editions(include_beta=True):
             if include_beta or not entry["beta"]]
 
 
+def edition_title(edition_entry):
+    """The game an edition installs: "bedrock", "dungeons", "legends", ...
+
+    None -- a build imported from elsewhere, or one from before the move to
+    the Store -- is Bedrock, as is an entry that predates the key: those were
+    the only kind there was.
+    """
+    if not edition_entry:
+        return "bedrock"
+    return str(edition_entry.get("title") or "bedrock")
+
+
+def is_bedrock(edition_entry):
+    """Whether everything the launcher does to Minecraft itself applies."""
+    return edition_title(edition_entry) == "bedrock"
+
+
+def edition_exe(edition_entry):
+    """The executable that marks a build of this edition (see xodus.game_root).
+
+    None means the package's own MicrosoftGame.config names it.
+    """
+    if not edition_entry or "exe" not in edition_entry:
+        return xodus.BEDROCK_EXE
+    return edition_entry["exe"]
+
+
+def edition_for_dir(folder):
+    """The MC_PRODUCTS entry a build folder belongs to, or None.
+
+    Only the managed layout says: games/<edition>/<version>/. Anything else
+    is a Bedrock build from before the Store or one imported from elsewhere.
+    """
+    if not folder:
+        return None
+    parts = _managed_parts(Path(folder).expanduser())
+    if not parts or len(parts) < 2:
+        return None
+    return xodus.edition(parts[0])
+
+
+def selected_edition(settings=None):
+    """The edition of the build the launcher would start next, or None."""
+    settings = load_settings() if settings is None else settings
+    return edition_for_dir((settings.get("game_dir") or "").strip() or None)
+
+
+def game_executable(game_dir, edition_entry=None):
+    """The executable to start in ``game_dir``, or None when none is known."""
+    return xodus.game_executable(game_dir, edition_exe(edition_entry))
+
+
 def version_dir(edition_id, version):
     return GAMES / edition_id / version
 
@@ -79,6 +131,7 @@ def list_versions(edition_id, ignore_cache=False, offline_ok=True):
     error, for a caller that is about to download.
     """
     on_disk = _installed_versions(edition_id)
+    store = (xodus.edition(edition_id) or {}).get("catalogue") == "store"
     try:
         catalogue = xodus.version_catalogue(edition_id,
                                             ignore_cache=ignore_cache)
@@ -92,6 +145,10 @@ def list_versions(edition_id, ignore_cache=False, offline_ok=True):
     for entry in catalogue:
         entry = dict(entry)
         entry["installed"] = entry["version"] in on_disk
+        if store and entry["installed"]:
+            # "current" is a folder name; what it holds has a real number.
+            entry["build"] = build_version(
+                version_dir(edition_id, entry["version"]))
         out.append(entry)
     listed = {entry["version"] for entry in out}
     out.extend({"version": version, "urls": [], "installed": True}
@@ -107,12 +164,13 @@ def _installed_versions(edition_id):
         folders = list((GAMES / edition_id).iterdir())
     except OSError:
         return set()
+    exe = edition_exe(xodus.edition(edition_id))
     return {folder.name for folder in folders
             if folder.is_dir() and not folder.is_symlink()
-            and _game_root(folder) is not None}
+            and _game_root(folder, exe) is not None}
 
 
-def _game_root(dest):
+def _game_root(dest, exe=xodus.BEDROCK_EXE):
     """Folder of a complete installed build (exe + appxmanifest), else None
     (a bare exe with no manifest means a truncated install → reinstall).
 
@@ -122,8 +180,8 @@ def _game_root(dest):
     Store build whose encrypted package went missing cannot be decrypted, so
     it is not something to launch — it is something to download again, and
     saying so is what gives PLAY a way to repair it (issue #216)."""
-    root = xodus.game_root(dest)
-    if root is None or xodus.lost_package_cache(root):
+    root = xodus.game_root(dest, exe)
+    if root is None or xodus.lost_package_cache(root, exe):
         return None
     return root
 
@@ -178,6 +236,13 @@ def _configured_legacy_root():
     return _game_root(path)
 
 
+def _build_name(edition, version):
+    """"Minecraft for Windows 1.26.63.1"; a Store-only title by name alone."""
+    if not version or version == xodus.STORE_BUILD:
+        return edition["name"]
+    return f"{edition['name']} {version}"
+
+
 def install_game(edition, version=None, progress=None, force=False):
     """Install one build of one edition through Xodus.
 
@@ -188,14 +253,15 @@ def install_game(edition, version=None, progress=None, force=False):
     commits with a rename -- so there is deliberately no staging dance here.
     """
     wanted = str(version or "").strip()
+    exe = edition_exe(edition)
     if wanted and not force:
         # A build already on disk needs nothing from the index of builds: it
         # starts with the index out of reach, and stays the build the player
         # picked once the index stops listing it, instead of being swapped
         # for the newest one with a download nobody asked for.
-        root = _game_root(version_dir(edition["id"], wanted))
+        root = _game_root(version_dir(edition["id"], wanted), exe)
         if root:
-            info(f"{edition['name']} {wanted} already installed")
+            info(f"{_build_name(edition, wanted)} already installed")
             return root
     catalogue = list_versions(edition["id"], offline_ok=False)
     if not catalogue:
@@ -211,25 +277,30 @@ def install_game(edition, version=None, progress=None, force=False):
 
     dest = version_dir(edition["id"], entry["version"])
     dest.parent.mkdir(parents=True, exist_ok=True)
-    root = _game_root(dest)
+    root = _game_root(dest, exe)
     if root and not force:
-        info(f"{edition['name']} {entry['version']} already installed")
+        info(f"{_build_name(edition, entry['version'])} already installed")
         return root
 
     # A build installed before the move to the Store lives outside
     # GAMES/<edition>/<version>/ and cannot be reached by this path. It is
     # still a complete, working game and it is the one the player has, so keep
     # it as the fallback rather than stranding them with nothing to launch.
-    fallback = None if root else _configured_legacy_root()
+    fallback = (None if root or not is_bedrock(edition)
+                else _configured_legacy_root())
 
-    info(f"{'Reinstalling' if root else 'Installing'} {edition['name']} "
-         f"{entry['version']} — this downloads it from Microsoft with your "
-         "own account …")
+    info(f"{'Reinstalling' if root else 'Installing'} "
+         f"{_build_name(edition, entry['version'])} — this downloads it from "
+         "Microsoft with your own account …")
     # Every mirror the index lists, not just the first: they carry the same
     # package, so a truncated body from one is retryable on the next.
     url = entry["urls"][0]
     try:
-        xodus.install(entry["urls"], dest, progress)
+        # xodus.install's defaults are Bedrock's; another title names the
+        # executable that marks its build, and itself in what goes wrong.
+        extra = ({} if is_bedrock(edition)
+                 else {"exe": exe, "title": edition["name"]})
+        xodus.install(entry["urls"], dest, progress, **extra)
     except xodus.NotSignedIn:
         # Actionable, and only the caller can act: never fold this into the
         # fallback below, or the launcher quietly keeps starting the old build
@@ -238,17 +309,22 @@ def install_game(edition, version=None, progress=None, force=False):
     except BolError as exc:
         if fallback is None:
             raise
-        warn(f"Could not download {edition['name']} {entry['version']} "
+        warn(f"Could not download {_build_name(edition, entry['version'])} "
              f"({exc}) — starting the copy already installed. It predates the "
              "switch to the Microsoft Store, so it stays on its own build "
              "until the download works.")
         return fallback
-    root = _game_root(dest)
+    root = _game_root(dest, exe)
     if not root:
-        die(f"Minecraft.Windows.exe missing after installing "
-            f"{edition['name']} {entry['version']}.")
+        die(f"{exe or 'The game executable'} missing after installing "
+            f"{_build_name(edition, entry['version'])}.")
     _write_install_record(dest, edition, entry["version"], url)
-    ok(f"{edition['name']} {entry['version']} installed")
+    shown = entry["version"]
+    if not is_bedrock(edition):
+        # Bedrock packs its own numbering into the package version, so only
+        # another title's package says its build outright.
+        shown = build_version(root) or shown
+    ok(f"{_build_name(edition, shown)} installed")
     _mention_other_builds(edition["id"], entry["version"])
     return root
 
@@ -289,7 +365,15 @@ def _mention_other_builds(edition_id, version):
 
 def use_game_dir(folder):
     folder = Path(folder).expanduser().resolve()
-    if not (folder / "Minecraft.Windows.exe").exists():
+    owner = edition_for_dir(folder)
+    if not is_bedrock(owner):
+        # Another title of the family, in the folder install_game() wrote:
+        # what marks it is the executable its own package declares.
+        root = xodus.game_root(folder, edition_exe(owner))
+        if root is None:
+            die(f"{owner['name']} is not installed in {folder}.")
+        folder = root
+    elif not (folder / "Minecraft.Windows.exe").exists():
         cands = list(folder.rglob("Minecraft.Windows.exe"))
         if not cands:
             die(f"Minecraft.Windows.exe not found in {folder} (nor in "
@@ -396,11 +480,17 @@ def _holds(folder, path):
 
 
 def _build_entry(folder, edition_entry, version, selected, with_size=True):
-    root = xodus.game_root(folder)
+    exe = edition_exe(edition_entry)
+    root = xodus.game_root(folder, exe)
     record = _install_record(folder)
     managed = _managed_parts(folder) is not None
+    if not is_bedrock(edition_entry) or version == xodus.STORE_BUILD:
+        # The folder of a Store-only title is named "current"; the build in
+        # it has a number of its own, and that is the one worth showing.
+        version = build_version(root or folder) or version
     return {
         "edition": edition_entry["id"] if edition_entry else None,
+        "title": edition_title(edition_entry),
         "name": edition_entry["name"] if edition_entry else "Minecraft",
         "version": version or mc_version_str(root or folder) or "unknown",
         "path": Path(folder),
@@ -408,7 +498,7 @@ def _build_entry(folder, edition_entry, version, selected, with_size=True):
         # Complete *and* decryptable: a Store build whose package went missing
         # still has an exe and a manifest and cannot be started (#216), and
         # the only thing to do with it is download it again.
-        "playable": _game_root(folder) is not None,
+        "playable": _game_root(folder, exe) is not None,
         "in_use": _holds(folder, selected),
         "installed_at": record.get("installed"),
         # Only what the launcher itself downloaded is the launcher's to
@@ -450,8 +540,10 @@ def installed_builds(with_size=True):
                 builds = sorted(entry.iterdir())
             except OSError:
                 continue
+            exe = edition_exe(edition_entry)
             for build in builds:
-                if not build.is_dir() or xodus.game_root(build) is None:
+                if (not build.is_dir()
+                        or xodus.game_root(build, exe) is None):
                     continue
                 out.append(_build_entry(build, edition_entry, build.name,
                                         selected, with_size))
@@ -503,7 +595,8 @@ def remove_build(path):
     # And it has to look like a build: a game inside it, the record the
     # installer wrote, or the encrypted package a download leaves. Whatever
     # else has found its way in there is not this function's to delete.
-    if not (xodus.game_root(folder) or xodus.has_package_cache(folder)
+    if not (xodus.game_root(folder) or xodus.game_root(folder, None)
+            or xodus.has_package_cache(folder)
             or (folder / _INSTALL_METADATA).exists()):
         raise BolError(
             f"{folder} holds no Minecraft build, so it will not be removed.")
@@ -526,6 +619,28 @@ def remove_build(path):
         settings.pop("game_dir", None)
         save_settings(settings)
     return freed
+
+
+_IDENTITY_VERSION = re.compile(
+    r'<Identity\b[^>]*?\bVersion\s*=\s*"(\d+(?:\.\d+){1,3})"', re.I | re.S)
+
+
+def build_version(game_dir):
+    """The package version a build declares, as written ("1.17.0.0").
+
+    Bedrock packs its own numbering into that field (see mc_version_str);
+    every other title means it as it stands.
+    """
+    for name in ("appxmanifest.xml", "AppxManifest.xml",
+                 "MicrosoftGame.config"):
+        try:
+            text = (Path(game_dir) / name).read_text(errors="ignore")
+        except OSError:
+            continue
+        match = _IDENTITY_VERSION.search(text)
+        if match:
+            return match.group(1)
+    return None
 
 
 def mc_version_str(game_dir: Path):

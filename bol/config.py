@@ -242,13 +242,44 @@ GDK_LINKS_URL = ("https://raw.githubusercontent.com/"
 # and worthless without the licence, so this costs no confidentiality; the
 # content id below is checked against every indexed URL so a bad or tampered
 # index cannot point the downloader at a different product.
+#
+# Not every entry is Bedrock. "title" names the game an edition installs, and
+# everything the launcher does to Minecraft itself -- its HBUI anchors, its
+# options.txt, LeviLamina, the Editor, the server list, the world backups --
+# is for "bedrock" alone. "catalogue" says where builds come from: "index" is
+# the GdkLinks index above, which only knows Bedrock; "store" is whatever build
+# the Store serves today, installed by product id into one folder that each
+# update is a delta of. "exe" is None when the package's MicrosoftGame.config
+# is what names the executable, which is the only place that knows for sure.
+# An entry without these keys is a Bedrock one (bol.games.edition_title).
 MC_PRODUCTS = (
     {"id": "release", "product": "9NBLGGH2JHXJ", "channel": "release",
      "content_id": "7792d9ce-355a-493c-afbd-768f4a77c3b0",
-     "name": "Minecraft for Windows", "beta": False},
+     "name": "Minecraft for Windows", "beta": False,
+     "title": "bedrock", "catalogue": "index", "short": "Stable",
+     "exe": "Minecraft.Windows.exe"},
     {"id": "preview", "product": "9P5X4QVLC2XR", "channel": "preview",
      "content_id": "98bd2335-9b01-4e4c-bd05-ccc01614078b",
-     "name": "Minecraft Preview for Windows", "beta": True},
+     "name": "Minecraft Preview for Windows", "beta": True,
+     "title": "bedrock", "catalogue": "index", "short": "Preview",
+     "exe": "Minecraft.Windows.exe"},
+    # Unreal Engine 4, Direct3D 11 through DXVK. A 5.9 GB package; the Store
+    # served 1.17.0.0 in November 2026.
+    {"id": "dungeons", "product": "9P8MK4NC0LJB", "channel": None,
+     "content_id": "911f6225-c9c8-4641-a6db-29d4ccafc666",
+     "package_family": "Microsoft.Lovika_8wekyb3d8bbwe",
+     "name": "Minecraft Dungeons", "beta": False,
+     "title": "dungeons", "catalogue": "store", "short": "Dungeons",
+     "exe": None},
+    # Bedrock's engine underneath, but its own game: none of Bedrock's
+    # fixups apply. A 12.5 GB package; the Store served 1.18.19068.0 in
+    # November 2026.
+    {"id": "legends", "product": "9N98Z825TNFW", "channel": None,
+     "content_id": "f8afac2c-44cd-4302-afc3-b6dc979e6656",
+     "package_family": "Microsoft.BadgerWin10_8wekyb3d8bbwe",
+     "name": "Minecraft Legends", "beta": False,
+     "title": "legends", "catalogue": "store", "short": "Legends",
+     "exe": None},
 )
 
 
