@@ -559,16 +559,18 @@ def _warn_if_dgc_unavailable(environ=None):
 def _warn_if_inproc_sync_unavailable(settings, environ=None):
     """Pre-launch heads-up when Wine has no fast synchronization path.
 
-    Wine 11 dropped esync/fsync, so without the kernel ntsync backend every
-    Win32 wait is a wineserver round-trip and Minecraft's worker threads end
-    up serialised behind it — the "the game runs on one thread" performance
-    reports. File/stat inspection only, no Wine process and no ioctl.
-    Advisory, not a block; BOL_SKIP_NTSYNC_CHECK=1 silences it.
+    Upstream Wine 11 dropped esync/fsync. Without the kernel ntsync backend,
+    or the engine's fsync fallback (patch 0014) where the kernel has
+    futex_waitv, every Win32 wait is a wineserver round-trip and Minecraft's
+    worker threads end up serialised behind it — the "the game runs on one
+    thread" performance reports. File/stat inspection and an empty
+    futex_waitv call only, no Wine process and no ioctl. Advisory, not a
+    block; BOL_SKIP_NTSYNC_CHECK=1 silences it.
 
-    PROTON_NO_NTSYNC is read from the Advanced custom-environment field rather
-    than the host environment: an inherited copy is dropped as a
-    launcher-owned variable, so only the field can actually disable the
-    fast path.
+    PROTON_NO_NTSYNC and PROTON_NO_FSYNC are read from the Advanced
+    custom-environment field rather than the host environment: an inherited
+    copy is dropped as a launcher-owned variable, so only the field can
+    actually disable a fast path.
     """
     source = os.environ if environ is None else environ
     if source.get("BOL_SKIP_NTSYNC_CHECK") == "1":
