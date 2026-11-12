@@ -53,6 +53,18 @@ is a tmpfs the sandbox discards, and a discarded keyring is not a sign-out but
 a *new* provisioned Microsoft device, ten of which exhaust the account's Store
 download pool (issue #198).
 
+`xodus-cli` is linked against **glibc 2.31**, the ceiling the game engine is
+built for (`REQUIRED_ENGINE_GLIBC_MAX` in `bol/vkd3d.py`), and
+`scripts/build-xodus-cli.sh` fails the build if it imports a newer glibc
+symbol. Up to `64d39eb87a56-p11` it was linked against the Debian trixie
+container's own glibc and asked for 2.39, so Debian 12, Ubuntu 22.04 and its
+derivatives and Fedora 39 could neither download nor start the game outside
+the Flatpak (issue #264). The container stays trixie, because nothing old
+enough packages WebKitGTK 4.1: `cargo-zigbuild` links instead, with zig
+supplying the C library of the version the target names
+(`x86_64-unknown-linux-gnu.2.31`). zig, its SHA-256 and the cargo-zigbuild
+version are pinned in `.github/workflows/build-xodus.yml`.
+
 `xodus-cli` links `wry`/`tao` unconditionally for the login webview, so
 `libwebkit2gtk-4.1` is a build *and* runtime dependency. The `xodus` crate
 runs `prost-build`, so `protoc` is needed at build time. It also depends on
@@ -112,6 +124,11 @@ before `main()` — for `login`, but equally for `streaming` and for `run`, whic
 starts every Store-installed game. A host without WebKitGTK therefore cannot
 sign in, download or play, and immutable images (SteamOS) cannot install one:
 issue #184.
+
+The bundle is trixie's WebKitGTK, so it needs trixie's glibc even though
+`xodus-cli` no longer does. On an older system the host's WebKitGTK is the
+way: `bol/webview.py` keeps it when the bundle cannot load there, and names
+the package to install when there is none.
 
 `scripts/build-xodus-webview.sh` packages that stack from the same pinned
 snapshot as the binary, and `bol/webview.py` uses it only where the host has
