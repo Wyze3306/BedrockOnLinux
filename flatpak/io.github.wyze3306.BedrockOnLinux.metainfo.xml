@@ -77,6 +77,21 @@
   </supports>
 
   <releases>
+    <release version="3.0.0" date="2026-11-12" type="development">
+      <description>
+        <p>A pre-release of the next major version.</p>
+        <ul>
+          <li>installs add-ons, maps and texture packs from MCPEDL and
+              CurseForge, and LeviLamina mods</li>
+          <li>has a new layout with a menu on the left</li>
+          <li>runs Minecraft on Debian 12, Ubuntu 22.04, Fedora 39 and Asahi
+              Linux</li>
+          <li>starts the game sooner and unlocks achievements</li>
+          <li>spends less CPU between frames and reacts sooner to the
+              mouse</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.3.1" date="2026-11-11">
       <description>
         <p>Other players keep their own skins on servers, and the Realms button

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 3.0.0 — 2026-11-12 (pre-release)
+
+A pre-release of the next major version. Add-ons, maps and texture packs
+install in one click from MCPEDL and CurseForge, LeviLamina mods have their
+own page, and the launcher has a new layout. Minecraft runs on Debian 12,
+Ubuntu 22.04 and Fedora 39 and on Apple silicon under Asahi Linux, starts
+sooner after PLAY, and unlocks achievements. Engine native23 spends less CPU
+between frames and keeps its speed on kernels without ntsync, and the camera
+follows the mouse sooner on Wayland desktops. Stable 2.3.x installs are not
+offered this version: download it from this release to try it.
+
 ### Added
 
 - **Add-ons, maps, texture packs and skins from MCPEDL and CurseForge.** A
