@@ -150,6 +150,52 @@ class XcbPluginTests(unittest.TestCase):
                                  expected)
         self.assertIsNone(deps.install_hint("libfoo.so.1"))
 
+    def test_libgthread_is_its_own_package_on_opensuse_only(self):
+        # GLib carries it everywhere else, so only zypper names a package
+        # that a stock desktop is actually missing.
+        with mock.patch("shutil.which",
+                        side_effect=lambda name: "/usr/bin/zypper"
+                        if name == "zypper" else None):
+            self.assertEqual(deps.install_hint("libgthread-2.0.so.0"),
+                             "sudo zypper install libgthread-2_0-0")
+            self.assertEqual(deps.install_hint("libxcb-shape.so.0"),
+                             "sudo zypper install libxcb-shape0")
+
+
+
+class DoctorPackageNameTests(unittest.TestCase):
+    """`doctor` ends with one install line; it has to name real packages."""
+
+    def _install_line(self, manager, have=lambda _module: True,
+                      import_error=None):
+        tools = {manager, "tar", "curl", "unzstd"}
+        with mock.patch.object(doctor.deps, "have", side_effect=have), \
+                mock.patch.object(doctor.deps, "gui_import_error",
+                                  return_value=import_error), \
+                mock.patch.object(doctor.deps, "xcb_plugin_missing_library",
+                                  return_value=None), \
+                mock.patch("shutil.which",
+                           side_effect=lambda name: "/usr/bin/" + name
+                           if name in tools else None), \
+                mock.patch.object(doctor.webview, "status",
+                                  return_value=("OK (store sign-in)", None)), \
+                mock.patch.object(doctor, "graphics_safety_problem",
+                                  return_value=None), \
+                mock.patch.object(doctor, "info"), \
+                mock.patch.object(doctor, "ok"), \
+                mock.patch.object(doctor, "warn") as warning:
+            doctor.doctor()
+        lines = [call.args[0] for call in warning.call_args_list
+                 if call.args and call.args[0].startswith("To install: ")]
+        return lines[-1] if lines else None
+
+    def test_a_qt_that_cannot_import_is_not_system_ready(self):
+        # A stock openSUSE: PySide6 is there, libgthread-2_0-0 is not.
+        line = self._install_line(
+            "zypper", import_error="libgthread-2.0.so.0: cannot open shared "
+            "object file: No such file or directory")
+        self.assertEqual(line, "To install: sudo zypper in libgthread-2_0-0")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -384,10 +384,10 @@ QT_HOST_LIBRARIES = {
     "libEGL.so.1":             ("libegl1",             "libEGL.so.1"),
 }
 
-# What the AppImage carries of that list itself, from the pinned Debian 11
-# snapshot: soname -> (pool file, file inside the package, SHA-256 of the
-# package as Debian's own signed Packages index gives it).
-APPIMAGE_BUNDLED_XCB_UTIL = {
+# What the AppImage carries of Qt's host libraries itself, from the pinned
+# Debian 11 snapshot: soname -> (pool file, file inside the package, SHA-256
+# of the package as Debian's own signed Packages index gives it).
+APPIMAGE_BUNDLED_LIBRARIES = {
     "libxcb-util.so.1": (
         "libxcb-util1_0.4.0-1+b1_amd64.deb", "libxcb-util.so.1.0.0",
         "4c48af51fb2ac1be0490067e7450aeda27bf6c6c395165de02199eee4835336f"),
@@ -407,6 +407,14 @@ APPIMAGE_BUNDLED_XCB_UTIL = {
     "libxcb-icccm.so.4": (
         "libxcb-icccm4_0.4.1-1.1_amd64.deb", "libxcb-icccm.so.4.0.0",
         "f323194cb04cd4e5ae064fafec39db6dcf8a431cbd65a0bc53fa6c359862d8ff"),
+    "libxcb-shape.so.0": (
+        "libxcb-shape0_1.14-3_amd64.deb", "libxcb-shape.so.0.0.0",
+        "d0f942240fc5c1b11514c726a1cba1bad80506a15c837ce2a9f11c9b313c4851"),
+    # Not an xcb plugin dependency: libQt6Core's.
+    "libgthread-2.0.so.0": (
+        "libglib2.0-0_2.66.8-1+deb11u4_amd64.deb",
+        "libgthread-2.0.so.0.6600.8",
+        "7aff8c1338b58a6fa2b3a914724040a2b7f6e8dc2333f30c98834f7948f1884f"),
 }
 
 
@@ -510,26 +518,29 @@ class AppImageBundledLibraryTests(unittest.TestCase):
         self.assertIn('${package%%_*}.copyright', script)
         self.assertNotIn("libzstd.so.1", self._declared_host_libraries())
 
-    def test_the_appimage_bundles_the_xcb_util_family(self):
+    def test_the_appimage_bundles_what_stock_desktops_lack(self):
         # Stock Ubuntu 22.04/24.04 desktops, and Mint with them, install no
         # libxcb-cursor0: Qt then refuses its xcb plugin and aborts the
-        # launcher on every X11 session, before Python can say anything.
+        # launcher on every X11 session, before Python can say anything. A
+        # stock openSUSE Tumbleweed has neither libgthread-2_0-0, without
+        # which PySide6.QtCore does not even import, nor libxcb-shape0.
         script = self._script()
+        rpm = (ROOT / "scripts/build-rpm.sh").read_text(encoding="utf-8")
         for soname, (package, member, sha256) in \
-                APPIMAGE_BUNDLED_XCB_UTIL.items():
+                APPIMAGE_BUNDLED_LIBRARIES.items():
             self.assertIn(f"/{package}", script, soname)
             self.assertIn(sha256, script, soname)
             self.assertIn(f'"{member}" "{soname}"', script, soname)
             self.assertNotIn(soname, self._declared_host_libraries())
-            # The .deb and .rpm keep declaring them: their PySide6 is the
-            # same wheel, without the bundled copies.
-            self.assertIn(soname, QT_HOST_LIBRARIES)
+            # The .rpm keeps declaring them: its PySide6 is the same wheel,
+            # without the bundled copies.
+            self.assertIn(f"Requires:       {soname}()(64bit)", rpm, soname)
 
     def test_the_appimage_audit_and_the_packages_name_the_same_host_stack(self):
         declared = self._declared_host_libraries()
         missing = sorted(soname for soname in QT_HOST_LIBRARIES
                          if soname not in declared
-                         and soname not in APPIMAGE_BUNDLED_XCB_UTIL)
+                         and soname not in APPIMAGE_BUNDLED_LIBRARIES)
         self.assertEqual(
             missing, [],
             "the AppImage audit would accept these silently even though the "

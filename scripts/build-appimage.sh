@@ -221,6 +221,24 @@ bundle_deb_library \
   "f323194cb04cd4e5ae064fafec39db6dcf8a431cbd65a0bc53fa6c359862d8ff" \
   "libxcb-icccm.so.4.0.0" "libxcb-icccm.so.4"
 
+# Two more that a stock desktop can lack, both seen on openSUSE Tumbleweed.
+# libQt6Core links libgthread-2.0, and openSUSE splits it out of GLib into
+# libgthread-2_0-0, which no desktop pattern installs (only ten packages in
+# the whole distribution require it, none of them Qt or GTK): `import
+# PySide6.QtCore` fails there before the launcher can draw anything. Since
+# GLib 2.32 it is an empty compatibility shim over libglib, so a copy cannot
+# shadow anything of the host's. The xcb plugin also links libxcb-shape,
+# which comes with neither libxcb nor the X server there.
+echo "== bundling libgthread-2.0 and libxcb-shape"
+bundle_deb_library \
+  "pool/main/libx/libxcb/libxcb-shape0_1.14-3_amd64.deb" \
+  "d0f942240fc5c1b11514c726a1cba1bad80506a15c837ce2a9f11c9b313c4851" \
+  "libxcb-shape.so.0.0.0" "libxcb-shape.so.0"
+bundle_deb_library \
+  "pool/main/g/glib2.0/libglib2.0-0_2.66.8-1+deb11u4_amd64.deb" \
+  "7aff8c1338b58a6fa2b3a914724040a2b7f6e8dc2333f30c98834f7948f1884f" \
+  "libgthread-2.0.so.0.6600.8" "libgthread-2.0.so.0"
+
 PY3="$PYLIB/python3.12"
 rm -rf "$PY3/test" "$PY3/idlelib" "$PY3/turtledemo" "$PY3/tkinter/test" \
        "$PY3/lib2to3" "$PY3/ensurepip" "$PYHOME/share" "$PYHOME/include" 2>/dev/null || true
@@ -333,19 +351,19 @@ print("  AppImage ABI OK: %d ELF files, maximum GLIBC_%d.%d (%s)" %
 
 # Libraries the host is expected to own. Nearly all are on the AppImage
 # excludelist -- the C/C++ runtime, the X11/GL stack, zlib, fontconfig and
-# freetype -- and glib, gthread and D-Bus stay host libraries too, because a
-# bundled copy would shadow the desktop's own GTK/D-Bus stack for the whole
-# process. Anything Qt needs that is not in here has to be bundled instead.
+# freetype -- and glib and D-Bus stay host libraries too, because a bundled
+# copy would shadow the desktop's own GTK/D-Bus stack for the whole process.
+# Anything Qt needs that is not in here has to be bundled instead.
 # Keep in step with QT_HOST_LIBRARIES in tests/test_application_packaging.py
 # and with the .deb/.rpm dependency lists.
 host_libraries = {
     "ld-linux-x86-64.so.2", "libc.so.6", "libdl.so.2", "libm.so.6",
     "libpthread.so.0", "librt.so.1", "libgcc_s.so.1", "libstdc++.so.6",
-    "libz.so.1", "libglib-2.0.so.0", "libgthread-2.0.so.0", "libdbus-1.so.3",
+    "libz.so.1", "libglib-2.0.so.0", "libdbus-1.so.3",
     "libfontconfig.so.1", "libfreetype.so.6", "libGL.so.1", "libEGL.so.1",
     "libX11.so.6", "libX11-xcb.so.1", "libxkbcommon.so.0",
     "libxkbcommon-x11.so.0", "libxcb.so.1", "libxcb-randr.so.0",
-    "libxcb-render.so.0", "libxcb-shape.so.0", "libxcb-shm.so.0",
+    "libxcb-render.so.0", "libxcb-shm.so.0",
     "libxcb-sync.so.1", "libxcb-xfixes.so.0", "libxcb-xkb.so.1",
 }
 # What bol.gui imports, and what Qt loads behind it to put a window on the

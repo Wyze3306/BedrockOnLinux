@@ -177,5 +177,139 @@ class FetchTests(unittest.TestCase):
         self.assertFalse(stale.exists())
 
 
+
+def _deb(files):
+    """A Debian package -- an ar archive with a data.tar.xz -- of ``files``."""
+    import lzma
+    import tarfile
+
+    tar = io.BytesIO()
+    with tarfile.open(fileobj=tar, mode="w") as archive:
+        for name, data in files.items():
+            entry = tarfile.TarInfo(name)
+            entry.size = len(data)
+            archive.addfile(entry, io.BytesIO(data))
+    out = io.BytesIO()
+    out.write(b"!<arch>\n")
+    for name, body in (("debian-binary", b"2.0\n"),
+                       ("control.tar.xz", lzma.compress(b"")),
+                       ("data.tar.xz", lzma.compress(tar.getvalue()))):
+        out.write(f"{name:<16}{0:<12}{0:<6}{0:<6}{100644:<8}{len(body):<10}`\n"
+                  .encode("ascii"))
+        out.write(body + (b"\n" if len(body) % 2 else b""))
+    return out.getvalue()
+
+
+class GapLibraryPinTests(unittest.TestCase):
+    def test_the_pyz_fills_the_same_gaps_the_appimage_carries(self):
+        script = (ROOT / "scripts/build-appimage.sh").read_text(
+            encoding="utf-8")
+        bundled = {
+            soname: (pool, member, sha256)
+            for pool, sha256, member, soname in re.findall(
+                r'bundle_deb_library \\\n\s+"([^"]+)" \\\n'
+                r'\s+"([0-9a-f]{64})" \\\n\s+"([^"]+)" "([^"]+)"', script)}
+        self.assertIn("libgthread-2.0.so.0", bundled)
+        self.assertIn(deps._DEBIAN_SNAPSHOT.rstrip("/"), script)
+        self.assertEqual(deps.QT_GAP_LIBRARIES, bundled)
+
+
+class GapLibraryTests(unittest.TestCase):
+    """A stock openSUSE has no libgthread-2_0-0, which libQt6Core links, and
+    stock Ubuntu and Mint have no libxcb-cursor0, which the xcb plugin links:
+    the .pyz could not import Qt on the first and aborted on every X11
+    session of the second. The toolkit it fetches gets those from the same
+    pinned Debian packages the AppImage carries, when the host lacks them."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name) / "python-gui"
+        self.cache = Path(tmp.name) / "cache"
+        self.cache.mkdir()
+        tag = deps.PRIVATE_WHEELS["PySide6"][0]
+        self.package = self.base / tag / "PySide6"
+        self.qt_lib = self.package / "Qt" / "lib"
+        self.qt_lib.mkdir(parents=True)
+        (self.base / tag / deps._COMPLETE).write_text("wheels\n")
+        self.library = b"\x7fELF gthread"
+        self.deb = _deb({"./usr/lib/x86_64-linux-gnu/libgap.so.1.2.3":
+                         self.library,
+                         "./usr/share/doc/libgap1/copyright": b"MIT\n"})
+        self.gaps = {"libgap.so.1": (
+            "pool/main/g/gap/libgap1_1.2.3-1+b1_amd64.deb", "libgap.so.1.2.3",
+            hashlib.sha256(self.deb).hexdigest())}
+        self.downloads = []
+
+        def download(url, dest, label=None, **_kwargs):
+            self.downloads.append(url)
+            Path(dest).write_bytes(self.deb)
+            return dest
+
+        self.located = [str(self.package)]
+        for patcher in (
+                mock.patch.object(deps, "QT_GAP_LIBRARIES", self.gaps),
+                mock.patch.object(deps, "private_toolkit_dir",
+                                  return_value=self.base),
+                mock.patch("importlib.util.find_spec",
+                           side_effect=lambda name: mock.Mock(
+                               submodule_search_locations=self.located)),
+                mock.patch("platform.machine", return_value="x86_64"),
+                mock.patch("bol.config.CACHE", self.cache),
+                mock.patch("bol.util.download", side_effect=download),
+                mock.patch.object(deps, "info"),
+                mock.patch.object(deps, "warn")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_only_what_the_host_cannot_load_is_fetched(self):
+        self.gaps["libthere.so.2"] = ("pool/main/t/there/libthere2_2_amd64.deb",
+                                      "libthere.so.2.0", "0" * 64)
+        missing = deps.fill_qt_library_gaps(
+            loadable=lambda soname: soname == "libthere.so.2")
+        self.assertEqual(missing, [])
+        self.assertEqual(self.downloads, [
+            "https://snapshot.debian.org/archive/debian/20260701T000000Z/"
+            "pool/main/g/gap/libgap1_1.2.3-1%2Bb1_amd64.deb"])
+        fetched = self.qt_lib / "libgap.so.1"
+        self.assertEqual(fetched.read_bytes(), self.library)
+        self.assertTrue(os.access(fetched, os.X_OK))
+        self.assertFalse((self.qt_lib / "libthere.so.2").exists())
+        self.assertEqual(list(self.cache.iterdir()), [],
+                         "the package is not kept once unpacked")
+
+    def test_a_later_start_downloads_nothing(self):
+        deps.fill_qt_library_gaps(loadable=lambda _soname: False)
+        self.assertEqual(deps.fill_qt_library_gaps(
+            loadable=lambda _soname: False), [])
+        self.assertEqual(len(self.downloads), 1)
+
+    def test_a_package_that_fails_its_pin_is_never_used(self):
+        self.deb = _deb({"./usr/lib/x86_64-linux-gnu/libgap.so.1.2.3":
+                         b"something else"})
+        self.assertEqual(deps.fill_qt_library_gaps(
+            loadable=lambda _soname: False), ["libgap.so.1"])
+        self.assertEqual(list(self.qt_lib.iterdir()), [])
+        self.assertIn("SHA-256", deps.warn.call_args[0][0])
+
+    def test_a_toolkit_the_system_or_pip_installed_is_left_alone(self):
+        self.located[:] = ["/usr/lib/python3/dist-packages/PySide6"]
+        self.assertEqual(deps.fill_qt_library_gaps(
+            loadable=lambda _soname: False), [])
+        self.assertEqual(self.downloads, [])
+
+    def test_only_on_the_architecture_the_packages_are_built_for(self):
+        with mock.patch("platform.machine", return_value="aarch64"):
+            self.assertEqual(deps.fill_qt_library_gaps(
+                loadable=lambda _soname: False), [])
+        self.assertEqual(self.downloads, [])
+
+    def test_a_file_that_is_no_debian_package_is_refused(self):
+        bogus = self.cache / "bogus.deb"
+        bogus.write_bytes(b"PK\x03\x04")
+        with self.assertRaises(ValueError):
+            deps._deb_member(bogus, "./usr/lib/x86_64-linux-gnu/libgap.so.1")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -131,12 +131,17 @@ def doctor(acknowledge_gpu_crash=False):
     # install on Debian or Ubuntu, where it is split per Qt module
     # (python3-pyside6.qtcore, .qtgui, .qtwidgets).
     print(f"  {'PySide6':12} : {gui_toolkit_summary()}")
-    xcb_library = deps.xcb_plugin_missing_library() \
-        if deps.have("PySide6") else None
-    if xcb_library:
-        package = deps.install_hint(xcb_library)
+    # A toolkit that is there but cannot load is a missing package all the
+    # same: libgthread-2.0 on a stock openSUSE, libxcb-cursor0 on Ubuntu.
+    gui_library = None
+    if deps.have("PySide6"):
+        import_error = deps.gui_import_error()
+        gui_library = deps.missing_shared_library(import_error) \
+            if import_error else deps.xcb_plugin_missing_library()
+    if gui_library:
+        package = deps.install_hint(gui_library)
         miss.append(package.rsplit(" ", 1)[-1] if package and
-                    package.startswith("sudo ") else xcb_library)
+                    package.startswith("sudo ") else gui_library)
     cr_ok = deps.have("cryptography")
     print(f"  {'cryptography':12} : "
           f"{'OK (login)' if cr_ok else 'MISSING (login)'}")

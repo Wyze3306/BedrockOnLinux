@@ -67,10 +67,13 @@ def gui_import_error():
     return None
 
 
-# The system package each xcb-util library comes in, per package manager.
-# Qt's xcb platform plugin links them; stock Ubuntu 22.04/24.04 desktops, and
-# Mint with them, install no libxcb-cursor0.
-XCB_UTIL_PACKAGES = {
+# The system package each library a PyPI PySide6 links but a desktop may
+# lack comes in, per package manager. Qt's xcb platform plugin links the
+# xcb-util family, which stock Ubuntu 22.04/24.04 desktops, and Mint with
+# them, do not all install (no libxcb-cursor0); libQt6Core links
+# libgthread-2.0, which openSUSE splits into a package of its own that no
+# desktop pattern pulls in.
+QT_LIBRARY_PACKAGES = {
     #  soname:                  (apt,                 dnf / pacman,
     #                            zypper)
     "libxcb-cursor.so.0":      ("libxcb-cursor0",      "xcb-util-cursor",
@@ -85,12 +88,16 @@ XCB_UTIL_PACKAGES = {
                                 "libxcb-render-util0"),
     "libxcb-util.so.1":        ("libxcb-util1",        "xcb-util",
                                 "libxcb-util1"),
+    "libxcb-shape.so.0":       ("libxcb-shape0",       "libxcb",
+                                "libxcb-shape0"),
+    "libgthread-2.0.so.0":     ("libglib2.0-0",        "glib2",
+                                "libgthread-2_0-0"),
 }
 
 
 def install_hint(library):
     """"sudo <manager> install <package>" for ``library``, or None."""
-    packages = XCB_UTIL_PACKAGES.get(library)
+    packages = QT_LIBRARY_PACKAGES.get(library)
     if not packages:
         return None
     apt, other, zypper = packages
@@ -391,6 +398,172 @@ def _fetch_wheel_set(module, base=None):
                 entry.name not in wanted:
             shutil.rmtree(entry, ignore_errors=True)
     return None
+
+
+# Libraries the PyPI PySide6 links that a desktop does not reliably have --
+# see QT_LIBRARY_PACKAGES -- plus libzstd, which a minimal system can lack
+# (issue #205). The AppImage carries exactly these, from the same pinned
+# Debian 11 packages (scripts/build-appimage.sh); the private wheel set gets
+# the ones this host cannot load, in PySide6/Qt/lib, where the $ORIGIN RUNPATH
+# of libQt6Core and of the xcb plugin finds them. Without them the .pyz cannot
+# import Qt on a stock openSUSE (libgthread-2.0) and aborts on every X11
+# session of a stock Ubuntu or Mint (libxcb-cursor).
+_DEBIAN_SNAPSHOT = \
+    "https://snapshot.debian.org/archive/debian/20260701T000000Z/"
+#   soname -> (pool file, file inside the package, SHA-256 of the package as
+#              Debian's signed Packages index gives it)
+QT_GAP_LIBRARIES = {
+    "libzstd.so.1": (
+        "pool/main/libz/libzstd/libzstd1_1.4.8+dfsg-2.1_amd64.deb",
+        "libzstd.so.1.4.8",
+        "5dcadfbb743bfa1c1c773bff91c018f835e8e8c821d423d3836f3ab84773507b"),
+    "libxcb-util.so.1": (
+        "pool/main/x/xcb-util/libxcb-util1_0.4.0-1+b1_amd64.deb",
+        "libxcb-util.so.1.0.0",
+        "4c48af51fb2ac1be0490067e7450aeda27bf6c6c395165de02199eee4835336f"),
+    "libxcb-cursor.so.0": (
+        "pool/main/x/xcb-util-cursor/libxcb-cursor0_0.1.1-4_amd64.deb",
+        "libxcb-cursor.so.0.0.0",
+        "bab731cd0143303f77461dd0a03ad20807bd3d767d5d6af6a11ff99c3b7aeac3"),
+    "libxcb-image.so.0": (
+        "pool/main/x/xcb-util-image/libxcb-image0_0.4.0-1+b3_amd64.deb",
+        "libxcb-image.so.0.0.0",
+        "36a381bb18c9f349a53457c66b3d1825631f3e50c4f6c12326cf05257302172d"),
+    "libxcb-keysyms.so.1": (
+        "pool/main/x/xcb-util-keysyms/libxcb-keysyms1_0.4.0-1+b2_amd64.deb",
+        "libxcb-keysyms.so.1.0.0",
+        "aed1436db9a3e63b10d00c4ed16248b5c82b5dd2963a83a761f406af65eb4b49"),
+    "libxcb-render-util.so.0": (
+        "pool/main/x/xcb-util-renderutil/"
+        "libxcb-render-util0_0.3.9-1+b1_amd64.deb",
+        "libxcb-render-util.so.0.0.0",
+        "be4b38a63e65c84e2f1322f044d05a9baa677e0f3dc68b742a0a109a3ff40ae9"),
+    "libxcb-icccm.so.4": (
+        "pool/main/x/xcb-util-wm/libxcb-icccm4_0.4.1-1.1_amd64.deb",
+        "libxcb-icccm.so.4.0.0",
+        "f323194cb04cd4e5ae064fafec39db6dcf8a431cbd65a0bc53fa6c359862d8ff"),
+    "libxcb-shape.so.0": (
+        "pool/main/libx/libxcb/libxcb-shape0_1.14-3_amd64.deb",
+        "libxcb-shape.so.0.0.0",
+        "d0f942240fc5c1b11514c726a1cba1bad80506a15c837ce2a9f11c9b313c4851"),
+    "libgthread-2.0.so.0": (
+        "pool/main/g/glib2.0/libglib2.0-0_2.66.8-1+deb11u4_amd64.deb",
+        "libgthread-2.0.so.0.6600.8",
+        "7aff8c1338b58a6fa2b3a914724040a2b7f6e8dc2333f30c98834f7948f1884f"),
+}
+
+
+def _deb_member(deb, member):
+    """The bytes of ``member`` (a path such as "./usr/lib/...") inside the
+    data archive of the Debian package ``deb``."""
+    import io
+    import lzma
+    import tarfile
+
+    raw = Path(deb).read_bytes()
+    if raw[:8] != b"!<arch>\n":
+        raise ValueError(f"{Path(deb).name} is not a Debian package")
+    # An ar archive: 60-byte member headers, data padded to an even length.
+    members, offset = {}, 8
+    while offset + 60 <= len(raw):
+        header = raw[offset:offset + 60]
+        name = header[:16].decode("ascii", "replace").strip().rstrip("/")
+        start = offset + 60
+        size = int(header[48:58])
+        members[name] = raw[start:start + size]
+        offset = start + size + size % 2
+    if "data.tar.xz" not in members:
+        raise ValueError(f"{Path(deb).name} carries no data.tar.xz")
+    payload = io.BytesIO(lzma.decompress(members["data.tar.xz"]))
+    with tarfile.open(fileobj=payload, mode="r:") as archive:
+        try:
+            entry = archive.getmember(member)
+        except KeyError:
+            raise ValueError(f"{Path(deb).name} has no {member}") from None
+        source = archive.extractfile(entry)
+        if source is None:
+            raise ValueError(f"{member} is not a file in {Path(deb).name}")
+        return source.read()
+
+
+def _host_loads(soname):
+    import ctypes
+    try:
+        ctypes.CDLL(soname)
+    except OSError:
+        return False
+    return True
+
+
+def _fetch_gap_library(soname, qt_lib):
+    """Put ``soname`` from its pinned Debian package into ``qt_lib``.
+    Returns None on success, otherwise why it could not."""
+    from .config import CACHE
+    from .util import download
+
+    pool, member, expected = QT_GAP_LIBRARIES[soname]
+    name = pool.rsplit("/", 1)[-1]
+    deb = CACHE / name
+    part = Path(qt_lib) / f".{soname}.part"
+    try:
+        # Two attempts, not five: this runs again at the next launch.
+        download(_DEBIAN_SNAPSHOT + pool.replace("+", "%2B"), deb, name,
+                 attempts=2)
+        if hashlib.sha256(deb.read_bytes()).hexdigest() != expected:
+            return f"{name} does not match its pinned SHA-256"
+        part.write_bytes(_deb_member(deb, "./usr/lib/x86_64-linux-gnu/"
+                                     + member))
+        os.chmod(part, 0o755)
+        os.replace(part, Path(qt_lib) / soname)
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+    finally:
+        for leftover in (deb, part):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
+    return None
+
+
+def fill_qt_library_gaps(base=None, loadable=None):
+    """Give the private PySide6 the QT_GAP_LIBRARIES this host cannot load.
+
+    Returns the sonames still missing afterwards. A PySide6 the system or pip
+    installed is left alone: completing it is the user's call, and the
+    launcher names the package to install instead. Never raises.
+    """
+    import platform
+
+    if platform.machine() != "x86_64":
+        return []
+    base = Path(base) if base is not None else private_toolkit_dir()
+    tag = PRIVATE_WHEELS["PySide6"][0]
+    package = base / tag / "PySide6"
+    qt_lib = package / "Qt" / "lib"
+    if not (base / tag / _COMPLETE).is_file() or not qt_lib.is_dir():
+        return []
+    try:
+        spec = importlib.util.find_spec("PySide6")
+        located = list(getattr(spec, "submodule_search_locations", None)
+                       or [])
+        if not located or Path(located[0]).resolve() != package.resolve():
+            return []
+    except Exception:
+        return []
+    loadable = _host_loads if loadable is None else loadable
+    gaps = [soname for soname in QT_GAP_LIBRARIES
+            if not (qt_lib / soname).exists() and not loadable(soname)]
+    if gaps:
+        info("Downloading the system libraries Qt needs and this system "
+             f"lacks (one-time): {', '.join(gaps)} …")
+    still = []
+    for soname in gaps:
+        reason = _fetch_gap_library(soname, qt_lib)
+        if reason:
+            warn(f"Could not download {soname} ({reason}).")
+            still.append(soname)
+    return still
 
 
 def missing_gui_deps():
