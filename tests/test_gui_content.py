@@ -110,7 +110,7 @@ class RailFoldTests(unittest.TestCase):
             self.assertEqual(window.rail_buttons["settings"].text(), "⚙")
             self.assertFalse(window.prof_label.isVisibleTo(window.rail))
             self.assertTrue(saved.get("rail_collapsed"))
-            window.rail_fold.click()
+            window.rail_unfold.click()
             self.assertEqual(window.rail.width(), window.RAIL_WIDE)
             self.assertFalse(saved.get("rail_collapsed"))
 
@@ -123,7 +123,7 @@ class RailFoldTests(unittest.TestCase):
             window.resize(1000, 700)
             self.assertTrue(_wait(
                 lambda: window.rail.width() == window.RAIL_NARROW, 2))
-            self.assertFalse(window.rail_fold.isEnabled())
+            self.assertFalse(window.rail_unfold.isEnabled())
             window.resize(1300, 760)
             self.assertTrue(_wait(
                 lambda: window.rail.width() == window.RAIL_WIDE, 2))

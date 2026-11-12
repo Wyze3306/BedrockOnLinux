@@ -140,8 +140,7 @@ class DiscoveryTests(RingTestCase):
         self.assertIn(window.play_btn, items)
         self.assertIn(window.rail_buttons["settings"], items)
         self.assertIn(window.details_btn, items)
-        self.assertIn(window.stable_btn, items)
-        self.assertIn(window.preview_btn, items)
+        self.assertIn(window.edition_field, items)
 
     def test_a_clickable_frame_is_a_control_too(self):
         # The version pill, the profile chip and the account chip are frames

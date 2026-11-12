@@ -19,7 +19,9 @@
   (Play, Add-ons & Maps, Mods, Profiles, Settings, What's New), with the
   page shown lit up and named above it; the profile and the accounts sit at
   its foot. It folds down to its icons, and folds by itself in a narrow
-  window. The home page has shortcuts to content, mods, importing a file
+  window. Pages sit flat on the window with one level of cards, and every
+  button looks like one. The game or edition is one pill next to PLAY,
+  with a badge per edition, opening a menu of them all. The home page has shortcuts to content, mods, importing a file
   and the game folder, and shows this week's popular add-ons, maps and
   texture packs (Settings > General turns that off).
 - **LeviLamina mods.** A Mods page browses the levimc.org catalogue and

@@ -509,7 +509,8 @@ class ContentPage(QFrame):
     def __init__(self, win):
         super().__init__()
         self.win = win
-        self.setObjectName("Card")
+        # Flat, like every page: its cards sit straight on the window.
+        self.setObjectName("Page")
         self.kind = "addons"
         self.items = []
         self.page_no = 1
@@ -529,7 +530,7 @@ class ContentPage(QFrame):
         self._columns = 0
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 18, 20, 14)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(10)
 
         head = QHBoxLayout()
