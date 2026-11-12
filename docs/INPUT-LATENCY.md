@@ -113,10 +113,10 @@ paces Minecraft at the display's rate less 0.2 % (60 Hz → 59.88 FPS,
 margin covers a reported rate a little off the real one (RandR says 59.95 Hz
 for gamescope's 60.00). The cost:
 
-- vkd3d-proton's limiter thread, which ends each wait spinning: about a fifth
-  of a core at 60 FPS with the shipped vkd3d-proton (#202; the busy-wait patch
-  on `wyze/silly-keller-7d9912` brings it to 4–6 %). This undoes, under
-  Xwayland only, the saving 47b689a made for vsync'd games.
+- vkd3d-proton's limiter thread, which ends each wait spinning: a twentieth
+  of a core at 60 FPS with engine native23, which shortened that spin (a
+  fifth before it, #202). This undoes, under Xwayland only, the saving
+  47b689a made for vsync'd games.
 - One repeated frame every 8 s at 60 Hz (3.5 s at 144 Hz), where the pace
   falls a whole refresh behind the display.
 
