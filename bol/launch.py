@@ -25,6 +25,7 @@ from .auth import (
 from . import (
     discord,
     fullscreen_fix,
+    gameevents,
     packcache,
     presence as xbl_presence,
     saves,
@@ -921,6 +922,9 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     xlog = os.environ.get("BOL_XCURL_LOG")
     if xlog == "1" or (xlog is None and diag):
         env["XCURL_LOG"] = "1"
+    # Achievements are graded by Xbox Live from the events the game writes;
+    # the engine records them and the session forwards them (#152).
+    event_title = gameevents.prepare(env, s, gd, online)
     # Disable incompatible VR/AGS paths; retain native cryptbase with fallback.
     overrides = ["cryptbase=n,b", "vrclient=", "vrclient_x64=", "openvr_api=",
                  "wineopenxr=", "amd_ags_x64="]
@@ -1106,6 +1110,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     game_returned = False
     presence = discord.Session()
     xbl = xbl_presence.Session()
+    game_events = gameevents.Forwarder()
     try:
         # From here until the teardown below has dealt with the marker, a
         # SIGTERM or SIGHUP waits for the game instead of killing the
@@ -1187,6 +1192,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         if online:
             xbl = xbl_presence.start_session(s)
             xbl_presence.warn_if_unavailable(xbl, s)
+        game_events = gameevents.start_session(event_title)
         announced = False
         # There is no window yet to give Steam's identity to, so this watches
         # for one on the same tick that waits on the game process rather than
@@ -1243,9 +1249,11 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         if stopping:
             presence.stop(timeout=0)
             xbl.stop(timeout=0)
+            gameevents.stop_session(game_events, timeout=0)
         else:
             presence.stop()
             xbl.stop()
+            gameevents.stop_session(game_events)
         prefix_idle = None
         if game_returned and gpu_marker_token:
             try:
