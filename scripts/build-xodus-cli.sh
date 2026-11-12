@@ -79,6 +79,23 @@ export CARGO_INCREMENTAL=0
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1784308597}"
 export RUSTFLAGS="-C strip=symbols -C link-arg=-Wl,--allow-shlib-undefined --remap-path-prefix=$TREE=/xodus --remap-path-prefix=$HOME/.cargo=/cargo"
 
+# zig's clang searches its own libc headers and the -I paths it is handed, not
+# Debian's multiarch include directory, and libssl-dev keeps its two generated
+# headers (opensslconf.h, configuration.h) there. openssl-sys preprocesses
+# <openssl/opensslv.h> to learn the version, so without them it stops on
+# "openssl/opensslconf.h file not found". Give it one directory holding all of
+# them. The headers only steer that version probe; the library linked is the
+# container's libssl.so either way.
+if [ -z "${OPENSSL_INCLUDE_DIR:-}" ]; then
+  MULTIARCH="$(gcc -print-multiarch)"
+  SSL_INCLUDE="$WORK/openssl-include"
+  rm -rf "$SSL_INCLUDE"
+  mkdir -p "$SSL_INCLUDE/openssl"
+  cp /usr/include/openssl/*.h "/usr/include/$MULTIARCH/openssl/"*.h "$SSL_INCLUDE/openssl/"
+  export OPENSSL_INCLUDE_DIR="$SSL_INCLUDE"
+  export OPENSSL_LIB_DIR="/usr/lib/$MULTIARCH"
+fi
+
 if [ "$PATCH_LEVEL" -gt 0 ]; then
   echo "== Applying $PATCH_LEVEL patch(es) from third_party/xodus/patches"
   # -3 is deliberately absent: a patch that no longer applies cleanly to the
