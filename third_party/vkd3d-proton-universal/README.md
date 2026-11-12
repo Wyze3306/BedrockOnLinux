@@ -26,14 +26,18 @@ The complete revert is vendored as `restore-nv-dgc.patch`. The build script
 performs the Git revert itself and requires its generated patch to be identical
 to that file. `submodules.lock` similarly fixes every recursive submodule.
 
-## Reviewed but not yet built: occluded frame latency
+Two vendored fixes are then applied, in this order, each hash-checked against
+`provenance.env` first:
 
-`fix-occluded-frame-latency.patch` is a reviewed fix for the game freezing
-for good when its window is minimized or left behind on another virtual
-desktop ([#50](https://github.com/Wyze3306/BedrockOnLinux/issues/50)). It is
-**not part of the payload described above**: the build recipe, the pinned
-output hashes and every shipped engine revision still correspond to the
-unpatched source, and adopting it is a deliberate act described below.
+1. `fix-occluded-frame-latency.patch` (#50, since native14);
+2. `fix-frame-limiter-busy-wait.patch` (#202, not in a published engine yet).
+
+## Occluded frame latency (#50)
+
+`fix-occluded-frame-latency.patch` fixes the game freezing for good when its
+window is minimized or left behind on another virtual desktop
+([#50](https://github.com/Wyze3306/BedrockOnLinux/issues/50)). It has been
+part of the payload since engine `wow64-archs-native14`.
 
 ### What it fixes
 
@@ -93,22 +97,91 @@ withholding the release again.
 
 ### Adopting it
 
-The patch applies to the pinned source after the NV-DGC revert
-(`git apply` against `libs/vkd3d/swapchain.c`, verified). Building it means
-changing the payload these hashes describe, so all of the following belong in
-the same reviewed change:
+Adopted in native14: the recipe applies it after the revert verification,
+`provenance.env`, `scripts/package-engine.sh` and `OUTPUT-SHA256SUMS` pin it,
+and `bol/vkd3d.py` pins the resulting `d3d12core.dll` bytes.
 
-1. Apply it in `scripts/build-vkd3d-universal.sh` after the revert
-   verification, hash-checked against `provenance.env` the way
-   `restore-nv-dgc.patch` already is.
-2. Record its SHA-256 in `provenance.env`
-   (`aac04d2bf777345272dec90f48b715d3eaebac7b2890f2b1ece4aa8daffc3465` for the
-   file as vendored here) and add it to `PROVENANCE_FILES` and
-   `verify_reviewed_provenance()` in `scripts/package-engine.sh`, whose pinned
-   hash for `provenance.env` changes with it.
-3. Regenerate `OUTPUT-SHA256SUMS` from the new build, never by hand.
-4. Bump `WINEGDK_BUILD_REV` and the pinned hashes in `bol/vkd3d.py`, since the
-   payload no longer matches the revision currently pinned there.
+## Frame limiter busy-wait (#202)
+
+`fix-frame-limiter-busy-wait.patch` keeps the busy-wait that ends every frame
+of vkd3d-proton's frame rate limiter short under Wine
+([#202](https://github.com/Wyze3306/BedrockOnLinux/issues/202)). The recipe
+applies it after the occlusion fix and `OUTPUT-SHA256SUMS` describes the
+payload built with it: `d3d12core.dll` changes on both architectures and
+`d3d12.dll` reproduces byte for byte. No published engine contains it yet;
+see *Shipping it* below.
+
+### What it fixes
+
+When a frame rate cap is set (`VKD3D_FRAME_RATE`, or DXGI's
+`SetTargetFrameRate`), `dxgi_vk_swap_chain_delay_next_frame()` in
+`libs/vkd3d/swapchain.c` sleeps with `NtDelayExecution` until a threshold
+before each deadline, then spins with `vkd3d_pause()` for the rest. Upstream
+sets the threshold to the timer interval plus a sixth of the wait, and under
+Wine the timer interval is the 1 ms that `NtQueryTimerResolution` always
+reports (the log line `Timer interval is 1.0 ms`). The present-wait thread,
+`vkd3d-swapchain`, therefore spun for 1 ms plus a sixth of every frame: 22-23%
+of a core at 60 FPS and 25-30% at 141 FPS in the real game (RTX 4060,
+Minecraft 1.26.60.5), more than the game's own main thread in the menu. The
+launcher relies on this limiter whenever the player's cap is below the
+display's refresh rate, for `BOL_FRAME_RATE`, and for the default "limit to the
+display" cap with vsync off.
+
+Wine needs far less. A non-alertable `NtDelayExecution` is a `select()` with a
+microsecond timeout (`dlls/ntdll/unix/sync.c`), so it oversleeps by the host's
+timer slack, not by a timer interval. Measured with `tools/limiter-sleep-probe.c`
+under the engine's Wine 11.14 on Linux 6.16 (Ryzen 5 5600, 12 threads), for waits from
+0.1 to 15 ms:
+
+| load | median oversleep | p99 | worst |
+|---|---|---|---|
+| idle | 56-60 µs | 63-126 µs | 0.28 ms, plus one 5 ms scheduling hiccup |
+| 12 busy threads | 55-57 µs | 57-68 µs | 0.31 ms |
+
+The same probe replays the limiter's tail. Upstream's threshold spins for 22%
+of the thread's time at 60 FPS and 30% at 141 FPS (the in-game figures), and
+under full CPU contention it is also the less punctual one, because the
+scheduler preempts a thread that spins that long: 3.5 ms late at the 90th
+percentile at 60 FPS. A fixed 0.5 ms tail spins for 2.6% and 6.2% and released
+every frame on time at the 90th percentile in both runs.
+
+So under Wine, when `NtDelayExecution` is available, the patch uses a fixed
+0.5 ms tail, comfortably above the worst oversleep measured outside scheduling
+hiccups. Windows and native Linux builds keep the upstream threshold. With
+`VKD3D_DEBUG=info` the log says `Using a fixed 0.5 ms busy-wait tail for the
+frame rate limiter.`
+
+### Measured in the game
+
+Real launcher and game (Minecraft 1.26.60.5, RTX 4060, driver 550) in a
+headless gamescope at 1600x900 and 144 Hz, vsync on, main menu, cap set with
+`BOL_FRAME_RATE`. The patched `d3d12core.dll` was bind-mounted over the
+installed engine in a private mount namespace, and its bytes were checked in
+the game's own mappings. CPU is per thread over 10-15 s windows, in % of one
+core; frame times are the intervals between the present-wait thread's releases
+of the frame latency object (`NTSYNC_IOC_SEM_POST`) over 15 s.
+
+| cap | build | `vkd3d-swapchain` | whole game | frame time median / p99 / max |
+|---|---|---|---|---|
+| 60 FPS | upstream threshold | 20.0-21.7% | 53-60% | 16.67 / 17.15 / 173.6 ms |
+| 60 FPS | fixed 0.5 ms tail | 3.8-5.9% | 35-37% | 16.67 / 16.68 / 16.77 ms |
+
+### Shipping it
+
+Shipping it is a new engine revision, so it waits for the maintainer's go-ahead:
+
+1. Publish the payload: `gh workflow run build-vkd3d.yml --ref <branch> -f
+   publish=true`.
+2. Bump `WINEGDK_BUILD_REV` in `bol/config.py` and
+   `REQUIRED_VARIANT_HASHES_BUILD_REV` in `bol/vkd3d.py` together, and set the
+   `d3d12core.dll` hashes of both variants in `REQUIRED_VARIANT_HASHES` to
+   `fb087ac16045927ffe2003ef210925b53d701add127927957fc0e8647c89b8aa`
+   (x86_64) and `ec67019917132762cda430bd0f12df2d352937bb98345b336f5a2f93bab9ddb0`
+   (i386). The `d3d12.dll` hashes stay.
+3. Build the engine in two passes as usual: the first run of
+   `build-engine.yml` prints the archive SHA-256 to pin as
+   `WINEGDK_ARCHIVE_SHA256`, the second publishes it. The WineGDK prefix is
+   reused unchanged.
 
 ## Rebuild
 

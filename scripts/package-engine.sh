@@ -305,6 +305,7 @@ PROVENANCE_FILES=(
   OUTPUT-SHA256SUMS
   restore-nv-dgc.patch
   fix-occluded-frame-latency.patch
+  fix-frame-limiter-busy-wait.patch
 )
 WINEGDK_R12_PROVENANCE_FILES=(
   README.md
@@ -348,13 +349,13 @@ verify_reviewed_provenance() {
     "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551" \
     "vkd3d-proton LGPL notice"
   verify_sha256 "$root/provenance.env" \
-    "f46ed5078a90958968ff40c2c9b5caf1c79fb5adaa34ac2a1f5c1c47f5e36e58" \
+    "87549af36ef94dca229915e2c4479b58d75c58f47e7897b36f0390dfef2773b2" \
     "vkd3d-proton provenance lock"
   verify_sha256 "$root/submodules.lock" \
     "19ae5e28d0828ebf911fe99569e4de56328ea39e1a076a11506a78d98c76f3aa" \
     "vkd3d-proton submodule lock"
   verify_sha256 "$root/OUTPUT-SHA256SUMS" \
-    "09d22ca93ae4b0a2f99294a43cec6a89a2bd92b96dffb14f2fcc5cf66685b3df" \
+    "32d230b6254d2a07a63423957a025bbe422ae69fd39246a76d3c17866c93290a" \
     "vkd3d-proton output hash lock"
   verify_sha256 "$root/restore-nv-dgc.patch" \
     "91878d389dc0e315f770fa6c7fffea8f78f410a04796c38e2a6410ff0b9b4a33" \
@@ -362,6 +363,9 @@ verify_reviewed_provenance() {
   verify_sha256 "$root/fix-occluded-frame-latency.patch" \
     "aac04d2bf777345272dec90f48b715d3eaebac7b2890f2b1ece4aa8daffc3465" \
     "vkd3d-proton occluded frame-latency fix"
+  verify_sha256 "$root/fix-frame-limiter-busy-wait.patch" \
+    "509609ba06eb5b6805fcc0d6a260cc16506c2564a9f78a8b26dca3afde4ca202" \
+    "vkd3d-proton frame-limiter busy-wait fix"
 }
 
 verify_winegdk_source_provenance() {
