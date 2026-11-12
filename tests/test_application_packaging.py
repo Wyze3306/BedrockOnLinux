@@ -200,10 +200,11 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
         self.assertEqual(
             deps.GUI_INSTALL_REQUIREMENTS,
             (
-                "PySide6-Essentials==6.9.3",
+                "PySide6-Essentials==" + deps.pyside6_line(),
                 "python-xlib==0.33",
             ),
         )
+        self.assertEqual(deps.pyside6_line((3, 12)), "6.9.3")
 
     def test_every_module_bol_deps_installs_is_one_bol_imports(self):
         # A missing GUI_DEPS module makes ensure_gui_deps() pip-install the
@@ -383,6 +384,39 @@ QT_HOST_LIBRARIES = {
     "libEGL.so.1":             ("libegl1",             "libEGL.so.1"),
 }
 
+# What the AppImage carries of Qt's host libraries itself, from the pinned
+# Debian 11 snapshot: soname -> (pool file, file inside the package, SHA-256
+# of the package as Debian's own signed Packages index gives it).
+APPIMAGE_BUNDLED_LIBRARIES = {
+    "libxcb-util.so.1": (
+        "libxcb-util1_0.4.0-1+b1_amd64.deb", "libxcb-util.so.1.0.0",
+        "4c48af51fb2ac1be0490067e7450aeda27bf6c6c395165de02199eee4835336f"),
+    "libxcb-cursor.so.0": (
+        "libxcb-cursor0_0.1.1-4_amd64.deb", "libxcb-cursor.so.0.0.0",
+        "bab731cd0143303f77461dd0a03ad20807bd3d767d5d6af6a11ff99c3b7aeac3"),
+    "libxcb-image.so.0": (
+        "libxcb-image0_0.4.0-1+b3_amd64.deb", "libxcb-image.so.0.0.0",
+        "36a381bb18c9f349a53457c66b3d1825631f3e50c4f6c12326cf05257302172d"),
+    "libxcb-keysyms.so.1": (
+        "libxcb-keysyms1_0.4.0-1+b2_amd64.deb", "libxcb-keysyms.so.1.0.0",
+        "aed1436db9a3e63b10d00c4ed16248b5c82b5dd2963a83a761f406af65eb4b49"),
+    "libxcb-render-util.so.0": (
+        "libxcb-render-util0_0.3.9-1+b1_amd64.deb",
+        "libxcb-render-util.so.0.0.0",
+        "be4b38a63e65c84e2f1322f044d05a9baa677e0f3dc68b742a0a109a3ff40ae9"),
+    "libxcb-icccm.so.4": (
+        "libxcb-icccm4_0.4.1-1.1_amd64.deb", "libxcb-icccm.so.4.0.0",
+        "f323194cb04cd4e5ae064fafec39db6dcf8a431cbd65a0bc53fa6c359862d8ff"),
+    "libxcb-shape.so.0": (
+        "libxcb-shape0_1.14-3_amd64.deb", "libxcb-shape.so.0.0.0",
+        "d0f942240fc5c1b11514c726a1cba1bad80506a15c837ce2a9f11c9b313c4851"),
+    # Not an xcb plugin dependency: libQt6Core's.
+    "libgthread-2.0.so.0": (
+        "libglib2.0-0_2.66.8-1+deb11u4_amd64.deb",
+        "libgthread-2.0.so.0.6600.8",
+        "7aff8c1338b58a6fa2b3a914724040a2b7f6e8dc2333f30c98834f7948f1884f"),
+}
+
 
 class QtRuntimeDependencyTests(unittest.TestCase):
     """Qt aborts the process natively when its platform plugin cannot load --
@@ -409,6 +443,25 @@ class QtRuntimeDependencyTests(unittest.TestCase):
             missing, [],
             "build-deb.sh does not declare these, so the launcher aborts "
             f"before it can report anything: {missing}")
+
+    def test_the_rpm_requires_nothing_by_a_single_distributions_name(self):
+        # "webkit2gtk4.1" is Fedora's name: openSUSE calls the same library
+        # libwebkit2gtk-4_1-0, and zypper refused the whole package ("nothing
+        # provides 'webkit2gtk4.1'"). A soname, a file path, or a name every
+        # RPM distribution shares is what a Requires may say.
+        shared = {"python3", "python3-cryptography", "tar", "zstd",
+                  "xdg-utils", "ca-certificates"}
+        for line in self._declared_rpm().splitlines():
+            if not line.startswith("Requires:"):
+                continue
+            wanted = line.split(":", 1)[1].strip()
+            with self.subTest(requires=wanted):
+                self.assertTrue(
+                    wanted.endswith("()(64bit)") or wanted.startswith("/")
+                    or wanted.startswith("(")
+                    or wanted.split()[0] in shared, wanted)
+        self.assertIn("Requires:       libwebkit2gtk-4.1.so.0()(64bit)",
+                      self._declared_rpm())
 
     def test_the_rpm_declares_every_library_the_xcb_plugin_loads(self):
         script = self._declared_rpm()
@@ -460,14 +513,34 @@ class AppImageBundledLibraryTests(unittest.TestCase):
             script)
         # Beside the wheel's own Qt libraries, where libQt6Core's $ORIGIN
         # RUNPATH finds it, with the package's licence kept alongside ours.
-        self.assertIn('"$QT_LIB/libzstd.so.1"', script)
-        self.assertIn("libzstd1.copyright", script)
+        self.assertIn('"$QT_LIB/$soname"', script)
+        self.assertIn('"libzstd.so.1.4.8" "libzstd.so.1"', script)
+        self.assertIn('${package%%_*}.copyright', script)
         self.assertNotIn("libzstd.so.1", self._declared_host_libraries())
+
+    def test_the_appimage_bundles_what_stock_desktops_lack(self):
+        # Stock Ubuntu 22.04/24.04 desktops, and Mint with them, install no
+        # libxcb-cursor0: Qt then refuses its xcb plugin and aborts the
+        # launcher on every X11 session, before Python can say anything. A
+        # stock openSUSE Tumbleweed has neither libgthread-2_0-0, without
+        # which PySide6.QtCore does not even import, nor libxcb-shape0.
+        script = self._script()
+        rpm = (ROOT / "scripts/build-rpm.sh").read_text(encoding="utf-8")
+        for soname, (package, member, sha256) in \
+                APPIMAGE_BUNDLED_LIBRARIES.items():
+            self.assertIn(f"/{package}", script, soname)
+            self.assertIn(sha256, script, soname)
+            self.assertIn(f'"{member}" "{soname}"', script, soname)
+            self.assertNotIn(soname, self._declared_host_libraries())
+            # The .rpm keeps declaring them: its PySide6 is the same wheel,
+            # without the bundled copies.
+            self.assertIn(f"Requires:       {soname}()(64bit)", rpm, soname)
 
     def test_the_appimage_audit_and_the_packages_name_the_same_host_stack(self):
         declared = self._declared_host_libraries()
         missing = sorted(soname for soname in QT_HOST_LIBRARIES
-                         if soname not in declared)
+                         if soname not in declared
+                         and soname not in APPIMAGE_BUNDLED_LIBRARIES)
         self.assertEqual(
             missing, [],
             "the AppImage audit would accept these silently even though the "

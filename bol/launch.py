@@ -29,6 +29,7 @@ from . import (
     packcache,
     presence as xbl_presence,
     saves,
+    slr_locales,
     supervision,
     virtual_desktop,
     xodus,
@@ -1167,6 +1168,11 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
             "Minecraft was not started; click PLAY again.")
     apply_custom_env(env, s.get("custom_env") or "")
     _warn_custom_env_overrides(s.get("custom_env") or "")
+    # After the custom environment, which can change LANG or keep
+    # pressure-vessel's own locale generation: a host without en_US.UTF-8 or
+    # without the player's locale gets the copy built at the first launch,
+    # instead of 3 to 6 seconds of locale generation at every one.
+    slr_locales.configure(env)
     # Outermost of all, so the scope holds everything above it, gamescope
     # included; and after the custom environment, where its opt-out lives.
     cmd = _keep_game_out_of_swap(cmd, env)

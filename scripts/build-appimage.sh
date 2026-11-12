@@ -10,12 +10,13 @@
 # The full list is pinned in tests/test_application_packaging.py
 # (QT_HOST_LIBRARIES) and declared by the .deb and .rpm; the short version is
 # libX11/libX11-xcb, libxkbcommon(-x11), libGL/libEGL, fontconfig, freetype
-# and the xcb-util family (cursor, icccm, image, keysyms, render-util, util).
+# and libxcb with its extensions.
 #
 # Everything else Qt links that is *not* a GUI or driver library is bundled
-# here instead -- libzstd first among them (issue #205) -- and the host
-# dependency audit below fails the build if that list ever grows behind our
-# back.
+# here instead -- libzstd (issue #205) and the xcb-util family (cursor,
+# icccm, image, keysyms, render-util, util), which stock Ubuntu and Mint
+# desktops do not install -- and the host dependency audit below fails the
+# build if that list ever grows behind our back.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -108,35 +109,34 @@ echo "== installing portable cryptography + certifi + PySide6-Essentials + pytho
 # site-packages), so drop them before the relocatability audit below.
 rm -f "$PYHOME"/bin/pyside6-* 2>/dev/null || true
 
-# libQt6Core.so.6 links libzstd.so.1, and unlike the X11/GL stack above that
-# is no host GUI library: a system with no zstd runtime at all -- NixOS via
-# appimage-run, a minimal container -- fails the launcher's very first
-# `import PySide6.QtCore` with "libzstd.so.1: cannot open shared object file"
-# and never draws a window (issue #205). It is not on the AppImage excludelist
-# either, so bundle it beside the wheel's own libicu, taken from the pinned
-# Debian 11 snapshot the containerised builds already use: identical bytes on
-# every build host, and GLIBC_2.14 at most -- well under the baseline below.
 QT_LIB="$PYLIB/python3.12/site-packages/PySide6/Qt/lib"
 [[ -d "$QT_LIB" ]] || {
   echo "!! the PySide6 wheel no longer keeps its Qt libraries in Qt/lib" >&2
   exit 1
 }
-ZSTD_DEB="$CACHE/libzstd1_1.4.8+dfsg-2.1_amd64.deb"
-download_verified \
-  "https://snapshot.debian.org/archive/debian/20260701T000000Z/pool/main/libz/libzstd/libzstd1_1.4.8%2Bdfsg-2.1_amd64.deb" \
-  "$ZSTD_DEB" \
-  "5dcadfbb743bfa1c1c773bff91c018f835e8e8c821d423d3836f3ab84773507b" \
-  "Debian 11 libzstd1"
-echo "== bundling libzstd.so.1, the one non-GUI library Qt asked the host for"
-python3 - "$ZSTD_DEB" "$QT_LIB/libzstd.so.1" \
-    "$APPDIR/usr/share/licenses/bedrock-on-linux/libzstd1.copyright" <<'PY'
+# Libraries Qt links that the AppImage carries itself, taken from the pinned
+# Debian 11 snapshot the containerised builds already use: identical bytes on
+# every build host, and an old enough glibc for the baseline audited below.
+# They go beside the wheel's own libicu, in Qt/lib, where the $ORIGIN RUNPATH
+# of libQt6Core and libQt6XcbQpa finds them before any host copy.
+DEBIAN_SNAPSHOT="https://snapshot.debian.org/archive/debian/20260701T000000Z"
+bundle_deb_library() {
+  local pool="$1" sha256="$2" member="$3" soname="$4" package deb
+  package="$(basename "$pool")"
+  deb="$CACHE/$package"
+  download_verified "$DEBIAN_SNAPSHOT/${pool//+/%2B}" "$deb" "$sha256" \
+    "Debian 11 ${package%%_*}"
+  python3 - "$deb" "$member" "$QT_LIB/$soname" \
+      "$APPDIR/usr/share/licenses/bedrock-on-linux/${package%%_*}.copyright" \
+      <<'PY'
 import io
 import lzma
 import sys
 import tarfile
 from pathlib import Path
 
-package, library, licence = (Path(value) for value in sys.argv[1:4])
+package, member, library, licence = sys.argv[1:5]
+package, library, licence = Path(package), Path(library), Path(licence)
 raw = package.read_bytes()
 if raw[:8] != b"!<arch>\n":
     raise SystemExit(f"{package} is not a Debian package")
@@ -153,18 +153,19 @@ while offset + 60 <= len(raw):
     offset = start + size + size % 2
 if "data.tar.xz" not in members:
     raise SystemExit(f"{package} carries no data.tar.xz")
+binary = package.name.split("_", 1)[0]
 wanted = {
-    "./usr/lib/x86_64-linux-gnu/libzstd.so.1.4.8": library,
-    "./usr/share/doc/libzstd1/copyright": licence,
+    "./usr/lib/x86_64-linux-gnu/" + member: library,
+    f"./usr/share/doc/{binary}/copyright": licence,
 }
 with tarfile.open(fileobj=io.BytesIO(lzma.decompress(members["data.tar.xz"])),
                   mode="r:") as payload:
     for name, destination in wanted.items():
         try:
-            member = payload.getmember(name)
+            entry = payload.getmember(name)
         except KeyError:
             raise SystemExit(f"{package.name} no longer contains {name}")
-        source = payload.extractfile(member)
+        source = payload.extractfile(entry)
         if source is None:
             raise SystemExit(f"{name} is not a regular file in {package.name}")
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -172,6 +173,71 @@ with tarfile.open(fileobj=io.BytesIO(lzma.decompress(members["data.tar.xz"])),
         destination.chmod(0o755 if destination == library else 0o644)
 print(f"  bundled {library.name} + its licence from {package.name}")
 PY
+}
+
+# libQt6Core.so.6 links libzstd.so.1, and unlike the X11/GL stack above that
+# is no host GUI library: a system with no zstd runtime at all -- NixOS via
+# appimage-run, a minimal container -- fails the launcher's very first
+# `import PySide6.QtCore` with "libzstd.so.1: cannot open shared object file"
+# and never draws a window (issue #205). It is not on the AppImage excludelist
+# either. GLIBC_2.14 at most -- well under the baseline below.
+echo "== bundling libzstd.so.1, the one non-GUI library Qt asked the host for"
+bundle_deb_library \
+  "pool/main/libz/libzstd/libzstd1_1.4.8+dfsg-2.1_amd64.deb" \
+  "5dcadfbb743bfa1c1c773bff91c018f835e8e8c821d423d3836f3ab84773507b" \
+  "libzstd.so.1.4.8" "libzstd.so.1"
+
+# Qt's xcb platform plugin also links the xcb-util family, and those are not
+# libxcb: they come from six small source packages that a desktop only has
+# when something else pulled them in. Stock Ubuntu 22.04 and 24.04 -- and so
+# Mint -- install no libxcb-cursor0, and Debian, Fedora and Arch desktops
+# vary. Without it Qt 6.5+ refuses the plugin ("xcb-cursor0 or
+# libxcb-cursor0 is needed to load the Qt xcb platform plugin") and aborts
+# the process, on every X11 session. linuxdeploy's Qt plugin bundles them for
+# the same reason; libxcb itself and its extensions stay host libraries.
+echo "== bundling the xcb-util libraries Qt's xcb plugin links"
+bundle_deb_library \
+  "pool/main/x/xcb-util/libxcb-util1_0.4.0-1+b1_amd64.deb" \
+  "4c48af51fb2ac1be0490067e7450aeda27bf6c6c395165de02199eee4835336f" \
+  "libxcb-util.so.1.0.0" "libxcb-util.so.1"
+bundle_deb_library \
+  "pool/main/x/xcb-util-cursor/libxcb-cursor0_0.1.1-4_amd64.deb" \
+  "bab731cd0143303f77461dd0a03ad20807bd3d767d5d6af6a11ff99c3b7aeac3" \
+  "libxcb-cursor.so.0.0.0" "libxcb-cursor.so.0"
+bundle_deb_library \
+  "pool/main/x/xcb-util-image/libxcb-image0_0.4.0-1+b3_amd64.deb" \
+  "36a381bb18c9f349a53457c66b3d1825631f3e50c4f6c12326cf05257302172d" \
+  "libxcb-image.so.0.0.0" "libxcb-image.so.0"
+bundle_deb_library \
+  "pool/main/x/xcb-util-keysyms/libxcb-keysyms1_0.4.0-1+b2_amd64.deb" \
+  "aed1436db9a3e63b10d00c4ed16248b5c82b5dd2963a83a761f406af65eb4b49" \
+  "libxcb-keysyms.so.1.0.0" "libxcb-keysyms.so.1"
+bundle_deb_library \
+  "pool/main/x/xcb-util-renderutil/libxcb-render-util0_0.3.9-1+b1_amd64.deb" \
+  "be4b38a63e65c84e2f1322f044d05a9baa677e0f3dc68b742a0a109a3ff40ae9" \
+  "libxcb-render-util.so.0.0.0" "libxcb-render-util.so.0"
+bundle_deb_library \
+  "pool/main/x/xcb-util-wm/libxcb-icccm4_0.4.1-1.1_amd64.deb" \
+  "f323194cb04cd4e5ae064fafec39db6dcf8a431cbd65a0bc53fa6c359862d8ff" \
+  "libxcb-icccm.so.4.0.0" "libxcb-icccm.so.4"
+
+# Two more that a stock desktop can lack, both seen on openSUSE Tumbleweed.
+# libQt6Core links libgthread-2.0, and openSUSE splits it out of GLib into
+# libgthread-2_0-0, which no desktop pattern installs (only ten packages in
+# the whole distribution require it, none of them Qt or GTK): `import
+# PySide6.QtCore` fails there before the launcher can draw anything. Since
+# GLib 2.32 it is an empty compatibility shim over libglib, so a copy cannot
+# shadow anything of the host's. The xcb plugin also links libxcb-shape,
+# which comes with neither libxcb nor the X server there.
+echo "== bundling libgthread-2.0 and libxcb-shape"
+bundle_deb_library \
+  "pool/main/libx/libxcb/libxcb-shape0_1.14-3_amd64.deb" \
+  "d0f942240fc5c1b11514c726a1cba1bad80506a15c837ce2a9f11c9b313c4851" \
+  "libxcb-shape.so.0.0.0" "libxcb-shape.so.0"
+bundle_deb_library \
+  "pool/main/g/glib2.0/libglib2.0-0_2.66.8-1+deb11u4_amd64.deb" \
+  "7aff8c1338b58a6fa2b3a914724040a2b7f6e8dc2333f30c98834f7948f1884f" \
+  "libgthread-2.0.so.0.6600.8" "libgthread-2.0.so.0"
 
 PY3="$PYLIB/python3.12"
 rm -rf "$PY3/test" "$PY3/idlelib" "$PY3/turtledemo" "$PY3/tkinter/test" \
@@ -285,22 +351,20 @@ print("  AppImage ABI OK: %d ELF files, maximum GLIBC_%d.%d (%s)" %
 
 # Libraries the host is expected to own. Nearly all are on the AppImage
 # excludelist -- the C/C++ runtime, the X11/GL stack, zlib, fontconfig and
-# freetype -- and glib, gthread and D-Bus stay host libraries too, because a
-# bundled copy would shadow the desktop's own GTK/D-Bus stack for the whole
-# process. Anything Qt needs that is not in here has to be bundled instead.
+# freetype -- and glib and D-Bus stay host libraries too, because a bundled
+# copy would shadow the desktop's own GTK/D-Bus stack for the whole process.
+# Anything Qt needs that is not in here has to be bundled instead.
 # Keep in step with QT_HOST_LIBRARIES in tests/test_application_packaging.py
 # and with the .deb/.rpm dependency lists.
 host_libraries = {
     "ld-linux-x86-64.so.2", "libc.so.6", "libdl.so.2", "libm.so.6",
     "libpthread.so.0", "librt.so.1", "libgcc_s.so.1", "libstdc++.so.6",
-    "libz.so.1", "libglib-2.0.so.0", "libgthread-2.0.so.0", "libdbus-1.so.3",
+    "libz.so.1", "libglib-2.0.so.0", "libdbus-1.so.3",
     "libfontconfig.so.1", "libfreetype.so.6", "libGL.so.1", "libEGL.so.1",
     "libX11.so.6", "libX11-xcb.so.1", "libxkbcommon.so.0",
-    "libxkbcommon-x11.so.0", "libxcb.so.1", "libxcb-cursor.so.0",
-    "libxcb-icccm.so.4", "libxcb-image.so.0", "libxcb-keysyms.so.1",
-    "libxcb-randr.so.0", "libxcb-render.so.0", "libxcb-render-util.so.0",
-    "libxcb-shape.so.0", "libxcb-shm.so.0", "libxcb-sync.so.1",
-    "libxcb-util.so.1", "libxcb-xfixes.so.0", "libxcb-xkb.so.1",
+    "libxkbcommon-x11.so.0", "libxcb.so.1", "libxcb-randr.so.0",
+    "libxcb-render.so.0", "libxcb-shm.so.0",
+    "libxcb-sync.so.1", "libxcb-xfixes.so.0", "libxcb-xkb.so.1",
 }
 # What bol.gui imports, and what Qt loads behind it to put a window on the
 # screen. Plugins Qt only tries opportunistically -- image formats, SQL

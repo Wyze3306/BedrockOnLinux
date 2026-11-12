@@ -509,6 +509,87 @@ class LauncherStartTests(unittest.TestCase):
         self.assertIn("libzstd.so.1", output.getvalue())
         self.assertNotIn("Traceback", output.getvalue())
 
+    def test_a_library_qt_core_links_is_named_with_its_package(self):
+        # A stock openSUSE has no libgthread-2_0-0: a PyPI PySide6 then fails
+        # its very first import, and from a menu nobody saw why.
+        refused = ImportError("libgthread-2.0.so.0: cannot open shared object "
+                              "file: No such file or directory")
+        real_import = builtins.__import__
+
+        def without_qt(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "gui" or name.endswith("bol.gui"):
+                raise refused
+            return real_import(name, globals, locals, fromlist, level)
+
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", ["bedrock-on-linux", "gui"]), \
+                mock.patch.dict(os.environ, {"WAYLAND_DISPLAY": "wayland-0",
+                                             "XDG_SESSION_TYPE": "wayland",
+                                             "QT_QPA_PLATFORM": ""}), \
+                mock.patch.object(deps, "have", return_value=True), \
+                mock.patch.object(deps, "fill_qt_library_gaps",
+                                  return_value=[]) as filled, \
+                mock.patch.object(deps, "missing_qt_libraries",
+                                  return_value=["libgthread-2.0.so.0",
+                                                "libxcb-shape.so.0"]), \
+                mock.patch("shutil.which",
+                           side_effect=lambda name: "/usr/bin/zypper"
+                           if name == "zypper" else None), \
+                mock.patch.object(builtins, "__import__", without_qt), \
+                mock.patch.object(cli, "IS_TTY", False), \
+                mock.patch.object(cli, "desktop_notify") as notified, \
+                contextlib.redirect_stdout(output), \
+                self.assertRaises(SystemExit) as exited:
+            cli.main()
+        self.assertEqual(exited.exception.code, 1)
+        filled.assert_called_once_with()
+        # Both at once: the loader only ever names the first.
+        self.assertIn("libgthread-2.0.so.0 and libxcb-shape.so.0",
+                      output.getvalue())
+        self.assertIn("sudo zypper install libgthread-2_0-0 libxcb-shape0",
+                      output.getvalue())
+        self.assertIn("libgthread-2.0.so.0", notified.call_args[0][0])
+
+    def test_an_x11_plugin_qt_would_abort_on_is_named_first(self):
+        # Stock Ubuntu and Mint have no libxcb-cursor0: Qt's xcb plugin then
+        # aborts the process, with nothing on screen from a menu launch.
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", ["bedrock-on-linux", "gui"]), \
+                mock.patch.dict(os.environ, {"DISPLAY": ":0",
+                                             "XDG_SESSION_TYPE": "x11",
+                                             "QT_QPA_PLATFORM": ""}), \
+                mock.patch.object(deps, "ensure_gui_deps", return_value=[]), \
+                mock.patch.object(deps, "have", return_value=True), \
+                mock.patch.object(deps, "xcb_plugin_missing_library",
+                                  return_value="libxcb-cursor.so.0"), \
+                mock.patch.object(deps, "install_hint",
+                                  return_value="sudo apt install libxcb-cursor0"), \
+                mock.patch.object(deps, "missing_qt_libraries",
+                                  return_value=["libxcb-cursor.so.0"]), \
+                mock.patch.object(cli, "IS_TTY", False), \
+                mock.patch.object(cli, "desktop_notify") as notified, \
+                mock.patch("bol.gui.gui") as window, \
+                contextlib.redirect_stdout(output), \
+                self.assertRaises(SystemExit) as exited:
+            cli.main()
+        self.assertEqual(exited.exception.code, 1)
+        self.assertIn("sudo apt install libxcb-cursor0", output.getvalue())
+        self.assertIn("libxcb-cursor.so.0", notified.call_args[0][0])
+        window.assert_not_called()
+
+    def test_a_wayland_session_is_not_held_back_by_the_x11_plugin(self):
+        with mock.patch.object(sys, "argv", ["bedrock-on-linux", "gui"]), \
+                mock.patch.dict(os.environ, {"WAYLAND_DISPLAY": "wayland-0",
+                                             "XDG_SESSION_TYPE": "wayland"}), \
+                mock.patch.object(deps, "have", return_value=True), \
+                mock.patch.object(deps, "xcb_plugin_missing_library",
+                                  return_value="libxcb-cursor.so.0") as probe, \
+                mock.patch("bol.gui.gui") as window:
+            os.environ.pop("QT_QPA_PLATFORM", None)
+            cli.main()
+        probe.assert_not_called()
+        window.assert_called_once_with()
+
     def test_a_gui_import_failure_of_our_own_making_still_raises(self):
         # Only the loader's "cannot open shared object file" is answered with
         # a system library to install; a broken import inside bol.gui is a bug

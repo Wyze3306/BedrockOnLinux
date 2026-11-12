@@ -189,19 +189,48 @@ def _open_gui():
             "not installed here and could not be installed automatically. "
             "Install it with pip, or use the AppImage, Flatpak, .deb or .rpm "
             f"— each of those carries it. `{APP} play` needs none of it.")
+    # The toolkit the launcher fetched itself also gets the system libraries
+    # Qt links and this host lacks (libgthread-2.0 on openSUSE, the xcb-util
+    # family on Ubuntu and Mint); a system or pip one is left as it is.
+    deps.fill_qt_library_gaps()
     # Qt picks its platform when it starts, so before bol.gui is imported.
     _prefer_x11_on_chromeos()
+    # And a plugin it cannot load is not an exception but an abort, with
+    # nothing on screen when the menu started the launcher: Ubuntu and Mint
+    # install no libxcb-cursor0, which a pip PySide6 needs.
+    library = deps.xcb_plugin_missing_library() if deps.qt_will_use_xcb() \
+        else None
+    if library:
+        _missing_gui_library(deps, library, " for Qt's X11 support")
     try:
         from .gui import gui
     except ImportError as exc:
         library = deps.missing_shared_library(exc)
         if library is None:
             raise
-        die(f"The launcher window needs the system library {library}, which "
-            f"this system does not have. Install the package your "
-            f"distribution ships it in, then open the launcher again — "
-            f"`{APP} play` and `{APP} doctor` keep working without it.")
+        _missing_gui_library(deps, library)
     gui()
+
+
+def _missing_gui_library(deps, library, purpose=""):
+    # Every one this host lacks, not only the one the loader stopped at.
+    libraries = deps.missing_qt_libraries(library)
+    hint = deps.install_hint(*libraries)
+    if len(libraries) == 1:
+        needs, them = f"the system library {library}{purpose}", "it"
+        where = "the package your distribution ships it in"
+    else:
+        needs = (f"the system libraries {', '.join(libraries[:-1])} and "
+                 f"{libraries[-1]}")
+        them, where = "them", "the packages your distribution ships them in"
+    message = (
+        f"The launcher window needs {needs}, which this system does not "
+        f"have. Install {f'{them} ({hint})' if hint else where}, then open "
+        f"the launcher again — `{APP} play` and `{APP} doctor` keep working "
+        f"without {them}.")
+    if not IS_TTY:
+        desktop_notify(message)
+    die(message)
 
 
 def _report_launch_failure(message):

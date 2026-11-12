@@ -9,9 +9,9 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 dynamic = ["version"]
-# What bol.deps installs with pip on first start when it is missing
-# (GUI_DEPS, LOGIN_DEPS). With any of it missing, the launcher pip-installs
-# its own pinned GUI stack over what this installed. PySide6 rather than
+# What bol.deps installs on first start when it is missing (GUI_DEPS,
+# LOGIN_DEPS). With any of it missing, the launcher fetches its own pinned
+# GUI stack into its data directory, behind what this installed. PySide6 rather than
 # PySide6-Essentials: that is the name distributions package it under.
 dependencies = [
   "PySide6",

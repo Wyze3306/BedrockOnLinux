@@ -777,14 +777,23 @@ if __name__ == "__main__":
 class ContainerLocaleTests(unittest.TestCase):
     """A locale the host lacks is rebuilt by pressure-vessel at every launch."""
 
-    def _problem(self, environ, present, flatpak=False):
+    def _problem(self, environ, present, flatpak=False, kept="failed"):
         with tempfile.TemporaryDirectory() as td:
             info = Path(td) / ".flatpak-info"
             if flatpak:
                 info.write_text("[Application]\n")
             return perfcheck.container_locale_problem(
                 environ, available=lambda name: name in present,
-                flatpak_info=info)
+                flatpak_info=info, kept_state=kept)
+
+    def test_quiet_while_the_launcher_keeps_or_will_keep_a_copy(self):
+        # bol.slr_locales builds the locales once and hands them over at
+        # every later launch: only a copy it could not build still costs.
+        for kept in ("cached", "pending", "none-needed", None):
+            self.assertIsNone(self._problem(
+                {"LANG": "fr_FR.UTF-8"}, {"fr_FR.UTF-8"}, kept=kept), kept)
+        problem = self._problem({"LANG": "fr_FR.UTF-8"}, {"fr_FR.UTF-8"})
+        self.assertIn("slr-locales.log", problem)
 
     def test_a_missing_en_us_is_named_with_the_fix(self):
         problem = self._problem({"LANG": "fr_FR.UTF-8"}, {"fr_FR.UTF-8"})
@@ -809,7 +818,8 @@ class ContainerLocaleTests(unittest.TestCase):
     def test_an_unknown_answer_says_nothing(self):
         self.assertIsNone(perfcheck.container_locale_problem(
             {"LANG": "fr_FR.UTF-8"}, available=lambda _name: None,
-            flatpak_info=Path("/nonexistent/.flatpak-info")))
+            flatpak_info=Path("/nonexistent/.flatpak-info"),
+            kept_state="failed"))
 
     def test_glibc_is_asked_without_changing_this_process(self):
         import locale

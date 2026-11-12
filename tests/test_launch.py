@@ -128,6 +128,10 @@ class ReadyLaunchHarness:
             # Nor the real game's resource pack cache.
             mock.patch.object(launch.packcache, "prune",
                               return_value=(0, 0)),
+            # Nor the machine's own Steam Linux Runtime, which would build
+            # its locales for real.
+            mock.patch.object(launch.slr_locales, "configure",
+                              side_effect=self._configure_locales),
             mock.patch.object(launch.saves, "ran_signed_out",
                               return_value=signed_out),
             mock.patch.object(launch, "diagnose",
@@ -165,6 +169,11 @@ class ReadyLaunchHarness:
             return launch._launch_once(lock_fds=lock_fds,
                                        on_started=on_started,
                                        notices=notices, editor=editor)
+
+    def _configure_locales(self, env):
+        self.locales_env = dict(env)
+        env.update(getattr(self, "locales_update", {}))
+        return None
 
     def _before_launch(self, _settings):
         self.options_calls.append("before_launch")
@@ -1947,3 +1956,33 @@ class ParallelMsaRefreshTests(unittest.TestCase):
             with self.assertRaises(Stop):
                 launch._launch_once()
         self.assertEqual(saved, ["new"])
+
+
+class ContainerLocalesLaunchTests(ReadyLaunchHarness, unittest.TestCase):
+    """The kept locales follow the environment the game really starts with."""
+
+    def test_built_from_the_final_environment(self):
+        def popen(_cmd, **kwargs):
+            self.started_env = kwargs["env"]
+            proc = mock.Mock()
+            proc.wait.return_value = 0
+            return proc
+
+        with tempfile.TemporaryDirectory() as td:
+            self._exercise_ready_launch(
+                Path(td), popen, arm=lambda: "owned-token",
+                disarm=lambda _token: True,
+                umu_env={"LANG": "fr_FR.UTF-8"},
+                # The Advanced field is where another game language comes
+                # from, and it is applied last.
+                extra_settings={"custom_env": "LANG=de_DE.UTF-8"})
+        self.assertEqual(self.locales_env["LANG"], "de_DE.UTF-8")
+        self.assertEqual(self.started_env["LANG"], "de_DE.UTF-8")
+
+    def test_the_kept_copy_reaches_the_game(self):
+        self.locales_update = {"LOCPATH": "/kept/locales",
+                               "PRESSURE_VESSEL_GENERATE_LOCALES": "0"}
+        self.test_built_from_the_final_environment()
+        self.assertEqual(self.started_env["LOCPATH"], "/kept/locales")
+        self.assertEqual(
+            self.started_env["PRESSURE_VESSEL_GENERATE_LOCALES"], "0")
