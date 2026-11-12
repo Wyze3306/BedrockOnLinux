@@ -92,6 +92,50 @@ class RailTests(unittest.TestCase):
             self.assertTrue(window.rail_buttons["home"].isChecked())
 
 
+class RailFoldTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        qt_app()
+
+    def test_the_rail_folds_to_icons_and_remembers_it(self):
+        saved = {}
+        with headless_window() as window, \
+                mock.patch("bol.gui.save_settings", side_effect=saved.update):
+            window.resize(1300, 760)
+            self.assertEqual(window.rail.width(), window.RAIL_WIDE)
+            self.assertIn("Settings", window.rail_buttons["settings"].text())
+            window.rail_fold.click()
+            self.assertEqual(window.rail.width(), window.RAIL_NARROW)
+            self.assertEqual(window.rail_buttons["settings"].text(), "⚙")
+            self.assertFalse(window.prof_label.isVisibleTo(window.rail))
+            self.assertTrue(saved.get("rail_collapsed"))
+            window.rail_fold.click()
+            self.assertEqual(window.rail.width(), window.RAIL_WIDE)
+            self.assertFalse(saved.get("rail_collapsed"))
+
+    def test_a_narrow_window_folds_the_rail_without_saving(self):
+        with headless_window() as window, \
+                mock.patch("bol.gui.save_settings") as save:
+            window.show()
+            window.resize(1300, 760)
+            _wait(lambda: window.rail.width() == window.RAIL_WIDE, 1)
+            window.resize(1000, 700)
+            self.assertTrue(_wait(
+                lambda: window.rail.width() == window.RAIL_NARROW, 2))
+            self.assertFalse(window.rail_fold.isEnabled())
+            window.resize(1300, 760)
+            self.assertTrue(_wait(
+                lambda: window.rail.width() == window.RAIL_WIDE, 2))
+            save.assert_not_called()
+
+    def test_profile_and_accounts_live_in_the_rail(self):
+        with headless_window() as window:
+            self.assertTrue(window.rail.isAncestorOf(window.prof_card))
+            self.assertTrue(window.rail.isAncestorOf(window.acct_card))
+            self.assertFalse(hasattr(window, "settings_btn"))
+
+
 class ContentPageTests(unittest.TestCase):
 
     @classmethod

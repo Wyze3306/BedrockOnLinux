@@ -138,7 +138,7 @@ class DiscoveryTests(RingTestCase):
         window = self.window()
         items, _rects = window.nav._items()
         self.assertIn(window.play_btn, items)
-        self.assertIn(window.settings_btn, items)
+        self.assertIn(window.rail_buttons["settings"], items)
         self.assertIn(window.details_btn, items)
         self.assertIn(window.stable_btn, items)
         self.assertIn(window.preview_btn, items)
@@ -176,7 +176,6 @@ class MovementTests(RingTestCase):
         window = self.window()
         self.assertIs(self.press(window, "down"), window.play_btn)
         self.assertTrue(window.nav.is_showing())
-        self.assertIs(self.press(window, "left"), window.settings_btn)
         self.assertIs(self.press(window, "left"), window.details_btn)
 
     def test_the_outline_follows_the_ring(self):
@@ -197,7 +196,7 @@ class MovementTests(RingTestCase):
         pixel in the area the ring claims has to have come from the ring.
         """
         window = self.window()
-        target = window.settings_btn
+        target = window.details_btn
         accent = QColor(window.theme.accent)
 
         def accent_pixels(pixmap):
@@ -301,8 +300,19 @@ class ActionTests(RingTestCase):
     def test_a_opens_settings_and_b_leaves_it(self):
         window = self.window()
         self.press(window, "down")
-        while window.nav._current is not window.settings_btn:
-            self.press(window, "left")
+        settings = window.rail_buttons["settings"]
+        # Left out of the dock into the rail, then along it to Settings.
+        for _ in range(30):
+            current = window.nav._current
+            if current is settings:
+                break
+            if window.rail.isAncestorOf(current):
+                above = (current.mapToGlobal(current.rect().center()).y()
+                         > settings.mapToGlobal(settings.rect().center()).y())
+                self.press(window, "up" if above else "down")
+            else:
+                self.press(window, "left")
+        self.assertIs(window.nav._current, settings)
         self.press(window, "accept")
         self.assertIs(window.stack.currentWidget(), window.settings_page)
         self.press(window, "back")

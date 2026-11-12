@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import (
-    QObject, QPoint, QPointF, QSocketNotifier, Qt, QThread, QTimer, Signal,
+    QObject, QPoint, QSocketNotifier, Qt, QThread, QTimer, Signal,
     Slot,
 )
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QGridLayout, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTabWidget, QTextBrowser, QTextEdit,
+    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QTabWidget, QTextBrowser, QTextEdit,
     QVBoxLayout, QWidget,
 )
 
@@ -40,7 +40,7 @@ from .config import (
 from .relocation import migrate_data, paths_overlap, DIRS_TO_MOVE, FILES_TO_MOVE
 from .content import game_content_dir, import_content
 from .doctor import acknowledge_gpu_crash, gpu_crash_acknowledgement_status
-from .games import (installed_builds, is_bedrock, list_editions,
+from .games import (installed_builds, list_editions,
                     list_versions, remove_build)
 from .gamesetup import do_setup
 from . import betterrtx, gpus
@@ -399,6 +399,8 @@ class Theme:
         QPushButton#IconBtn {{
             background: {self.card2};
             border-radius: 8px;
+            padding: 0px;
+            font-size: 15px;
         }}
         QPushButton#IconBtn:hover {{ background: {self.card3}; }}
         QPushButton#ToolRow {{
@@ -893,6 +895,20 @@ class Popup(QFrame):
         self.move(pos)
         self.show()
 
+    def show_beside(self, anchor: QWidget, gap=8):
+        """To the right of ``anchor``, bottom edges level, kept on screen:
+        how a menu opens from the foot of the navigation rail."""
+        self.adjustSize()
+        top_left = anchor.mapToGlobal(QPoint(anchor.width() + gap,
+                                             anchor.height() - self.height()))
+        screen = anchor.screen().availableGeometry() if anchor.screen() \
+            else None
+        if screen is not None:
+            top_left.setY(max(screen.top(), min(
+                top_left.y(), screen.bottom() - self.height())))
+        self.move(top_left)
+        self.show()
+
     def show_above(self, anchor: QWidget, gap=4):
         pos = anchor.mapToGlobal(QPoint(0, -self.height() - gap))
         self.move(pos)
@@ -1142,44 +1158,6 @@ class AccountsMenu(Popup):
         super().hideEvent(event)
 
 
-class GearButton(QAbstractButton):
-    """A drawn settings-gear icon (painted, not a font glyph/emoji)."""
-
-    def __init__(self, theme: "Theme", parent=None):
-        super().__init__(parent)
-        self._theme = theme
-        self.setFixedSize(52, 52)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setAttribute(Qt.WA_Hover, True)
-        self.setToolTip("Settings")
-
-    def set_theme(self, theme: "Theme"):
-        self._theme = theme
-        self.update()
-
-    def paintEvent(self, _event):
-        import math
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        rect = self.rect()
-        bg = QColor(self._theme.card3 if self.underMouse() else self._theme.card2)
-        p.setPen(Qt.NoPen)
-        p.setBrush(bg)
-        p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 12, 12)
-
-        cx, cy = rect.center().x(), rect.center().y()
-        outer_r, inner_r, hole_r, teeth = 11.5, 8.0, 4.2, 8
-        p.setBrush(QColor(self._theme.fg))
-        points = [
-            QPointF(cx + (outer_r if i % 2 == 0 else inner_r) * math.cos(math.pi * i / teeth),
-                    cy + (outer_r if i % 2 == 0 else inner_r) * math.sin(math.pi * i / teeth))
-            for i in range(teeth * 2)
-        ]
-        p.drawPolygon(points)
-        p.setBrush(bg)
-        p.drawEllipse(QPointF(cx, cy), hole_r, hole_r)
-
-
 # ======================================================================
 # Main window
 # ======================================================================
@@ -1319,7 +1297,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(PRETTY)
         self.resize(1120, 700)
-        self.setMinimumSize(960, 640)
+        self.setMinimumSize(1000, 640)
 
         self._load_icon()
 
@@ -1447,8 +1425,6 @@ class MainWindow(QMainWindow):
         self._paint_edition_toggle()
         for row in getattr(self, "_switches", ()):
             row.switch.set_theme(self.theme)
-        if getattr(self, "settings_btn", None):
-            self.settings_btn.set_theme(self.theme)
         if getattr(self, "nav", None) is not None:
             self.nav.set_accent(self.theme.accent)
         if getattr(self, "mods_page", None) is not None and \
@@ -1459,34 +1435,43 @@ class MainWindow(QMainWindow):
             self._refresh_accounts()
 
     # ------------------------------------------------------------ top bar
+    RAIL_WIDE = 212
+    RAIL_NARROW = 64
+
     def _build_rail(self) -> QFrame:
         rail = QFrame(); rail.setObjectName("Rail")
-        rail.setFixedWidth(196)
+        self.rail = rail
         v = QVBoxLayout(rail)
-        v.setContentsMargins(12, 14, 12, 12)
+        v.setContentsMargins(10, 12, 10, 12)
         v.setSpacing(4)
 
-        brand = QHBoxLayout(); brand.setSpacing(10)
+        brand = QHBoxLayout(); brand.setSpacing(8)
         icon_lbl = QLabel()
         if self.icon_pixmap:
             icon_lbl.setPixmap(self.icon_pixmap.scaled(
-                34, 34, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                30, 30, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        icon_lbl.setToolTip(PRETTY)
         brand.addWidget(icon_lbl)
-        names = QVBoxLayout(); names.setSpacing(0)
-        name = QLabel("Bedrock"); name.setObjectName("Brand")
-        names.addWidget(name)
-        tag = QLabel("on Linux"); tag.setObjectName("Muted")
-        names.addWidget(tag)
-        brand.addLayout(names, 1)
+        self.rail_brand = QLabel("BedrockOnLinux"); self.rail_brand.setObjectName("Brand")
+        brand.addWidget(self.rail_brand, 1)
         v.addLayout(brand)
-        v.addSpacing(14)
+        # Folds the rail down to its icons, and back; remembered.
+        self.rail_fold = QPushButton("«")
+        self.rail_fold.setObjectName("NavItem")
+        self.rail_fold.setCursor(Qt.PointingHandCursor)
+        self.rail_fold.setFixedHeight(30)
+        self.rail_fold.clicked.connect(lambda: self.set_rail_collapsed(
+            not self._rail_folded()))
+        v.addWidget(self.rail_fold)
+        v.addSpacing(6)
 
         self.rail_group = QButtonGroup(self)
         self.rail_group.setExclusive(True)
         self.rail_buttons = {}
+        self._rail_texts = {}
 
-        def item(key, text, slot, tip):
-            b = QPushButton(text)
+        def item(key, glyph, text, slot, tip):
+            b = QPushButton()
             b.setObjectName("NavItem")
             b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
@@ -1495,31 +1480,128 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False: slot())
             self.rail_group.addButton(b)
             self.rail_buttons[key] = b
+            self._rail_texts[key] = (glyph, text)
             v.addWidget(b)
             return b
 
-        item("home", "🏠   Play", self.go_home, "Choose a version and play")
-        item("content", "📦   Add-ons && Maps", self.open_content,
+        item("home", "🏠", "Play", self.go_home, "Choose a version and play")
+        item("content", "📦", "Add-ons && Maps", self.open_content,
              "Add-ons, maps, texture packs and skins from MCPEDL and "
              "CurseForge")
         # Kept under its old name: the Mods page was a pill of the top bar.
-        self.mods_card = item("mods", "🧩   Mods", self.open_mods,
+        self.mods_card = item("mods", "🧩", "Mods", self.open_mods,
                               "LeviLamina mods: browse, install, import")
-        item("profiles", "👥   Profiles", self.open_profiles,
+        item("profiles", "👥", "Profiles", self.open_profiles,
              "Separate sign-ins, worlds and settings")
-        item("settings", "⚙   Settings", self.open_settings,
+        item("settings", "⚙", "Settings", self.open_settings,
              "Launcher and game settings")
-        v.addStretch(1)
-        item("changelog", "✨   What's New", self.open_changelog,
+        item("changelog", "✨", "What's New", self.open_changelog,
              "What changed in each version")
-        foot = QHBoxLayout()
+        v.addStretch(1)
+
+        # Who plays: the profile and the accounts, at the foot of the rail.
+        self.prof_card = QFrame(); self.prof_card.setObjectName("Pill")
+        self.prof_card.setCursor(Qt.PointingHandCursor)
+        pl = QHBoxLayout(self.prof_card); pl.setContentsMargins(10, 6, 8, 6)
+        pl.setSpacing(8)
+        self.prof_icon = QLabel("👤")
+        pl.addWidget(self.prof_icon)
+        self.prof_label = QLabel(current_profile_name())
+        self.prof_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        pl.addWidget(self.prof_label, 1)
+        self.prof_arrow = QLabel("▸")
+        pl.addWidget(self.prof_arrow)
+        self.prof_card.mousePressEvent = lambda e: self.open_profile_menu()
+        v.addWidget(self.prof_card)
+
+        self.acct_card = QFrame(); self.acct_card.setObjectName("Pill")
+        self.acct_card.setCursor(Qt.PointingHandCursor)
+        al = QHBoxLayout(self.acct_card); al.setContentsMargins(10, 6, 8, 6)
+        al.setSpacing(8)
+        self.acct_dot = QLabel("●")
+        al.addWidget(self.acct_dot)
+        self.acct_text = QLabel("Sign in")
+        self.acct_text.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        al.addWidget(self.acct_text, 1)
+        self.acct_arrow = QLabel("▸")
+        al.addWidget(self.acct_arrow)
+        self.acct_card.mousePressEvent = lambda e: self.open_accounts_menu()
+        v.addWidget(self.acct_card)
+        v.addSpacing(4)
+
+        self.rail_foot = QWidget()
+        foot = QHBoxLayout(self.rail_foot); foot.setContentsMargins(4, 0, 0, 0)
         ver_lbl = QLabel(f"v{VERSION}"); ver_lbl.setObjectName("Muted")
         foot.addWidget(ver_lbl)
         foot.addStretch(1)
         foot.addWidget(btn("GitHub", self._open_github, kind="ghost-small",
                            h=24))
-        v.addLayout(foot)
+        v.addWidget(self.rail_foot)
+        self.set_rail_collapsed(self.settings.get("rail_collapsed", False),
+                                save=False)
         return rail
+
+    # Below this width the rail folds by itself, whatever was chosen: the
+    # dock's five edition toggles and PLAY need the room.
+    RAIL_AUTO_FOLD = 1120
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "rail", None) is not None:
+            folded = self.rail.width() == self.RAIL_NARROW
+            if folded != self._rail_folded():
+                self._paint_rail()
+
+    def _rail_folded(self):
+        return bool(self.settings.get("rail_collapsed", False)) or \
+            self.width() < self.RAIL_AUTO_FOLD
+
+    def set_rail_collapsed(self, collapsed, save=True):
+        """Fold the rail to its icons, or open it to their names; the
+        choice is remembered."""
+        collapsed = bool(collapsed)
+        if save and self.settings.get("rail_collapsed", False) != collapsed:
+            self.settings = load_settings()
+            self.settings["rail_collapsed"] = collapsed
+            save_settings(self.settings)
+        self.settings["rail_collapsed"] = collapsed
+        self._paint_rail()
+
+    def _paint_rail(self):
+        collapsed = self._rail_folded()
+        self.rail.setFixedWidth(self.RAIL_NARROW if collapsed
+                                else self.RAIL_WIDE)
+        for key, b in self.rail_buttons.items():
+            glyph, text = self._rail_texts[key]
+            b.setText(glyph if collapsed else f"{glyph}   {text}")
+            b.setStyleSheet("text-align:center; padding:0; font-size:18px;"
+                            if collapsed else "")
+        self.rail_fold.setText("»" if collapsed else "«  Collapse")
+        self.rail_fold.setToolTip("Show the menu's names" if collapsed
+                                  else "Fold the menu to its icons")
+        self.rail_fold.setStyleSheet("text-align:center; padding:0;"
+                                     if collapsed else "")
+        self.rail_brand.setVisible(not collapsed)
+        self.rail_foot.setVisible(not collapsed)
+        for widget in (self.prof_label, self.prof_arrow, self.acct_text,
+                       self.acct_arrow):
+            widget.setVisible(not collapsed)
+        for card in (self.prof_card, self.acct_card):
+            card.layout().setContentsMargins(*((0, 6, 0, 6) if collapsed
+                                               else (10, 6, 8, 6)))
+            card.setFixedHeight(38 if collapsed else 34)
+        for icon in (self.prof_icon, self.acct_dot):
+            icon.setAlignment(Qt.AlignCenter)
+            icon.setSizePolicy(QSizePolicy.Expanding if collapsed
+                               else QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.prof_icon.setStyleSheet("font-size:16px;" if collapsed else "")
+        self.prof_card.setToolTip(f"Profile: {current_profile_name()}")
+        # Too narrow to unfold: the button says why instead of doing nothing.
+        self.rail_fold.setEnabled(not (collapsed and self.width()
+                                       < self.RAIL_AUTO_FOLD))
+        if not self.rail_fold.isEnabled():
+            self.rail_fold.setToolTip("Widen the window to show the menu's "
+                                      "names")
 
     # Page name shown above it, by page.
     _PAGE_TITLES = {
@@ -1600,28 +1682,6 @@ class MainWindow(QMainWindow):
         self.page_title = QLabel("Play"); self.page_title.setObjectName("PageTitle")
         row.addWidget(self.page_title)
         row.addStretch(1)
-
-        # Profile switcher pill
-        self.prof_card = QFrame(); self.prof_card.setObjectName("Pill")
-        self.prof_card.setCursor(Qt.PointingHandCursor)
-        pl = QHBoxLayout(self.prof_card); pl.setContentsMargins(14, 6, 10, 6)
-        self.prof_label = QLabel(f"Profile: {current_profile_name()}")
-        pl.addWidget(self.prof_label)
-        pl.addWidget(QLabel("▾"))
-        self.prof_card.mousePressEvent = lambda e: self.open_profile_menu()
-        row.addWidget(self.prof_card)
-
-        # Accounts pill -- opens the menu holding both sign-ins
-        self.acct_card = QFrame(); self.acct_card.setObjectName("Pill")
-        self.acct_card.setCursor(Qt.PointingHandCursor)
-        al = QHBoxLayout(self.acct_card); al.setContentsMargins(14, 6, 10, 6)
-        self.acct_dot = QLabel("●")
-        al.addWidget(self.acct_dot)
-        self.acct_text = QLabel("Sign in")
-        al.addWidget(self.acct_text)
-        al.addWidget(QLabel("▾"))
-        self.acct_card.mousePressEvent = lambda e: self.open_accounts_menu()
-        row.addWidget(self.acct_card)
         return row
 
     def _open_github(self):
@@ -1671,7 +1731,9 @@ class MainWindow(QMainWindow):
 
         from .gui_content import FeaturedShelf  # noqa: PLC0415
         self.featured = FeaturedShelf(self)
-        col.addWidget(self.featured)
+        # The banner gives way first; the shelf keeps the height its cards
+        # need.
+        col.addWidget(self.featured, 2)
         if self.settings.get("home_featured", True):
             QTimer.singleShot(400, self.featured.load)
         else:
@@ -1737,7 +1799,7 @@ class MainWindow(QMainWindow):
 
         # Version field
         self.ver_field = QFrame(); self.ver_field.setObjectName("PillOnCard")
-        self.ver_field.setFixedSize(220, 52)
+        self.ver_field.setFixedSize(196, 52)
         self.ver_field.setCursor(Qt.PointingHandCursor)
         vfl = QHBoxLayout(self.ver_field); vfl.setContentsMargins(14, 0, 12, 0)
         self.ver_label = QLabel("Loading…")
@@ -1749,7 +1811,7 @@ class MainWindow(QMainWindow):
         # Edition toggle
         ed_field = QFrame(); ed_field.setObjectName("PillOnCard")
         ed_field.setFixedHeight(52)
-        efl = QHBoxLayout(ed_field); efl.setContentsMargins(6, 8, 6, 8)
+        efl = QHBoxLayout(ed_field); efl.setContentsMargins(6, 8, 6, 8); efl.setSpacing(2)
         self.edition_group = QButtonGroup(self)
         self.edition_group.setExclusive(True)
         # One toggle per edition: Stable and Preview, then the other titles
@@ -1757,9 +1819,10 @@ class MainWindow(QMainWindow):
         self.edition_buttons = {}
         for entry in list_editions(include_beta=True):
             label = entry.get("short") or entry["name"]
-            b = btn(label, None, kind="ghost",
-                    w=78 if is_bedrock(entry) else 92, h=32)
+            # As wide as its name and no wider: five editions share the dock.
+            b = btn(label, None, kind="ghost", h=32, tip=entry["name"])
             b.setObjectName("Toggle")
+            b.setStyleSheet("padding: 0px 10px;")
             b.setCheckable(True)
             self.edition_group.addButton(b)
             efl.addWidget(b)
@@ -1777,9 +1840,6 @@ class MainWindow(QMainWindow):
         self.details_btn = btn("Details", self.toggle_details, kind="ghost", w=76, h=52,
                                 tip="Show Activity Logs")
         h.addWidget(self.details_btn)
-        self.settings_btn = GearButton(self.theme)
-        self.settings_btn.clicked.connect(self.toggle_settings)
-        h.addWidget(self.settings_btn)
         self.play_btn = btn("▶  PLAY", self.do_play, kind="play", w=120, h=52, tip="Play Game")
         h.addWidget(self.play_btn)
 
@@ -2153,7 +2213,7 @@ class MainWindow(QMainWindow):
         info = current_profile_info()
         self.profile_popup.rebuild(list_profiles(), info.get("path"))
         self.profile_popup.setFixedWidth(max(260, self.prof_card.width()))
-        self.profile_popup.show_below(self.prof_card)
+        self.profile_popup.show_beside(self.prof_card)
 
     def _profile_switch_blocked(self) -> bool:
         if self.ui_state.get("launch_active"):
@@ -2215,7 +2275,8 @@ class MainWindow(QMainWindow):
     def _open_profile_manager(self):
         self.profile_popup.close()
         self.toggle_profiles()
-        self.prof_label.setText(f"Profile: {current_profile_name()}")
+        self.prof_label.setText(current_profile_name())
+        self.prof_card.setToolTip(f"Profile: {current_profile_name()}")
 
     # ------------------------------------------------------------ accounts
     def _refresh_account_row(self, phase):
@@ -2313,7 +2374,7 @@ class MainWindow(QMainWindow):
     def open_accounts_menu(self):
         self._refresh_accounts()
         self.accounts_menu.setFixedWidth(max(352, self.acct_card.width()))
-        self.accounts_menu.show_below(self.acct_card)
+        self.accounts_menu.show_beside(self.acct_card)
 
     def disarm_account_confirms(self):
         """Called when the menu hides: a confirmation must never outlive the

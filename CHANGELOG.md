@@ -15,12 +15,13 @@
   that link in the browser instead. The Library tab lists every pack and
   world the game will find, whoever put it there, and removes them into a
   trash kept for 30 days rather than deleting them.
-- **A new layout.** Every page is now one click away in a rail on the left
+- **A new layout.** Every page is now one click away in a menu on the left
   (Play, Add-ons & Maps, Mods, Profiles, Settings, What's New), with the
-  page shown lit up and named above it. The home page has shortcuts to
-  content, mods, importing a file and the game folder, and shows this
-  week's popular add-ons, maps and texture packs (Settings > General turns
-  that off).
+  page shown lit up and named above it; the profile and the accounts sit at
+  its foot. It folds down to its icons, and folds by itself in a narrow
+  window. The home page has shortcuts to content, mods, importing a file
+  and the game folder, and shows this week's popular add-ons, maps and
+  texture packs (Settings > General turns that off).
 - **LeviLamina mods.** A Mods page browses the levimc.org catalogue and
   installs, updates, imports and turns off mods per Minecraft build.
 

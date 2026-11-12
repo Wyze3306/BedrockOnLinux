@@ -188,7 +188,7 @@ def _repolish(widget):
 class ContentCard(QFrame):
     """One project in the Discover grid."""
 
-    def __init__(self, page, item, width=CARD_WIDTH):
+    def __init__(self, page, item, width=CARD_WIDTH, thumb_height=None):
         super().__init__()
         self.page = page
         self.item = item
@@ -199,7 +199,10 @@ class ContentCard(QFrame):
         v = QVBoxLayout(self)
         v.setContentsMargins(8, 8, 8, 10)
         v.setSpacing(4)
-        self._thumb_size = (width - 16, int((width - 16) * 0.56))
+        # 16:9-ish, but never taller than the shelf on the home page has
+        # room for.
+        self._thumb_size = (width - 16, thumb_height or
+                            min(150, int((width - 16) * 0.56)))
         self.thumb = QLabel()
         self.thumb.setFixedSize(*self._thumb_size)
         v.addWidget(self.thumb)
@@ -225,6 +228,9 @@ class ContentCard(QFrame):
         self.badge = _chip("✓ Installed", page.win.theme.accent)
         foot.addWidget(self.badge)
         v.addLayout(foot)
+        # As tall as its contents: a grid row or a shelf with room to spare
+        # leaves it below the card, not between its lines.
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.refresh()
 
     def set_image(self):
@@ -580,7 +586,7 @@ class ContentPage(QFrame):
             self.sort.addItem(label, key)
         self.sort.currentIndexChanged.connect(lambda _: self.load())
         bar.addWidget(self.sort)
-        refresh = _button("↻", "Ghost", lambda: self.load(refresh=True),
+        refresh = _button("↻", "IconBtn", lambda: self.load(refresh=True),
                           width=34, tip="Reload from MCPEDL")
         bar.addWidget(refresh)
         v.addLayout(bar)
@@ -659,7 +665,7 @@ class ContentPage(QFrame):
         bar.addWidget(self.library_kind)
         bar.addWidget(_button("Trash", "Ghost", self._open_trash,
                               tip="Removed content, kept 30 days"))
-        bar.addWidget(_button("↻", "Ghost", self.load_library, width=34,
+        bar.addWidget(_button("↻", "IconBtn", self.load_library, width=34,
                               tip="Look again"))
         v.addLayout(bar)
         area = QScrollArea()
@@ -813,7 +819,7 @@ class ContentPage(QFrame):
             self._render()
         elif self._cards and abs(self._cards[0].width() - (
                 (max(CARD_WIDTH, self.area.viewport().width() - 6)
-                 - 10 * (self._columns - 1)) // self._columns)) > 24:
+                 - 10 * (self._columns - 1)) // self._columns)) > 2:
             self._render()
 
     # ------------------------------------------------------------ pictures
@@ -1126,8 +1132,9 @@ class FeaturedShelf(QFrame):
         v.addLayout(head)
         self.row = QHBoxLayout()
         self.row.setSpacing(10)
-        self.row.setAlignment(Qt.AlignLeft)
+        self.row.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         v.addLayout(self.row)
+        v.addStretch(1)
         self.note = QLabel("Loading from MCPEDL…")
         self.note.setObjectName("Sub")
         self.row.addWidget(self.note)
@@ -1180,22 +1187,36 @@ class FeaturedShelf(QFrame):
             self.row.addWidget(note)
             self.note = note
             return
-        capacity = self._visible()
-        width = max(CARD_WIDTH, (self.width() - 36 - 10 * (capacity - 1))
-                    // capacity)
-        for item in items[:capacity]:
-            card = ContentCard(self, item, width)
+        width, thumb = self._card_size()
+        for item in items[:self._visible()]:
+            card = ContentCard(self, item, width, thumb)
             self._cards.append(card)
             self.row.addWidget(card)
         self.row.addStretch(1)
 
+    # Header row, margins, and a card's title, author and stats lines.
+    _CHROME_HEIGHT = 64
+    _CARD_TEXT_HEIGHT = 112
+
+    def _card_size(self):
+        """Card width filling the row, and a picture height the shelf has
+        room for: a short window takes it from the pictures, not the text."""
+        capacity = self._visible()
+        width = max(CARD_WIDTH, (self.width() - 36 - 10 * (capacity - 1))
+                    // capacity)
+        room = self.height() - self._CHROME_HEIGHT - self._CARD_TEXT_HEIGHT
+        thumb = max(64, min(150, int((width - 16) * 0.56), room))
+        return width, thumb
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self._cards and (len(self._cards) != min(
-                self._visible(), len(self.shelves.get(self.kind) or []))
-                or abs(self._cards[0].width() - max(CARD_WIDTH, (
-                    self.width() - 36 - 10 * (self._visible() - 1))
-                    // self._visible())) > 24):
+        if not self._cards:
+            return
+        width, thumb = self._card_size()
+        if (len(self._cards) != min(self._visible(),
+                                    len(self.shelves.get(self.kind) or []))
+                or abs(self._cards[0].width() - width) > 2
+                or abs(self._cards[0]._thumb_size[1] - thumb) > 2):
             self._render()
 
     def open_details(self, item):

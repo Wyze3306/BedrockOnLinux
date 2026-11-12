@@ -662,7 +662,9 @@ class ModsPage(QFrame):
             "version")
         self.compat_switch.switch.toggled.connect(lambda _: self._render())
         bar.addWidget(self.compat_switch)
-        refresh = self._small("↻", "Ghost",
+        # IconBtn: no padding, which on a 34 px button left no room for
+        # the glyph and pushed it past the edge.
+        refresh = self._small("↻", "IconBtn",
                               lambda: self.load_catalogue(refresh=True))
         refresh.setFixedWidth(34)
         refresh.setToolTip("Reload the catalogue from levimc.org")
