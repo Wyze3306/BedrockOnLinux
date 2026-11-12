@@ -115,6 +115,15 @@
   at all, now reaches vkd3d-proton too. Measurements in
   `docs/INPUT-LATENCY.md` (#202).
 
+- **The ntsync warning knows about the engine's fsync fallback.** The check
+  before PLAY now counts an engine built with WineGDK patch `0014` (engine
+  native23 and later) as fast on a kernel without `/dev/ntsync`, as long as
+  the kernel has `futex_waitv` (Linux 5.16), and names `PROTON_NO_FSYNC` when
+  that is what turns the fallback off. Measured with ntsync hidden from the
+  game: the wineserver used 5% of a core in a world instead of 1.5%, and
+  with `0014` it went back to the ntsync level while the game ran at 250 to
+  255 FPS.
+
 ## 2.3.1 — 2026-11-11
 
 Other players keep their own skins on servers, the Realms button of the title
