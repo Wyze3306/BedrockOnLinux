@@ -4,6 +4,26 @@
 
 ### Added
 
+- **Add-ons, maps, texture packs and skins from MCPEDL and CurseForge.** A
+  new Add-ons & Maps page searches both (they are one catalogue now: every
+  CurseForge Bedrock project is mirrored on MCPEDL under the same name),
+  sorts by this week's or this month's popularity, downloads, updates or
+  date, and installs a project's file in one click, straight into the
+  folders the game reads. A pasted MCPEDL or CurseForge link opens that
+  project. Files come over HTTPS from MCPEDL's and CurseForge's servers
+  only; projects whose author hosts files elsewhere get a button to open
+  that link in the browser instead. The Library tab lists every pack and
+  world the game will find, whoever put it there, and removes them into a
+  trash kept for 30 days rather than deleting them.
+- **A new layout.** Every page is now one click away in a rail on the left
+  (Play, Add-ons & Maps, Mods, Profiles, Settings, What's New), with the
+  page shown lit up and named above it. The home page has shortcuts to
+  content, mods, importing a file and the game folder, and shows this
+  week's popular add-ons, maps and texture packs (Settings > General turns
+  that off).
+- **LeviLamina mods.** A Mods page browses the levimc.org catalogue and
+  installs, updates, imports and turns off mods per Minecraft build.
+
 - **Apple silicon under Asahi Linux.** Asahi's kernel uses 16 KiB memory
   pages, and Wine and FEX-Emu need 4 KiB ones. With muvm installed, the
   launcher now starts itself inside a muvm microVM, where muvm registers
@@ -18,6 +38,14 @@
   host (#250).
 
 ### Fixed
+
+- **Importing a .mcaddon installs its packs.** Most add-ons are a zip of
+  .mcpack files rather than of the packs' folders, and the import stopped
+  at "No manifest.json". Packs inside an add-on are unpacked too, a world
+  bundled with one is imported as a world, a world zipped inside a folder
+  of its own is lifted out so the game lists it, packs named through their
+  translations (`pack.name`) get their real name, and colour codes no
+  longer end up in folder names.
 
 - **Less CPU spent waiting between frames with vsync on.** With a Max
   Framerate set in Minecraft, the launcher swaps the game's own limiter,

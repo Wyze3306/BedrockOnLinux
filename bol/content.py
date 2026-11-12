@@ -133,6 +133,41 @@ def _pack_subfolder(manifest):
     return "resource_packs"
 
 
+def _lang_value(pack_root: Path, key: str):
+    """``key`` from the pack's own translations, English first.
+
+    Many packs name themselves ``pack.name`` in their manifest and give the
+    real name in texts/<language>.lang, the way the game expects.
+    """
+    texts = pack_root / "texts"
+    candidates = [texts / "en_US.lang", texts / "en_GB.lang"]
+    try:
+        candidates += sorted(texts.glob("*.lang"))
+    except OSError:
+        pass
+    for lang in candidates:
+        try:
+            lines = lang.read_text(encoding="utf-8-sig",
+                                   errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            name, sep, value = line.partition("=")
+            if sep and name.strip() == key:
+                value = value.split("\t#", 1)[0].split("  #", 1)[0].strip()
+                if value:
+                    return value
+    return None
+
+
+def pack_text(pack_root: Path, value):
+    """A manifest name or description, its translation key resolved."""
+    value = str(value or "").strip()
+    if re.fullmatch(r"[\w.]+\.(name|description)", value):
+        return _lang_value(Path(pack_root), value) or ""
+    return value
+
+
 def _install_pack_tree(pack_root: Path, prefix, fallback_name: str):
     """Move one extracted pack (dir containing manifest.json) into com.mojang."""
     manifest = {}
@@ -144,7 +179,8 @@ def _install_pack_tree(pack_root: Path, prefix, fallback_name: str):
             manifest = {}
     sub = _pack_subfolder(manifest)
     try:
-        nm = manifest.get("header", {}).get("name") or fallback_name
+        nm = pack_text(pack_root, manifest.get("header", {}).get("name")) \
+            or fallback_name
     except Exception:
         nm = fallback_name
     dest = _unique_path(_content_dir(sub, prefix) / sub

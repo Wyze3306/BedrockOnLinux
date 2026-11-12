@@ -625,14 +625,14 @@ def _describe_folder(sub, folder: Path):
             header = manifest.get("header") or {}
         except (OSError, ValueError, AttributeError):
             return None
-        name = header.get("name") if isinstance(header, dict) else ""
-        description = header.get("description") if isinstance(
-            header, dict) else ""
+        from .content import pack_text  # noqa: PLC0415
+        if not isinstance(header, dict):
+            header = {}
+        name = pack_text(folder, header.get("name"))
+        description = pack_text(folder, header.get("description"))
         icon = folder / "pack_icon.png"
         if not icon.exists() and (folder / "world_icon.jpeg").exists():
             icon = folder / "world_icon.jpeg"
-        if name == "pack.name" or str(name).startswith("pack."):
-            name = ""
     try:
         modified = folder.stat().st_mtime
     except OSError:

@@ -16,7 +16,7 @@ session the developer happens to have on the machine running the suite.
 # SPDX-License-Identifier: MIT
 
 import os
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -24,7 +24,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer
 from PySide6.QtWidgets import QApplication
 
-from bol import gui, log, xodus
+from bol import catalog, gui, log, xodus
 
 
 def qt_app():
@@ -40,23 +40,31 @@ def qt_app():
 @contextmanager
 def headless_window(store_signed_in=False, **settings):
     saved_sink = log._LOG_SINK
-    with mock.patch.object(gui, "NativeAuth"), \
-            mock.patch.object(gui, "msa_signed_in", return_value=False), \
-            mock.patch.object(gui, "msa_gamertag", return_value=None), \
-            mock.patch.object(gui, "current_profile_name", return_value="Default"), \
-            mock.patch.object(gui, "current_profile_info", return_value={"path": None}), \
-            mock.patch.object(gui, "list_profiles", return_value=[]), \
-            mock.patch.object(gui, "load_settings", lambda: dict(settings)), \
-            mock.patch.object(gui, "save_settings", lambda _s: None), \
-            mock.patch.object(gui.MainWindow, "refresh_versions", lambda _s: None), \
-            mock.patch.object(gui.MainWindow, "check_for_update_async", lambda _s: None), \
-            mock.patch.object(gui, "installed_builds", return_value=[]), \
-            mock.patch.object(gui.saves, "list_backups", return_value=[]), \
-            mock.patch.object(gui.saves, "preview_copy_pending",
-                              return_value=False), \
-            mock.patch.object(gui, "mc_releases", return_value=[]), \
-            mock.patch.object(gui, "gh_releases", return_value=[]), \
-            mock.patch.object(xodus, "signed_in", return_value=store_signed_in):
+    patches = [
+        mock.patch.object(gui, "NativeAuth"),
+        mock.patch.object(gui, "msa_signed_in", return_value=False),
+        mock.patch.object(gui, "msa_gamertag", return_value=None),
+        mock.patch.object(gui, "current_profile_name", return_value="Default"),
+        mock.patch.object(gui, "current_profile_info", return_value={"path": None}),
+        mock.patch.object(gui, "list_profiles", return_value=[]),
+        mock.patch.object(gui, "load_settings", lambda: dict(settings)),
+        mock.patch.object(gui, "save_settings", lambda _s: None),
+        mock.patch.object(gui.MainWindow, "refresh_versions", lambda _s: None),
+        mock.patch.object(gui.MainWindow, "check_for_update_async", lambda _s: None),
+        mock.patch.object(gui, "installed_builds", return_value=[]),
+        mock.patch.object(gui.saves, "list_backups", return_value=[]),
+        mock.patch.object(gui.saves, "preview_copy_pending",
+                          return_value=False),
+        mock.patch.object(gui, "mc_releases", return_value=[]),
+        mock.patch.object(gui, "gh_releases", return_value=[]),
+        mock.patch.object(xodus, "signed_in", return_value=store_signed_in),
+        mock.patch.object(catalog, "featured", return_value={}),
+        mock.patch.object(catalog, "image", return_value=None),
+        mock.patch.object(catalog, "installed_slugs", return_value=set()),
+    ]
+    with ExitStack() as stack:
+        for patch in patches:
+            stack.enter_context(patch)
         window = gui.MainWindow()
         try:
             yield window

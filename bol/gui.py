@@ -26,10 +26,10 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
-    QHBoxLayout, QInputDialog, QLabel,
+    QGridLayout, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
     QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTabWidget, QTextBrowser, QTextEdit,
-    QToolButton, QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget,
 )
 
 from .auth import NativeAuth, msa_logout, msa_signed_in, msa_gamertag
@@ -44,6 +44,7 @@ from .games import installed_builds, list_editions, list_versions, remove_build
 from .gamesetup import do_setup
 from . import betterrtx, gpus
 from .inject import run_injector
+from .gui_content import ContentPage
 from .gui_mods import ModsPage
 from .launch import direct_launch_readiness, launch, single_window_session
 from . import saves
@@ -418,6 +419,32 @@ class Theme:
             font-weight: 600;
         }}
         QPushButton#ToolRowDanger:hover {{ background: {self.red}; color: white; }}
+        QFrame#Rail {{
+            background: {self.card};
+            border: 1px solid {self.border};
+            border-radius: 18px;
+        }}
+        QPushButton#NavItem {{
+            background: transparent;
+            color: {self.sub};
+            border-radius: 10px;
+            padding: 9px 12px;
+            text-align: left;
+            font-size: 13px;
+            font-weight: 600;
+        }}
+        QPushButton#NavItem:hover {{ background: {self.card2}; color: {self.fg}; }}
+        QPushButton#NavItem:checked {{
+            background: {self.accent_dim};
+            color: {self.accent};
+        }}
+        QLabel#PageTitle {{ font-size: 18px; font-weight: 700; }}
+        QLabel#Brand {{ font-size: 14px; font-weight: 800; }}
+        QFrame#Tile {{
+            background: {self.card2};
+            border-radius: 14px;
+        }}
+        QFrame#Tile:hover {{ background: {self.card3}; }}
         QPushButton#Toggle {{
             background: transparent;
             color: {self.sub};
@@ -843,6 +870,14 @@ class SwitchRow(QWidget):
         return self.switch.isChecked()
 
 
+class _ChipLabel(QLabel):
+    """A chip that is not drawn while it has nothing to say."""
+
+    def setText(self, text):
+        super().setText(text)
+        self.setVisible(bool(str(text).strip()))
+
+
 class Popup(QFrame):
     """A borderless floating panel positioned relative to an anchor widget."""
 
@@ -1251,17 +1286,24 @@ class MainWindow(QMainWindow):
         self._auth_bridge.refused.connect(self._on_refused)
 
         self.setWindowTitle(PRETTY)
-        self.resize(1000, 660)
-        self.setMinimumSize(880, 640)
+        self.resize(1120, 700)
+        self.setMinimumSize(960, 640)
 
         self._load_icon()
 
         root = QWidget()
         root.setObjectName("Root")
         self.setCentralWidget(root)
-        outer = QVBoxLayout(root)
-        outer.setContentsMargins(22, 18, 22, 16)
+        frame = QHBoxLayout(root)
+        frame.setContentsMargins(16, 16, 22, 16)
+        frame.setSpacing(16)
+        # The navigation rail: every page one click away, the page shown
+        # lit up. Built before the pages, which the rail only names.
+        frame.addWidget(self._build_rail())
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 2, 0, 0)
         outer.setSpacing(8)
+        frame.addLayout(outer, 1)
 
         outer.addLayout(self._build_topbar())
 
@@ -1271,13 +1313,16 @@ class MainWindow(QMainWindow):
         self.settings_page = self._build_settings()
         self.changelog_page = self._build_changelog()
         self.profiles_page = self._build_profiles_page()
-        # Built the first time it is opened: most sessions never do.
+        # Built the first time they are opened: most sessions never do.
         self.mods_page = None
+        self.content_page = None
         self.stack.addWidget(self.hero_page)
         self.stack.addWidget(self.settings_page)
         self.stack.addWidget(self.changelog_page)
         self.stack.addWidget(self.profiles_page)
         self.stack.setCurrentWidget(self.hero_page)
+        self.stack.currentChanged.connect(lambda _: self._sync_rail())
+        self._sync_rail()
 
         self.status_row = self._build_status_row()
         outer.addLayout(self.status_row)
@@ -1382,37 +1427,147 @@ class MainWindow(QMainWindow):
             self._refresh_accounts()
 
     # ------------------------------------------------------------ top bar
-    def _build_topbar(self) -> QHBoxLayout:
-        row = QHBoxLayout()
+    def _build_rail(self) -> QFrame:
+        rail = QFrame(); rail.setObjectName("Rail")
+        rail.setFixedWidth(196)
+        v = QVBoxLayout(rail)
+        v.setContentsMargins(12, 14, 12, 12)
+        v.setSpacing(4)
 
-        brand = QFrame(); brand.setObjectName("Pill")
-        bl = QHBoxLayout(brand); bl.setContentsMargins(10, 6, 10, 6)
+        brand = QHBoxLayout(); brand.setSpacing(10)
         icon_lbl = QLabel()
         if self.icon_pixmap:
-            icon_lbl.setPixmap(self.icon_pixmap.scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        bl.addWidget(icon_lbl)
-        whats_new = QToolButton(); whats_new.setText("What's New")
-        whats_new.setCursor(Qt.PointingHandCursor)
-        whats_new.setStyleSheet("font-weight:700; border:none; background:transparent;")
-        whats_new.clicked.connect(self.toggle_changelog)
-        bl.addWidget(whats_new)
-        ver_lbl = QLabel(f"v{VERSION}"); ver_lbl.setObjectName("Sub")
-        bl.addWidget(ver_lbl)
-        gh_btn = btn("GitHub", self._open_github, kind="ghost", h=26)
-        bl.addWidget(gh_btn)
-        row.addWidget(brand)
-        row.addStretch(1)
+            icon_lbl.setPixmap(self.icon_pixmap.scaled(
+                34, 34, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        brand.addWidget(icon_lbl)
+        names = QVBoxLayout(); names.setSpacing(0)
+        name = QLabel("Bedrock"); name.setObjectName("Brand")
+        names.addWidget(name)
+        tag = QLabel("on Linux"); tag.setObjectName("Muted")
+        names.addWidget(tag)
+        brand.addLayout(names, 1)
+        v.addLayout(brand)
+        v.addSpacing(14)
 
-        # Mods page: LeviLamina and the levimc.org catalogue
-        self.mods_card = QFrame(); self.mods_card.setObjectName("Pill")
-        self.mods_card.setCursor(Qt.PointingHandCursor)
-        self.mods_card.setToolTip("LeviLamina mods: browse, install, import")
-        ml = QHBoxLayout(self.mods_card); ml.setContentsMargins(14, 6, 14, 6)
-        mods_label = QLabel("🧩  Mods")
-        mods_label.setStyleSheet("font-weight:700;")
-        ml.addWidget(mods_label)
-        self.mods_card.mousePressEvent = lambda e: self.toggle_mods()
-        row.addWidget(self.mods_card)
+        self.rail_group = QButtonGroup(self)
+        self.rail_group.setExclusive(True)
+        self.rail_buttons = {}
+
+        def item(key, text, slot, tip):
+            b = QPushButton(text)
+            b.setObjectName("NavItem")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedHeight(38)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False: slot())
+            self.rail_group.addButton(b)
+            self.rail_buttons[key] = b
+            v.addWidget(b)
+            return b
+
+        item("home", "🏠   Play", self.go_home, "Choose a version and play")
+        item("content", "📦   Add-ons && Maps", self.open_content,
+             "Add-ons, maps, texture packs and skins from MCPEDL and "
+             "CurseForge")
+        # Kept under its old name: the Mods page was a pill of the top bar.
+        self.mods_card = item("mods", "🧩   Mods", self.open_mods,
+                              "LeviLamina mods: browse, install, import")
+        item("profiles", "👥   Profiles", self.open_profiles,
+             "Separate sign-ins, worlds and settings")
+        item("settings", "⚙   Settings", self.open_settings,
+             "Launcher and game settings")
+        v.addStretch(1)
+        item("changelog", "✨   What's New", self.open_changelog,
+             "What changed in each version")
+        foot = QHBoxLayout()
+        ver_lbl = QLabel(f"v{VERSION}"); ver_lbl.setObjectName("Muted")
+        foot.addWidget(ver_lbl)
+        foot.addStretch(1)
+        foot.addWidget(btn("GitHub", self._open_github, kind="ghost-small",
+                           h=24))
+        v.addLayout(foot)
+        return rail
+
+    # Page name shown above it, by page.
+    _PAGE_TITLES = {
+        "home": "Play", "content": "Add-ons & Maps", "mods": "Mods",
+        "profiles": "Profiles", "settings": "Settings",
+        "changelog": "What's New",
+    }
+
+    def _page_key(self, page=None):
+        page = self.stack.currentWidget() if page is None else page
+        for key, attr in (("home", "hero_page"), ("content", "content_page"),
+                          ("mods", "mods_page"), ("profiles", "profiles_page"),
+                          ("settings", "settings_page"),
+                          ("changelog", "changelog_page")):
+            if page is not None and page is getattr(self, attr, None):
+                return key
+        return "home"
+
+    def _sync_rail(self):
+        """Light up the rail item of the page now shown, and name it."""
+        key = self._page_key()
+        button = getattr(self, "rail_buttons", {}).get(key)
+        if button is not None and not button.isChecked():
+            button.setChecked(True)
+        if getattr(self, "page_title", None) is not None:
+            self.page_title.setText(self._PAGE_TITLES.get(key, ""))
+
+    def _show_page(self, page, entered=None):
+        self.stack.setCurrentWidget(page)
+        self._nav_follow_page(entered)
+
+    def go_home(self):
+        self._show_page(self.hero_page)
+
+    def open_settings(self):
+        if self.stack.currentWidget() is not self.settings_page:
+            self.toggle_settings()
+
+    def open_changelog(self):
+        if self.stack.currentWidget() is not self.changelog_page:
+            self.toggle_changelog()
+
+    def open_profiles(self):
+        if self.stack.currentWidget() is not self.profiles_page:
+            self.toggle_profiles()
+
+    def open_mods(self):
+        if self.mods_page is None or \
+                self.stack.currentWidget() is not self.mods_page:
+            self.toggle_mods()
+
+    def open_content(self, kind=None, query=None, slug=None):
+        """Show the Add-ons & Maps page, optionally on a kind, a search or
+        one project's page."""
+        if self.content_page is None:
+            self.content_page = ContentPage(self)
+            self.stack.addWidget(self.content_page)
+        if self.stack.currentWidget() is not self.content_page:
+            self.stack.setCurrentWidget(self.content_page)
+            self.content_page.opened()
+            self._nav_follow_page(self.content_page)
+        if kind:
+            self.content_page.show_kind(kind)
+        if query:
+            self.content_page.search_for(query)
+        if slug:
+            self.content_page.open_slug(slug)
+
+    def toggle_content(self):
+        if self.content_page is not None and \
+                self.stack.currentWidget() is self.content_page:
+            self.go_home()
+        else:
+            self.open_content()
+
+    def _build_topbar(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        self.page_title = QLabel("Play"); self.page_title.setObjectName("PageTitle")
+        row.addWidget(self.page_title)
+        row.addStretch(1)
 
         # Profile switcher pill
         self.prof_card = QFrame(); self.prof_card.setObjectName("Pill")
@@ -1443,24 +1598,80 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ hero
     def _build_hero(self) -> QWidget:
+        page = QWidget()
+        col = QVBoxLayout(page)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(12)
+
         card = QFrame(); card.setObjectName("Card")
-        v = QVBoxLayout(card)
-        v.setAlignment(Qt.AlignCenter)
+        h = QHBoxLayout(card)
+        h.setContentsMargins(26, 22, 22, 22)
+        h.setSpacing(22)
         if self.icon_pixmap:
             lbl = QLabel()
-            lbl.setPixmap(self.icon_pixmap.scaled(118, 118, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            lbl.setAlignment(Qt.AlignCenter)
-            v.addWidget(lbl)
+            lbl.setPixmap(self.icon_pixmap.scaled(104, 104, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            h.addWidget(lbl, 0, Qt.AlignVCenter)
+        titles = QVBoxLayout(); titles.setSpacing(4)
+        titles.addStretch(1)
         title = QLabel("Minecraft Bedrock"); title.setObjectName("Hero")
-        title.setAlignment(Qt.AlignCenter)
-        v.addWidget(title)
+        titles.addWidget(title)
         sub = QLabel("Bedrock Edition for Linux"); sub.setObjectName("Sub")
-        sub.setAlignment(Qt.AlignCenter)
-        v.addWidget(sub)
-        self.selected_chip = QLabel(""); self.selected_chip.setObjectName("Chip")
-        self.selected_chip.setAlignment(Qt.AlignCenter)
-        v.addWidget(self.selected_chip, 0, Qt.AlignCenter)
-        return card
+        titles.addWidget(sub)
+        self.selected_chip = _ChipLabel(); self.selected_chip.setObjectName("Chip")
+        self.selected_chip.setText("")
+        titles.addWidget(self.selected_chip, 0, Qt.AlignLeft)
+        titles.addStretch(1)
+        h.addLayout(titles, 1)
+
+        tiles = QGridLayout(); tiles.setSpacing(10)
+        for index, (glyph, name, hint, slot) in enumerate((
+                ("📦", "Add-ons & Maps", "MCPEDL · CurseForge",
+                 self.open_content),
+                ("🧩", "Mods", "LeviLamina", self.open_mods),
+                ("📥", "Import a file", ".mcpack · .mcworld · .mcaddon",
+                 self._import_from_home),
+                ("🌍", "Worlds & packs", "Open the game folder",
+                 lambda: self._open_folder(game_content_dir())))):
+            tiles.addWidget(self._home_tile(glyph, name, hint, slot),
+                            index // 2, index % 2)
+        h.addLayout(tiles)
+        col.addWidget(card, 1)
+
+        from .gui_content import FeaturedShelf  # noqa: PLC0415
+        self.featured = FeaturedShelf(self)
+        col.addWidget(self.featured)
+        if self.settings.get("home_featured", True):
+            QTimer.singleShot(400, self.featured.load)
+        else:
+            self.featured.hide()
+        return page
+
+    def _home_tile(self, glyph, name, hint, slot) -> QFrame:
+        tile = QFrame(); tile.setObjectName("Tile")
+        tile.setCursor(Qt.PointingHandCursor)
+        tile.setFixedSize(210, 64)
+        tile.setToolTip(name)
+        t = QHBoxLayout(tile); t.setContentsMargins(14, 8, 12, 8); t.setSpacing(10)
+        icon = QLabel(glyph); icon.setStyleSheet("font-size:22px;")
+        t.addWidget(icon)
+        words = QVBoxLayout(); words.setSpacing(0)
+        label = QLabel(name); label.setStyleSheet("font-weight:700;")
+        words.addWidget(label)
+        note = QLabel(hint); note.setObjectName("Muted")
+        words.addWidget(note)
+        t.addLayout(words, 1)
+        tile.mousePressEvent = lambda e: slot() if e.button() == Qt.LeftButton else None
+        return tile
+
+    def _save_home_featured(self, on):
+        self._save_setting("home_featured", on)
+        self.featured.setVisible(on)
+        if on and not self.featured.shelves:
+            self.featured.load()
+
+    def _import_from_home(self):
+        self.open_content()
+        self.content_page.import_files()
 
     # ------------------------------------------------------------ status row
     def _build_status_row(self) -> QVBoxLayout:
@@ -2812,6 +3023,14 @@ class MainWindow(QMainWindow):
                             "Open the What's New tab automatically each time the launcher starts.")
         cl_row.toggled.connect(lambda on: self._save_setting("show_changelog_on_startup", on))
         startup.addWidget(cl_row)
+
+        featured_row = self._switch(
+            "Show popular add-ons on the home page",
+            self.settings.get("home_featured", True),
+            "Fetches this week's most popular add-ons, maps and texture "
+            "packs from MCPEDL when the launcher starts.")
+        featured_row.toggled.connect(self._save_home_featured)
+        startup.addWidget(featured_row)
 
         confine_row = self._switch("Keep the mouse inside the window",
                                  self.settings.get("confine_cursor", False),

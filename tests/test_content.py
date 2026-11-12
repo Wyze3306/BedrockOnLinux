@@ -276,3 +276,17 @@ def test_colour_codes_do_not_end_up_in_folder_names(tmp_path):
     result = content.import_content(archive, prefix=prefix)
 
     assert result == ["behavior pack: Part II Tools"]
+
+
+def test_a_pack_named_through_its_translations_gets_its_real_name(tmp_path):
+    prefix = tmp_path / "prefix"
+    archive = tmp_path / "t.mcpack"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("manifest.json", json.dumps(
+            _pack_manifest("pack.name", "resources")))
+        package.writestr("texts/en_US.lang",
+                         "pack.name=Primal Tamers\t#\npack.description=x\n")
+
+    result = content.import_content(archive, prefix=prefix)
+
+    assert result == ["resource pack: Primal Tamers"]
