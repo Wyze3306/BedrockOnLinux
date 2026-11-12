@@ -387,7 +387,7 @@ verify_winegdk_source_provenance() {
     "d10a2dc2ebd7ea4a1b918d114ae068c67ee9c6022062008a2f4b3833ba846460" \
     "WineGDK native5 source-delta README"
   verify_sha256 "$native_root/SOURCE-SHA256SUMS" \
-    "46e65becfc55b47ab4be5794365ecc23dd6a71a470713fc9113eadbaac237ccd" \
+    "356ce8528c080bb5e97208e08d95ee91089922dd0669ef1c3aac4679b8bd3bd5" \
     "WineGDK native5 source hash lock"
   verify_sha256 \
     "$native_root/0001-winegdk-native5-Xbox-and-file-picker-runtime.patch" \
@@ -443,7 +443,7 @@ verify_winegdk_source_provenance() {
     "WineGDK GetProcessMemoryInfo PrivateUsage"
   verify_sha256 \
     "$native_root/0014-ntdll-server-fall-back-to-fsync-without-ntsync.patch" \
-    "bbf37dfe580536aada2594cfa274a028f4bfa9ed69a95070fa3a1bc98a8951ae" \
+    "57a7cf41297df589e369f9e059a3e3d8925de785ed588a24134ffa26b5f7f81a" \
     "WineGDK fsync fallback without ntsync"
   verify_sha256 \
     "$native_root/0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch" \

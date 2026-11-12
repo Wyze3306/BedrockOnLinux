@@ -41,9 +41,12 @@ Adapted to this tree:
   /dev/shm by name. A Wine process started outside the container the
   wineserver runs in (a Flatpak app instance, for one) has a /dev/shm
   of its own and would otherwise exit at startup. The name stays as a
-  fallback.
+  fallback;
+- ntdll.so and the wineserver link librt, where glibc kept shm_open
+  until 2.34; the engine is built against Debian 11's glibc 2.31, and
+  configure only adds -lrt when clock_gettime needs it.
 ---
-  dlls/ntdll/Makefile.in         |    1 +
+  dlls/ntdll/Makefile.in         |    3 +-
   dlls/ntdll/unix/fsync.c        | 1257 ++++++++++++++++++++++++++++++++++++++
   dlls/ntdll/unix/fsync.h        |   47 ++
   dlls/ntdll/unix/server.c       |   11 +-
@@ -51,7 +54,7 @@ Adapted to this tree:
   dlls/ntdll/unix/unix_private.h |    2 +
   dlls/ntdll/unix/virtual.c      |    1 +
   include/wine/server_protocol.h |   34 +-
-  server/Makefile.in             |    1 +
+  server/Makefile.in             |    3 +-
   server/fsync.c                 |  376 ++++++++++++
   server/fsync.h                 |   40 ++
   server/inproc_sync.c           |   86 ++-
@@ -61,12 +64,21 @@ Adapted to this tree:
   server/request_handlers.h      |    9 +-
   server/request_trace.h         |   10 +
   server/thread.c                |    9 +-
-  18 files changed, 1936 insertions(+), 21 deletions(-)
+  18 files changed, 1938 insertions(+), 23 deletions(-)
 
 diff --git a/dlls/ntdll/Makefile.in b/dlls/ntdll/Makefile.in
-index ad5c3bdc60f..08533ef1199 100644
+index ad5c3bdc60f..38713860fda 100644
 --- a/dlls/ntdll/Makefile.in
 +++ b/dlls/ntdll/Makefile.in
+@@ -5,7 +5,7 @@ IMPORTLIB = ntdll
+ IMPORTS   = $(TOMCRYPT_PE_LIBS) $(MUSL_PE_LIBS)
+ EXTRAINCL = $(TOMCRYPT_PE_CFLAGS)
+ UNIX_CFLAGS  = $(UNWIND_CFLAGS) $(HWLOC_CFLAGS)
+-UNIX_LIBS    = $(IOKIT_LIBS) $(COREFOUNDATION_LIBS) $(CORESERVICES_LIBS) $(RT_LIBS) $(PTHREAD_LIBS) $(UNWIND_LIBS) $(I386_LIBS) $(PROCSTAT_LIBS) $(HWLOC_LIBS)
++UNIX_LIBS    = $(IOKIT_LIBS) $(COREFOUNDATION_LIBS) $(CORESERVICES_LIBS) $(RT_LIBS) $(PTHREAD_LIBS) $(UNWIND_LIBS) $(I386_LIBS) $(PROCSTAT_LIBS) $(HWLOC_LIBS) -lrt
+ 
+ EXTRADLLFLAGS = -nodefaultlibs
+ i386_EXTRADLLFLAGS = -Wl,--image-base,0x7bc00000
 @@ -52,6 +52,7 @@ SOURCES = \
  	unix/debug.c \
  	unix/env.c \
@@ -1686,7 +1698,7 @@ index dc1ceeb142e..c0d6e3dbf67 100644
  
  #endif /* __WINE_WINE_SERVER_PROTOCOL_H */
 diff --git a/server/Makefile.in b/server/Makefile.in
-index 84a6bd74d9d..d9ac607f66f 100644
+index 84a6bd74d9d..e60fbb9cee6 100644
 --- a/server/Makefile.in
 +++ b/server/Makefile.in
 @@ -15,6 +15,7 @@ SOURCES = \
@@ -1697,6 +1709,14 @@ index 84a6bd74d9d..d9ac607f66f 100644
  	handle.c \
  	hook.c \
  	inproc_sync.c \
+@@ -51,6 +52,6 @@ SOURCES = \
+ 	winstation.c
+ 
+ UNIX_CFLAGS = $(INOTIFY_CFLAGS)
+-UNIX_LIBS   = $(LDEXECFLAGS) $(RT_LIBS) $(INOTIFY_LIBS) $(PROCSTAT_LIBS)
++UNIX_LIBS   = $(LDEXECFLAGS) $(RT_LIBS) $(INOTIFY_LIBS) $(PROCSTAT_LIBS) -lrt
+ 
+ unicode_EXTRADEFS = -DBINDIR="\"${bindir}\"" -DDATADIR="\"${datadir}\""
 diff --git a/server/fsync.c b/server/fsync.c
 new file mode 100644
 index 00000000000..c42867820bd

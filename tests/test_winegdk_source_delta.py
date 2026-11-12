@@ -959,6 +959,11 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         # depend on a new configure check.
         self.assertNotIn("configure.ac", changed)
         self.assertNotIn("HAVE_LINUX_FUTEX_H", additions)
+        # glibc kept shm_open in librt until 2.34 and the engine is built
+        # against Debian 11's 2.31; configure only adds -lrt when
+        # clock_gettime needs it, so both links name it themselves.
+        self.assertIn("$(HWLOC_LIBS) -lrt", additions)
+        self.assertIn("$(INOTIFY_LIBS) $(PROCSTAT_LIBS) -lrt", additions)
         # native23 pins every file 0014 changes in SOURCE-SHA256SUMS.
         self.assertLessEqual(changed, PINNED_SOURCE_FILES,
                              changed - PINNED_SOURCE_FILES)
