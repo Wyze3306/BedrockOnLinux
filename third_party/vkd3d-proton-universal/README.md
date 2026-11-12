@@ -171,7 +171,11 @@ of the frame latency object (`NTSYNC_IOC_SEM_POST`) over 15 s.
 Shipping it is a new engine revision, so it waits for the maintainer's go-ahead:
 
 1. Publish the payload: `gh workflow run build-vkd3d.yml --ref <branch> -f
-   publish=true`.
+   publish=true`, or let `release.yml` do it, since it builds a vkd3d release
+   that does not exist yet. The release is named by
+   `scripts/vkd3d-release-tag.sh` after the hash of `OUTPUT-SHA256SUMS`
+   (`vkd3d-3.0.1-nv-dgc-32d230b6254d`), so the `vkd3d-3.0.1-nv-dgc` release
+   keeps the native14-native22 payload those engines were assembled from.
 2. Bump `WINEGDK_BUILD_REV` in `bol/config.py` and
    `REQUIRED_VARIANT_HASHES_BUILD_REV` in `bol/vkd3d.py` together, and set the
    `d3d12core.dll` hashes of both variants in `REQUIRED_VARIANT_HASHES` to

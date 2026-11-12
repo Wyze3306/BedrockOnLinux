@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -11,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = ROOT / "third_party/vkd3d-proton-universal"
 BUILD_RECIPE = ROOT / "scripts/build-vkd3d-universal.sh"
 PACKAGE_ENGINE = ROOT / "scripts/package-engine.sh"
+RELEASE_TAG = ROOT / "scripts/vkd3d-release-tag.sh"
+WORKFLOWS = ROOT / ".github/workflows"
+_BASH = shutil.which("bash") or "/bin/bash"
 
 # provenance.env key -> the bundle file whose SHA-256 it locks.
 LOCKED_FILES = {
@@ -99,6 +105,43 @@ class VendoredBundleTests(unittest.TestCase):
         self.assertEqual(
             patch.count("+    sleep_state->sleep_threshold_scales = true;"),
             2)
+
+
+class ReleaseTagTests(unittest.TestCase):
+    def test_tag_is_named_after_the_output_hash_lock(self):
+        result = subprocess.run(
+            [_BASH, str(RELEASE_TAG)], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lock = _lock()["VKD3D_OUTPUT_HASHES_SHA256"]
+        self.assertEqual(result.stdout.strip(),
+                         "vkd3d-3.0.1-nv-dgc-" + lock[:12])
+
+    def test_tag_refuses_an_output_lock_that_does_not_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts").mkdir()
+            shutil.copy2(RELEASE_TAG, root / "scripts")
+            bundle = root / "third_party/vkd3d-proton-universal"
+            bundle.mkdir(parents=True)
+            shutil.copy2(BUNDLE / "provenance.env", bundle)
+            (bundle / "OUTPUT-SHA256SUMS").write_text("tampered\n")
+            result = subprocess.run(
+                [_BASH, str(root / "scripts/vkd3d-release-tag.sh")],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("does not match its lock", result.stderr)
+
+    def test_workflows_resolve_the_payload_release_through_the_lock(self):
+        for name in ("build-vkd3d.yml", "build-engine.yml", "release.yml"):
+            with self.subTest(workflow=name):
+                text = (WORKFLOWS / name).read_text(encoding="utf-8")
+                self.assertIn("scripts/vkd3d-release-tag.sh", text)
+                # The fixed tag holds the payload earlier engine revisions
+                # were assembled from; nothing may publish to or resolve it.
+                self.assertNotRegex(text, r"vkd3d-3\.0\.1-nv-dgc(?![-\w.])")
 
 
 if __name__ == "__main__":

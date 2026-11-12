@@ -93,6 +93,12 @@ jobs:
           # docker writes as root; hand the tree back to the runner user.
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/vkout"
 
+      - name: Name the release after the output hash lock
+        run: |
+          # A rebuilt payload gets a release of its own rather than replacing
+          # the bytes earlier engine revisions were assembled from.
+          echo "VKD3D_TAG=$(scripts/vkd3d-release-tag.sh)" >> "$GITHUB_ENV"
+
       - name: Pack the vkd3d output deterministically
         id: pack
         run: |
@@ -127,7 +133,7 @@ jobs:
         if: ${{ inputs.publish }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: vkd3d-3.0.1-nv-dgc
+          tag_name: ${{ env.VKD3D_TAG }}
           target_commitish: ${{ github.sha }}
           name: vkd3d-proton universal DGC 3.0.1
           make_latest: false
