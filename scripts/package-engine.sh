@@ -329,6 +329,8 @@ WINEGDK_NATIVE_PROVENANCE_FILES=(
   0012-xgameruntime-run-titles-that-target-a-newer-gaming-services.patch
   0013-kernelbase-report-PrivateUsage-from-GetProcessMemoryInfo.patch
   0014-ntdll-server-fall-back-to-fsync-without-ntsync.patch
+  0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch
+  0016-ntdll-check-the-time-zone-at-most-once-a-second.patch
 )
 
 verify_sha256() {
@@ -381,7 +383,7 @@ verify_winegdk_source_provenance() {
     "ee0543f11737a11f5edec389967bb41482c7f5eda3807c24d171dd6bf6301274" \
     "WineGDK r12 source delta"
   verify_sha256 "$native_root/README.md" \
-    "05ac7a598346312f826730cd815344706ad027311bd32fe2d3cde3adbc07a09d" \
+    "065b1b4ad787dc71c82bf90f60bf4bd37bc33ee1ffe72e28307a9cfbc261c5db" \
     "WineGDK native5 source-delta README"
   verify_sha256 "$native_root/SOURCE-SHA256SUMS" \
     "e5b3763a60374f1a5b1506f459ad80f39fe302d2397f26e2d9b9d220af4e412b" \
@@ -442,6 +444,14 @@ verify_winegdk_source_provenance() {
     "$native_root/0014-ntdll-server-fall-back-to-fsync-without-ntsync.patch" \
     "bbf37dfe580536aada2594cfa274a028f4bfa9ed69a95070fa3a1bc98a8951ae" \
     "WineGDK fsync fallback without ntsync"
+  verify_sha256 \
+    "$native_root/0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch" \
+    "9fa03ed50b2a5bfb68a60f55aa4b1ce4b7d842010c6b3f2c176177528a722db6" \
+    "WineGDK process memory counters"
+  verify_sha256 \
+    "$native_root/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch" \
+    "6054f33a5a95c5beaf12039dca8b303fdfa66c4e01fb95b75479659f0aebc2d9" \
+    "WineGDK time zone check"
 }
 
 has_marker() {
@@ -932,6 +942,8 @@ for relative_root, names in (
         "native5/0012-xgameruntime-run-titles-that-target-a-newer-gaming-services.patch",
         "native5/0013-kernelbase-report-PrivateUsage-from-GetProcessMemoryInfo.patch",
         "native5/0014-ntdll-server-fall-back-to-fsync-without-ntsync.patch",
+        "native5/0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch",
+        "native5/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch",
     )),
     (gdk_proton_provenance_root, ("provenance.env",)),
 ):

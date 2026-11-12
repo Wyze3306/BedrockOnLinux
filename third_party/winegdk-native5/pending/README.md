@@ -10,11 +10,12 @@ whatever other patches are waiting, not by the change that wrote the patch.
 `tests/test_winegdk_source_delta.py` keeps the two states apart: every patch
 directly in `winegdk-native5/` must be wired everywhere, and nothing here is.
 
-## 0015: record the title's XGameEventWrite calls (issue #152)
+## 0017: record the title's XGameEventWrite calls (issue #152)
 
 Applies on top of `0013` (checked against the exported `75637b67` tree with
-`0002` to `0013` applied), and shares no file with the no-ntsync `0014`
-another branch prepares. It serves the `XGameEvent` runtime class,
+`0002` to `0013` applied). It touches only `dlls/xgameruntime`, so it shares
+no file with the ntdll and server patches `0014` to `0016` that the 3.0.0
+branch carries, and applies after them unchanged. It serves the `XGameEvent` runtime class,
 `{bbfbdcc7-bfe7-409b-a5ca-edf054960b4d}`, which `QueryApiImpl` refused with
 `E_NOTIMPL`, so XSAPI dropped every in-game event Minecraft wrote, and with
 them every achievement. Each event is appended as one JSON line to the file
@@ -40,7 +41,7 @@ without cheats:
 Wiring it in, when an engine is next released:
 
 * `scripts/build-winegdk-bullseye.sh` and `scripts/build-winegdk-container.sh`:
-  a `VENDORED_GAME_EVENT_PATCH` and its SHA-256, applied after `0013`;
+  a `VENDORED_GAME_EVENT_PATCH` and its SHA-256, applied after `0016`;
 * `scripts/package-engine.sh`: the file in both provenance lists;
 * `SOURCE-SHA256SUMS`: the new hashes of `dlls/xgameruntime/main.c`,
   `private.h` and `Makefile.in`, plus

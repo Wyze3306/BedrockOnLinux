@@ -129,9 +129,9 @@ display" cap with vsync off.
 
 Wine needs far less. A non-alertable `NtDelayExecution` is a `select()` with a
 microsecond timeout (`dlls/ntdll/unix/sync.c`), so it oversleeps by the host's
-timer slack, not by a timer interval. Measured with `tools/limiter-sleep-probe.c`
-under the engine's Wine 11.14 on Linux 6.16 (Ryzen 5 5600, 12 threads), for waits from
-0.1 to 15 ms:
+timer slack, not by a timer interval. Measured with
+`tools/limiter-sleep-probe.c` under the engine's Wine 11.14 on Linux 6.16
+(Ryzen 5 5600, 12 threads), for waits from 0.1 to 15 ms:
 
 | load | median oversleep | p99 | worst |
 |---|---|---|---|
@@ -139,11 +139,12 @@ under the engine's Wine 11.14 on Linux 6.16 (Ryzen 5 5600, 12 threads), for wait
 | 12 busy threads | 55-57 µs | 57-68 µs | 0.31 ms |
 
 The same probe replays the limiter's tail. Upstream's threshold spins for 22%
-of the thread's time at 60 FPS and 30% at 141 FPS (the in-game figures), and
-under full CPU contention it is also the less punctual one, because the
-scheduler preempts a thread that spins that long: 3.5 ms late at the 90th
-percentile at 60 FPS. A fixed 0.5 ms tail spins for 2.6% and 6.2% and released
-every frame on time at the 90th percentile in both runs.
+of the thread's time at 60 FPS and 30% at 141 FPS, matching what the game's
+thread shows, and under full CPU contention it is also the less punctual one,
+because the scheduler preempts a thread that spins that long: 3.5 ms late at
+the 90th percentile at 60 FPS. A fixed 0.5 ms tail spins for 2.6% and 6.2% of
+the time and still releases frames on time at the 90th percentile in both
+runs.
 
 So under Wine, when `NtDelayExecution` is available, the patch uses a fixed
 0.5 ms tail, comfortably above the worst oversleep measured outside scheduling

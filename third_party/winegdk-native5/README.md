@@ -206,9 +206,23 @@ builders also refuse a wineserver that lacks the fallback.
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
 native5 delta and its follow-ups through `0013`. The Bullseye builder applies
 the reviewed r12 and native patches when the target commit is unavailable,
-always applies `0002` through `0014`, then verifies the complete resulting
+always applies `0002` through `0016`, then verifies the complete resulting
 source tree. `0014` changes none of the pinned files and is itself pinned by
 its SHA-256 in both builders; its sources join the manifest with the next
 engine revision, because the manifest's own hash is the
 `WINEGDK_SOURCE_MANIFEST_SHA256` the launcher checks against the installed
-engine.
+engine. `0015` and `0016` are pinned the same way.
+
+The `0015` and `0016` patches take two Wine calls Minecraft makes on every
+frame off its main thread, the one that builds each frame and caps the frame
+rate. `GetProcessMemoryInfo` opened `/proc/self/status`, read it through stdio
+and ran up to six `sscanf()` per line before closing it; ntdll now keeps the
+file open for its own process, rereads it with one `pread()` from offset 0 and
+picks the six fields out with `strncmp()` and `strtoull()`, for the same
+values. `get_timezone_info()`, behind `GetTimeZoneInformation`, ran
+`gmtime()`, `mktime()` and `localtime()` on each of the game's four calls per
+frame, and glibc stats the zone file in two of them; it now compares
+`time(NULL)` with the second it last checked, as `SystemTimeOfDayInformation`
+already does, and only then asks libc. Measured on the game's main thread at
+about 600 FPS, the two calls went from 2.8% and 1.9% of its time to almost
+nothing.

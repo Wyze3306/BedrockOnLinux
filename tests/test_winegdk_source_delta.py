@@ -66,6 +66,13 @@ PRIVATE_USAGE_PATCH = (
 FSYNC_PATCH = (
     DELTA / "0014-ntdll-server-fall-back-to-fsync-without-ntsync.patch"
 )
+VM_COUNTERS_PATCH = (
+    DELTA / "0015-ntdll-reread-proc-self-status-through-a-kept-"
+            "descriptor.patch"
+)
+TIME_ZONE_PATCH = (
+    DELTA / "0016-ntdll-check-the-time-zone-at-most-once-a-second.patch"
+)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -955,6 +962,48 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         self.assertIn(
             "interface Windows.Foundation.Collections.IVector<HSTRING>;",
             additions)
+
+    @staticmethod
+    def _additions(path):
+        return "\n".join(
+            line[1:] for line in path.read_text().splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+
+    def test_own_memory_counters_cost_one_read(self):
+        # Minecraft asks for its memory counters every frame: an open, stdio
+        # reads, hundreds of sscanf() and a close were 2.8% of its main thread.
+        additions = self._additions(VM_COUNTERS_PATCH)
+        self.assertIn("static LONG proc_self_status_fd = -1;", additions)
+        self.assertIn(
+            'open( "/proc/self/status", O_RDONLY | O_CLOEXEC )', additions)
+        self.assertIn("pread( fd, buffer, sizeof(buffer) - 1, 0 )", additions)
+        # Two threads racing to open it keep one descriptor, never leak one.
+        self.assertIn(
+            "InterlockedCompareExchange( &proc_self_status_fd, fd, -1 )",
+            additions)
+        self.assertNotIn("sscanf", additions)
+        for field in ("VmPeak:", "VmSize:", "VmHWM:", "VmRSS:", "RssAnon:",
+                      "VmSwap:"):
+            with self.subTest(field=field):
+                self.assertIn(f'"{field}"', additions)
+        # Another process's counters are still read afresh and closed.
+        self.assertIn('"/proc/%u/status", unix_pid', additions)
+        self.assertIn("close( fd );", additions)
+
+    def test_time_zone_is_checked_at_most_once_a_second(self):
+        # Four GetTimeZoneInformation calls per frame each made glibc stat
+        # /etc/localtime twice before finding the cached answer still valid.
+        text = TIME_ZONE_PATCH.read_text()
+        additions = self._additions(TIME_ZONE_PATCH)
+        self.assertIn("static time_t last_check = -1;", additions)
+        self.assertIn("now = time(NULL);", additions)
+        self.assertIn("if (now == last_check)", additions)
+        # The early return comes before any libc time zone call.
+        self.assertLess(text.index("if (now == last_check)"),
+                        text.index("tm = gmtime(&year_start);"))
+        # Both paths that leave a valid cache record the check.
+        self.assertEqual(additions.count("last_check = now;"), 2)
 
     def test_every_vendored_patch_is_applied_and_attested(self):
         """A patch in third_party ships only if the builders apply it.
