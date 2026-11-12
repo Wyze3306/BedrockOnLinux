@@ -17,7 +17,7 @@ WORK="${1:?usage: build-xodus-cli.sh WORKDIR}"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 XODUS_REMOTE="${XODUS_REMOTE:-https://github.com/xodus-gaming/xodus}"
 
-for t in git cargo tar gzip sha256sum protoc cmake; do
+for t in git cargo cargo-zigbuild zig objdump tar gzip sha256sum protoc cmake; do
   command -v "$t" >/dev/null || { echo "!! need $t" >&2; exit 1; }
 done
 # wry/tao link the login webview unconditionally, and the xodus crate pulls in
@@ -29,6 +29,19 @@ done
 
 COMMIT="$(grep -m1 '^XODUS_SOURCE_COMMIT = ' "$SRC/bol/config.py" | cut -d'"' -f2)"
 [ -n "$COMMIT" ] || { echo "!! XODUS_SOURCE_COMMIT missing from bol/config.py" >&2; exit 1; }
+
+# xodus-cli is linked against the glibc the game engine is built for, so the
+# C library is not what stops it where the engine runs: Debian 12, Ubuntu
+# 22.04 and the distributions built on it, Fedora 39 (issue #264, where it
+# asked for glibc 2.39 because it was linked against the container's). The
+# container cannot simply be that old -- WebKitGTK 4.1, which xodus-cli still
+# links, is packaged for nothing older than Ubuntu 22.04 -- so cargo-zigbuild
+# links it instead: zig supplies the C library of the version named in the
+# target, and every glibc symbol xodus-cli imports is that version's.
+# Everything else still comes from the container.
+GLIBC_FLOOR="$(grep -m1 '^REQUIRED_ENGINE_GLIBC_MAX = ' "$SRC/bol/vkd3d.py" | cut -d'"' -f2)"
+[ -n "$GLIBC_FLOOR" ] || { echo "!! REQUIRED_ENGINE_GLIBC_MAX missing from bol/vkd3d.py" >&2; exit 1; }
+TARGET="x86_64-unknown-linux-gnu"
 # The patches are part of what the binary is, so the rev names them too: a
 # revision has to name exactly one set of bytes, or a rebuild silently
 # replaces a published asset with a different binary under the same name.
@@ -46,6 +59,26 @@ git -C "$TREE" remote add origin "$XODUS_REMOTE"
 git -C "$TREE" fetch -q --depth 1 origin "$COMMIT"
 git -C "$TREE" checkout -q FETCH_HEAD
 
+# key-chain-file is not optional: without it xodus stores tokens through a
+# D-Bus secret service, which does not exist in a Steam Deck Game Mode session
+# or inside a Flatpak sandbox, and every command needing device credentials
+# fails. With it the tokens live in $HOME/.xodus-keyring.ron, where $HOME is
+# the directory bol.xodus.home() hands the binary rather than the user's own.
+#
+# --remap-path-prefix keeps the build directory out of the binary, and
+# CARGO_INCREMENTAL=0 + -C strip=symbols drop the two other common sources of
+# run-to-run drift, so the artifact has a stable SHA-256 to pin.
+#
+# --allow-shlib-undefined: the container's GNOME libraries are linked against
+# its own, newer glibc, and the linker refuses an executable whose libraries
+# import symbols the target glibc lacks. Those imports are the libraries'
+# own, resolved at run time against the glibc they were built for -- the
+# host's, or the bundled runtime's -- so the check is waived; what xodus-cli
+# itself imports is held to the floor below.
+export CARGO_INCREMENTAL=0
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1784308597}"
+export RUSTFLAGS="-C strip=symbols -C link-arg=-Wl,--allow-shlib-undefined --remap-path-prefix=$TREE=/xodus --remap-path-prefix=$HOME/.cargo=/cargo"
+
 if [ "$PATCH_LEVEL" -gt 0 ]; then
   echo "== Applying $PATCH_LEVEL patch(es) from third_party/xodus/patches"
   # -3 is deliberately absent: a patch that no longer applies cleanly to the
@@ -56,29 +89,33 @@ if [ "$PATCH_LEVEL" -gt 0 ]; then
   # place they ever run: the crate is not vendored into this repository. Every
   # crate the patches touch, or a patch lands with its test never run --
   # xodus-cli is in the list for 0004, whose tests are the only thing that
-  # checks both legs of the sign-in are still hosted the same way.
-  cargo test --release --manifest-path "$TREE/Cargo.toml" \
-    -p msixvc -p xodus -p xodus-cli --locked
+  # checks both legs of the sign-in are still hosted the same way. They are
+  # built the way the binary is, so they test the code that ships.
+  cargo-zigbuild test --release --manifest-path "$TREE/Cargo.toml" \
+    -p msixvc -p xodus -p xodus-cli --locked --target "$TARGET.$GLIBC_FLOOR"
 fi
 
-echo "== Building xodus-cli"
-# key-chain-file is not optional: without it xodus stores tokens through a
-# D-Bus secret service, which does not exist in a Steam Deck Game Mode session
-# or inside a Flatpak sandbox, and every command needing device credentials
-# fails. With it the tokens live in $HOME/.xodus-keyring.ron, where $HOME is
-# the directory bol.xodus.home() hands the binary rather than the user's own.
-#
-# --remap-path-prefix keeps the build directory out of the binary, and
-# CARGO_INCREMENTAL=0 + -C strip=symbols drop the two other common sources of
-# run-to-run drift, so the artifact has a stable SHA-256 to pin.
-export CARGO_INCREMENTAL=0
-export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1784308597}"
-RUSTFLAGS="-C strip=symbols --remap-path-prefix=$TREE=/xodus --remap-path-prefix=$HOME/.cargo=/cargo" \
-  cargo build --release --manifest-path "$TREE/Cargo.toml" \
-    -p xodus-cli --features xodus/key-chain-file --locked
+echo "== Building xodus-cli for glibc $GLIBC_FLOOR"
+cargo zigbuild --release --manifest-path "$TREE/Cargo.toml" \
+  -p xodus-cli --features xodus/key-chain-file --locked \
+  --target "$TARGET.$GLIBC_FLOOR"
 
-BIN="$TREE/target/release/xodus-cli"
+BIN="$TREE/target/$TARGET/release/xodus-cli"
 [ -x "$BIN" ] || { echo "!! xodus-cli was not produced" >&2; exit 1; }
+
+# The point of the target above, checked rather than assumed: a dependency
+# can still reach for a newer symbol (a C library built with the container's
+# headers, say), and the loader would refuse the binary on every host older
+# than that, exactly as in #264.
+NEWEST="$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' \
+  | sed 's/^GLIBC_//' | sort -uV | tail -n1)"
+[ -n "$NEWEST" ] || { echo "!! no glibc symbol versions found in xodus-cli" >&2; exit 1; }
+if [ "$(printf '%s\n%s\n' "$NEWEST" "$GLIBC_FLOOR" | sort -V | tail -n1)" != "$GLIBC_FLOOR" ]; then
+  echo "!! xodus-cli imports glibc $NEWEST symbols, above the $GLIBC_FLOOR floor:" >&2
+  objdump -T "$BIN" | grep -E "GLIBC_$NEWEST( |\)|$)" >&2 || true
+  exit 1
+fi
+echo "   glibc symbols up to $NEWEST (floor $GLIBC_FLOOR)"
 
 echo "== Packaging"
 SET="$WORK/set"

@@ -48,6 +48,14 @@ env:
   # workspace declares rust-version 1.98.0 since xodus-gaming/xodus@f4ca223,
   # and cargo refuses to build it with anything older.
   RUST_TOOLCHAIN: "1.98.1"
+  # The linker behind the glibc floor (scripts/build-xodus-cli.sh): zig
+  # supplies the C library xodus-cli is linked against, at the version the
+  # target names, and cargo-zigbuild drives it. Both are pinned for the same
+  # reason as the toolchain, the zig archive by the SHA-256 ziglang.org lists
+  # for it.
+  ZIG_VERSION: "0.15.2"
+  ZIG_SHA256: "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+  CARGO_ZIGBUILD_VERSION: "0.24.1"
 
 jobs:
   build:
@@ -69,6 +77,8 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo \
             -e RUST_TOOLCHAIN="${RUST_TOOLCHAIN}" \
+            -e ZIG_VERSION="${ZIG_VERSION}" -e ZIG_SHA256="${ZIG_SHA256}" \
+            -e CARGO_ZIGBUILD_VERSION="${CARGO_ZIGBUILD_VERSION}" \
             debian:trixie@sha256:fac46bff2e02f51425b6e33b0e1169f55dfb053d83511ca28aa50c09fd5ed7a4 \
             bash -euo pipefail -c '
               export DEBIAN_FRONTEND=noninteractive
@@ -109,6 +119,14 @@ jobs:
               curl -fsSL --retry 5 https://sh.rustup.rs \
                 | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
               . "$HOME/.cargo/env"
+              zig_archive="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+              curl -fsSL --retry 5 -o "/tmp/${zig_archive}" \
+                "https://ziglang.org/download/${ZIG_VERSION}/${zig_archive}"
+              echo "${ZIG_SHA256}  /tmp/${zig_archive}" | sha256sum -c -
+              mkdir -p /opt/zig
+              tar -xJf "/tmp/${zig_archive}" -C /opt/zig --strip-components=1
+              export PATH="/opt/zig:$PATH"
+              cargo install --locked cargo-zigbuild --version "$CARGO_ZIGBUILD_VERSION"
               scripts/build-xodus-cli.sh /tmp/xodus-work
               # The WebKitGTK runtime comes from a later snapshot than the
               # toolchain above: Debian updates WebKitGTK within a stable
@@ -123,7 +141,7 @@ jobs:
               # The same container, because the bundle has to be the closure of
               # the binary that was just built.
               scripts/build-xodus-webview.sh /tmp/xodus-webview-work \
-                /tmp/xodus-work/xodus/target/release/xodus-cli
+                /tmp/xodus-work/xodus/target/x86_64-unknown-linux-gnu/release/xodus-cli
             '
           sudo chown -R "$(id -u):$(id -g)" dist
 

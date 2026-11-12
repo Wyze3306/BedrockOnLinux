@@ -540,6 +540,82 @@ class OldGlibcTests(unittest.TestCase):
             self.assertIn("glibc 2.39 or newer", str(raised.exception))
             self.assertEqual(env, {"PATH": "/usr/bin"})
 
+    @staticmethod
+    def _bundle_too_new(base, host_has_webkit):
+        """A stand-in xodus-cli that the bundle under ``base`` cannot load.
+
+        Linked against glibc 2.31 like the -p14 build, it starts on the host
+        when the host has WebKitGTK; through the bundle it gets as far as the
+        bundle's own libraries, which ask for a newer glibc than the host's.
+        """
+        lib = base / "bundle" / "lib" / "libwebkit2gtk-4.1.so.0"
+        binary = base / "xodus-cli"
+        host = ("exit 0" if host_has_webkit else
+                "echo 'xodus-cli: error while loading shared libraries: "
+                "libwebkit2gtk-4.1.so.0: cannot open shared object file: "
+                "No such file or directory' >&2; exit 127")
+        binary.write_text(
+            f"#!{SH}\n"
+            f'case "$LD_LIBRARY_PATH" in *"{base}/bundle/lib"*)\n'
+            "  echo \"xodus-cli: /lib/x86_64-linux-gnu/libc.so.6: version "
+            f"\\`GLIBC_2.38' not found (required by {lib})\" >&2\n"
+            "  exit 1;;\n"
+            f"esac\n{host}\n")
+        binary.chmod(0o755)
+        return binary
+
+    def test_a_bundle_too_new_for_this_glibc_names_the_host_package(self):
+        bundle = Path("/data/xodus-webview")
+        text = ("xodus-cli: /lib/x86_64-linux-gnu/libc.so.6: version "
+                "`GLIBC_2.38' not found (required by "
+                f"{bundle}/lib/libwebkit2gtk-4.1.so.0)\n"
+                "xodus-cli: /lib/x86_64-linux-gnu/libc.so.6: version "
+                "`GLIBC_2.36' not found (required by "
+                f"{bundle}/lib/libsoup-3.0.so.0)\n")
+        with mock.patch.object(webview, "_host_glibc", return_value="2.35"):
+            message = webview.glibc_too_old_message(text, bundle)
+        self.assertIn("glibc 2.38 or newer", message)
+        self.assertIn("this system has glibc 2.35", message)
+        self.assertIn(webview.host_package_name(), message)
+        # The binary asking for it too is the old answer: no package helps.
+        with mock.patch.object(webview, "_host_glibc", return_value="2.35"):
+            message = webview.glibc_too_old_message(text + _OLD_GLIBC, bundle)
+        self.assertNotIn(webview.host_package_name(), message)
+
+    def test_a_host_webkitgtk_is_kept_when_the_bundle_cannot_load(self):
+        # The bundle stands in for a host WebKitGTK without TLS; on a glibc
+        # too old for the bundle, the host's is still what runs the game.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            binary = self._bundle_too_new(base, host_has_webkit=True)
+            env = {"PATH": "/usr/bin"}
+            with mock.patch.object(webview, "host_tls_available",
+                                   return_value=False), \
+                    mock.patch.object(webview, "prepare",
+                                      return_value=base / "bundle"), \
+                    mock.patch.object(webview, "info") as said:
+                previous = webview.apply(binary, env)
+            self.assertNotIn("LD_LIBRARY_PATH", env)
+            self.assertNotIn("GIO_EXTRA_MODULES", env)
+            self.assertIn("glibc", said.call_args.args[0])
+            webview.restore_env(env, previous)
+            self.assertEqual(env, {"PATH": "/usr/bin"})
+
+    def test_no_host_webkitgtk_and_a_bundle_too_new_names_the_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            binary = self._bundle_too_new(base, host_has_webkit=False)
+            env = {"PATH": "/usr/bin"}
+            with mock.patch.object(webview, "prepare",
+                                   return_value=base / "bundle"), \
+                    mock.patch.object(webview, "_host_glibc",
+                                      return_value="2.35"), \
+                    self.assertRaises(webview.BolError) as raised:
+                webview.apply(binary, env)
+            self.assertIn("glibc 2.38 or newer", str(raised.exception))
+            self.assertIn(webview.host_package_name(), str(raised.exception))
+            self.assertEqual(env, {"PATH": "/usr/bin"})
+
     def test_a_failed_xodus_command_reports_the_glibc_floor(self):
         message = xodus._loader_failure(_OLD_GLIBC)
         self.assertIn("glibc 2.39 or newer", message)

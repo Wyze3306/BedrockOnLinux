@@ -48,6 +48,25 @@
   translations (`pack.name`) get their real name, and colour codes no
   longer end up in folder names.
 
+- **The game starts about 1.7 seconds sooner after PLAY.** Before Wine
+  starts, xodus-cli finds the game's files in the downloaded package, fetches
+  the licence and decrypts the executable, and two of those steps spent most
+  of their time on 4 KiB reads and writes, each handed to another thread.
+  They now go through a block cache and 4 MiB buffers. From start to the
+  hand-over to Wine, for 1.26.60: 3.2 s down to 1.5 s (median of five), and
+  CPU time from 2.5 s to 0.6 s. The decrypted executable is byte for byte
+  the same.
+- **Minecraft downloads and starts on Debian 12, Ubuntu 22.04 and the
+  distributions built on it (Linux Mint 21, Pop!_OS 22.04, Zorin OS 17) and
+  Fedora 39.** xodus-cli, which downloads the game and decrypts it at every
+  launch, was linked against glibc 2.39 and stopped there on "version
+  `GLIBC_2.39' not found", so only the Flatpak worked. It is now linked
+  against glibc 2.31, the same floor as the game engine. It still needs
+  WebKitGTK 4.1, from the system's package manager on these releases
+  (`libwebkit2gtk-4.1-0` on Debian and Ubuntu): the bundled replacement is
+  built on Debian 13 and needs its glibc, and the launcher now says to
+  install the package instead of saying nothing helps, and keeps a system
+  WebKitGTK it would otherwise have swapped for the bundle (#264).
 - **Less CPU spent waiting between frames with vsync on.** With a Max
   Framerate set in Minecraft, the launcher swaps the game's own limiter,
   which holds a whole CPU core under Wine, for vkd3d-proton's. That one
