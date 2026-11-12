@@ -17,6 +17,19 @@
   setup now says to install it. `BOL_NO_MUVM=1` keeps the launcher on the
   host (#250).
 
+### Fixed
+
+- **Less CPU spent waiting between frames with vsync on.** With a Max
+  Framerate set in Minecraft, the launcher swaps the game's own limiter,
+  which holds a whole CPU core under Wine, for vkd3d-proton's. That one
+  still ends every wait spinning, about a fifth of a core at 60 FPS: more
+  than the game's own main thread uses in the menu. When vsync is on and the
+  Max Framerate is at least the display's refresh rate, vsync already keeps
+  the game at that rate, so the launcher now only turns the game's limiter
+  off and adds none of its own. Measured on a 60 Hz display: the same
+  60 FPS, and the game's CPU use in the menu down from 40% to 22% of a core
+  (#202).
+
 ## 2.3.1 — 2026-11-11
 
 Other players keep their own skins on servers, the Realms button of the title

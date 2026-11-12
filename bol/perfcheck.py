@@ -312,6 +312,11 @@ def render_distance_problem(options, threshold_chunks=EXTREME_RENDER_CHUNKS):
         "rate back. %s" % (chunks, threshold_chunks, _SILENCE))
 
 
+def vsync_is_on(options):
+    """Whether Minecraft's own settings ask it to wait for the display."""
+    return _option_int(options, "gfx_vsync") == 1
+
+
 def frame_rate_is_unlimited(options):
     """Whether Minecraft's own settings leave the render loop unpaced.
 

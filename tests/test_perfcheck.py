@@ -567,6 +567,73 @@ class FrameRateLimitTests(unittest.TestCase):
         self.assertEqual(applied, 60)
         self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
 
+    def test_vsync_at_the_players_limit_needs_no_second_limiter(self):
+        # #202: vkd3d-proton's limiter ends each wait spinning, 22% of a core
+        # at 60 FPS. Vsync on a 60 Hz display already holds the game at 60.
+        for refresh in (60.0, 59.94, 60.05):
+            env = {}
+            applied, _ = self._apply(env=env, refresh_hz=refresh,
+                                     gfx_vsync="1", gfx_max_framerate="60")
+            # Still returned, so the game's own spinning limiter is set aside.
+            self.assertEqual(applied, 60, refresh)
+            self.assertNotIn("VKD3D_FRAME_RATE", env, refresh)
+
+    def test_vsync_on_a_fast_display_holds_a_matching_limit(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=143.85, gfx_vsync="1",
+                                 gfx_max_framerate="144")
+        self.assertEqual(applied, 144)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
+    def test_a_limit_under_the_refresh_rate_is_still_held(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=60.0, gfx_vsync="1",
+                                 gfx_max_framerate="59")
+        self.assertEqual(applied, 59)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59")
+
+    def test_vsync_off_still_needs_the_launchers_limiter(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=60.0, gfx_vsync="0",
+                                 gfx_max_framerate="60")
+        self.assertEqual(applied, 60)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+
+    def test_an_unmeasured_display_keeps_the_launchers_limiter(self):
+        env = {}
+        applied, warned = self._apply(env=env, refresh_hz=None, gfx_vsync="1",
+                                      gfx_max_framerate="60")
+        self.assertEqual(applied, 60)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+        self.assertFalse(warned.called)
+
+    def test_a_display_probe_that_raises_keeps_the_launchers_limiter(self):
+        def boom():
+            raise OSError("no display")
+        env = {}
+        with tempfile.TemporaryDirectory() as td:
+            prefix = _prefix(td, gfx_vsync="1", gfx_max_framerate="60")
+            with mock.patch.object(launch, "info"), \
+                    mock.patch.object(launch, "warn"):
+                applied = launch._configure_frame_rate_limit(
+                    env, {}, prefix, environ={}, refresh_probe=boom)
+        self.assertEqual(applied, 60)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+
+    def test_a_held_limit_that_vsync_keeps_adds_no_limiter(self):
+        env = {}
+        with tempfile.TemporaryDirectory() as td:
+            prefix = _prefix(td, gfx_vsync="1", gfx_max_framerate="0")
+            options = perfcheck.find_options_file(prefix)
+            options.with_name(options.name + ".bol-max-framerate") \
+                .write_text("60\n")
+            with mock.patch.object(launch, "info"), \
+                    mock.patch.object(launch, "warn"):
+                applied = launch._configure_frame_rate_limit(
+                    env, {}, prefix, environ={}, refresh_probe=lambda: 60.0)
+        self.assertEqual(applied, 60)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
     def test_the_players_own_limit_needs_no_display_probe(self):
         env = {}
         applied, warned = self._apply(env=env, refresh_hz=None,

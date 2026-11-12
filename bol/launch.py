@@ -65,6 +65,7 @@ from .perfcheck import (
     frame_rate_is_unlimited,
     performance_problems,
     read_game_options,
+    vsync_is_on,
 )
 from .prefix import (
     active_prefix,
@@ -250,6 +251,27 @@ def _requested_frame_rate(environ=None):
     return value if value > 0 else 0.0
 
 
+def _vsync_holds_limit(limit, options, refresh_probe=None):
+    """The refresh rate that already holds Minecraft to ``limit``, or None.
+
+    With vsync on, the game presents no faster than the display refreshes, so
+    a limit at or above the fastest display's refresh rate is one vsync keeps
+    by itself. Half a frame per second of slack lets 60 stand for a display
+    driven at 59.94 or 60.05 Hz. A display that cannot be measured answers
+    None, and the launcher then holds the limit itself as before.
+    """
+    if not vsync_is_on(options):
+        return None
+    probe = _screen_refresh_hz if refresh_probe is None else refresh_probe
+    try:
+        refresh = probe()
+    except Exception:
+        return None
+    if not refresh or refresh <= 0 or refresh > limit + 0.5:
+        return None
+    return refresh
+
+
 def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
                                 refresh_probe=None):
     """Pace Minecraft's frames with a limiter that sleeps instead of spinning.
@@ -266,6 +288,15 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
     launcher holds that same rate through it, and the game's own limiter is
     set aside for the session (see _set_aside_game_frame_limit). Nothing the
     player chose changes: the frame rate is theirs, only the wait is cheaper.
+
+    That limiter is not free either: it ends every wait spinning, for a
+    millisecond plus a sixth of the time left, so its thread holds a fifth of
+    a core at 60 FPS — measured at 22% in the menu, against 6% for the game's
+    own main thread (#202). When vsync is on and the player's limit is no
+    lower than the fastest display's refresh rate, vsync already holds the
+    game to that limit, so only the game's own limiter is set aside and no
+    other takes its place: the same 60.0 FPS on a 60 Hz display, and that
+    thread back under 2%.
 
     With no limit at all — vsync off and *Max Framerate* on Unlimited —
     nothing paces the render loop, and the main menu, the cheapest frame in
@@ -319,6 +350,16 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
     options_path = find_options_file(prefix)
     own = game_frame_limit(options_path)
     if own:
+        refresh = _vsync_holds_limit(own, read_game_options(options_path),
+                                     refresh_probe)
+        if refresh:
+            info("Minecraft's Max Framerate is %d FPS and vsync already holds "
+                 "it to this display's %.2f Hz, so the launcher only turns "
+                 "the game's own limiter off for the session (under Wine it "
+                 "holds a whole CPU core) and puts it back when the game "
+                 "closes. In game it reads Unlimited meanwhile."
+                 % (own, refresh))
+            return own
         info("Minecraft's Max Framerate is %d FPS. The game waits for each "
              "frame by polling for window messages, which under Wine holds "
              "a whole CPU core, so the launcher holds the same %d FPS "
