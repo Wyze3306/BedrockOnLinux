@@ -67,6 +67,82 @@ def gui_import_error():
     return None
 
 
+# The system package each xcb-util library comes in, per package manager.
+# Qt's xcb platform plugin links them; stock Ubuntu 22.04/24.04 desktops, and
+# Mint with them, install no libxcb-cursor0.
+XCB_UTIL_PACKAGES = {
+    #  soname:                  (apt,                 dnf / pacman,
+    #                            zypper)
+    "libxcb-cursor.so.0":      ("libxcb-cursor0",      "xcb-util-cursor",
+                                "libxcb-cursor0"),
+    "libxcb-icccm.so.4":       ("libxcb-icccm4",       "xcb-util-wm",
+                                "libxcb-icccm4"),
+    "libxcb-image.so.0":       ("libxcb-image0",       "xcb-util-image",
+                                "libxcb-image0"),
+    "libxcb-keysyms.so.1":     ("libxcb-keysyms1",     "xcb-util-keysyms",
+                                "libxcb-keysyms1"),
+    "libxcb-render-util.so.0": ("libxcb-render-util0", "xcb-util-renderutil",
+                                "libxcb-render-util0"),
+    "libxcb-util.so.1":        ("libxcb-util1",        "xcb-util",
+                                "libxcb-util1"),
+}
+
+
+def install_hint(library):
+    """"sudo <manager> install <package>" for ``library``, or None."""
+    packages = XCB_UTIL_PACKAGES.get(library)
+    if not packages:
+        return None
+    apt, other, zypper = packages
+    for manager, command, package in (
+            ("apt-get", "sudo apt install", apt),
+            ("dnf", "sudo dnf install", other),
+            ("pacman", "sudo pacman -S", other),
+            ("zypper", "sudo zypper install", zypper)):
+        if shutil.which(manager):
+            return f"{command} {package}"
+    return f"{apt} on Debian, Ubuntu and Mint, {other} on Fedora and Arch"
+
+
+def qt_will_use_xcb(environ=None):
+    """Whether Qt will open the launcher window through its xcb plugin.
+
+    Qt 6 tries "wayland;xcb" in a Wayland session and "xcb" alone anywhere
+    else, unless QT_QPA_PLATFORM names one.
+    """
+    env = os.environ if environ is None else environ
+    chosen = (env.get("QT_QPA_PLATFORM") or "").strip().lower()
+    if chosen:
+        return chosen.split(";")[0].split(":")[0] == "xcb"
+    return (env.get("XDG_SESSION_TYPE") or "").strip().lower() != "wayland"
+
+
+def xcb_plugin_missing_library():
+    """The system library Qt's xcb platform plugin cannot load, or None.
+
+    Qt does not report that as an error Python could catch: it prints "could
+    not load the Qt platform plugin" and aborts the process. dlopen() of the
+    plugin fails the same way, but returns. Only a PySide6 wheel's own plugin
+    is checked; a distribution's PySide6 declares its libraries itself.
+    """
+    try:
+        spec = importlib.util.find_spec("PySide6")
+    except Exception:
+        return None
+    locations = list(getattr(spec, "submodule_search_locations", None) or [])
+    if not locations:
+        return None
+    plugin = Path(locations[0]) / "Qt" / "plugins" / "platforms" / "libqxcb.so"
+    if not plugin.is_file():
+        return None
+    import ctypes
+    try:
+        ctypes.CDLL(str(plugin))
+    except OSError as exc:
+        return missing_shared_library(exc)
+    return None
+
+
 def missing_login_deps():
     """Import-names of the login deps that are not currently importable."""
     return [m for m in LOGIN_DEPS if not have(m)]

@@ -88,6 +88,13 @@ def gui_toolkit_summary():
         return "auto-installed on launch"
     error = deps.gui_import_error()
     if not error:
+        # Importing Qt does not load its X11 plugin, and a plugin that cannot
+        # load aborts the launcher instead of raising (stock Ubuntu and Mint
+        # have no libxcb-cursor0).
+        library = deps.xcb_plugin_missing_library()
+        if library:
+            return (f"installed, but Qt's X11 plugin cannot load: this "
+                    f"system has no {library}")
         return "OK (GUI)"
     library = deps.missing_shared_library(error)
     if library:
@@ -124,6 +131,12 @@ def doctor(acknowledge_gpu_crash=False):
     # install on Debian or Ubuntu, where it is split per Qt module
     # (python3-pyside6.qtcore, .qtgui, .qtwidgets).
     print(f"  {'PySide6':12} : {gui_toolkit_summary()}")
+    xcb_library = deps.xcb_plugin_missing_library() \
+        if deps.have("PySide6") else None
+    if xcb_library:
+        package = deps.install_hint(xcb_library)
+        miss.append(package.rsplit(" ", 1)[-1] if package and
+                    package.startswith("sudo ") else xcb_library)
     cr_ok = deps.have("cryptography")
     print(f"  {'cryptography':12} : "
           f"{'OK (login)' if cr_ok else 'MISSING (login)'}")

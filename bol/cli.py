@@ -176,6 +176,23 @@ def _open_gui():
             f"— each of those carries it. `{APP} play` needs none of it.")
     # Qt picks its platform when it starts, so before bol.gui is imported.
     _prefer_x11_on_chromeos()
+    # And a plugin it cannot load is not an exception but an abort, with
+    # nothing on screen when the menu started the launcher: Ubuntu and Mint
+    # install no libxcb-cursor0, which a pip or .pyz PySide6 needs.
+    library = deps.xcb_plugin_missing_library() if deps.qt_will_use_xcb() \
+        else None
+    if library:
+        hint = deps.install_hint(library)
+        message = (
+            f"The launcher window needs the system library {library} for "
+            f"Qt's X11 support, which this system does not have. "
+            + (f"Install it ({hint}), " if hint else
+               "Install the package your distribution ships it in, ")
+            + f"then open the launcher again — `{APP} play` and "
+            f"`{APP} doctor` keep working without it.")
+        if not IS_TTY:
+            desktop_notify(message)
+        die(message)
     try:
         from .gui import gui
     except ImportError as exc:

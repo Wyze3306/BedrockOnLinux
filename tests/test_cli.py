@@ -508,6 +508,44 @@ class LauncherStartTests(unittest.TestCase):
         self.assertIn("libzstd.so.1", output.getvalue())
         self.assertNotIn("Traceback", output.getvalue())
 
+    def test_an_x11_plugin_qt_would_abort_on_is_named_first(self):
+        # Stock Ubuntu and Mint have no libxcb-cursor0: Qt's xcb plugin then
+        # aborts the process, with nothing on screen from a menu launch.
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", ["bedrock-on-linux", "gui"]), \
+                mock.patch.dict(os.environ, {"DISPLAY": ":0",
+                                             "XDG_SESSION_TYPE": "x11",
+                                             "QT_QPA_PLATFORM": ""}), \
+                mock.patch.object(deps, "ensure_gui_deps", return_value=[]), \
+                mock.patch.object(deps, "have", return_value=True), \
+                mock.patch.object(deps, "xcb_plugin_missing_library",
+                                  return_value="libxcb-cursor.so.0"), \
+                mock.patch.object(deps, "install_hint",
+                                  return_value="sudo apt install libxcb-cursor0"), \
+                mock.patch.object(cli, "IS_TTY", False), \
+                mock.patch.object(cli, "desktop_notify") as notified, \
+                mock.patch("bol.gui.gui") as window, \
+                contextlib.redirect_stdout(output), \
+                self.assertRaises(SystemExit) as exited:
+            cli.main()
+        self.assertEqual(exited.exception.code, 1)
+        self.assertIn("sudo apt install libxcb-cursor0", output.getvalue())
+        self.assertIn("libxcb-cursor.so.0", notified.call_args[0][0])
+        window.assert_not_called()
+
+    def test_a_wayland_session_is_not_held_back_by_the_x11_plugin(self):
+        with mock.patch.object(sys, "argv", ["bedrock-on-linux", "gui"]), \
+                mock.patch.dict(os.environ, {"WAYLAND_DISPLAY": "wayland-0",
+                                             "XDG_SESSION_TYPE": "wayland"}), \
+                mock.patch.object(deps, "have", return_value=True), \
+                mock.patch.object(deps, "xcb_plugin_missing_library",
+                                  return_value="libxcb-cursor.so.0") as probe, \
+                mock.patch("bol.gui.gui") as window:
+            os.environ.pop("QT_QPA_PLATFORM", None)
+            cli.main()
+        probe.assert_not_called()
+        window.assert_called_once_with()
+
     def test_a_gui_import_failure_of_our_own_making_still_raises(self):
         # Only the loader's "cannot open shared object file" is answered with
         # a system library to install; a broken import inside bol.gui is a bug
