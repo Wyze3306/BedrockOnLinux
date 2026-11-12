@@ -211,7 +211,12 @@ source tree. `0014` changes none of the pinned files and is itself pinned by
 its SHA-256 in both builders; its sources join the manifest with the next
 engine revision, because the manifest's own hash is the
 `WINEGDK_SOURCE_MANIFEST_SHA256` the launcher checks against the installed
-engine. `0015` and `0016` are pinned the same way.
+engine. `0015` and `0016` are pinned the same way. `0017` is applied last, on
+top of the verified tree, because it changes `dlls/xgameruntime/main.c`,
+`private.h` and `Makefile.in`, which the manifest pins at their `0013` state;
+it is pinned by its own SHA-256 in both builders and in the packager, and its
+four files join `SOURCE-SHA256SUMS`, and the manifest hash in the launcher,
+with the next engine revision.
 
 The `0015` and `0016` patches take two Wine calls Minecraft makes on every
 frame off its main thread, the one that builds each frame and caps the frame
@@ -226,3 +231,19 @@ frame, and glibc stats the zone file in two of them; it now compares
 already does, and only then asks libc. Measured on the game's main thread at
 about 600 FPS, the two calls went from 2.8% and 1.9% of its time to almost
 nothing.
+
+The `0017` patch serves the `XGameEvent` runtime class,
+`{bbfbdcc7-bfe7-409b-a5ca-edf054960b4d}`, which `QueryApiImpl` refused with
+`E_NOTIMPL`, so XSAPI dropped every in-game event Minecraft wrote, and with
+them every achievement (issue #152): Xbox Live grades Minecraft's achievements
+from these events and refuses a client-side unlock. Each event is appended as
+one JSON line to the file named by `BOL_GAME_EVENT_LOG`; `bol/gameevents.py`
+sets that variable and uploads the events to the Xbox Live event collector
+with the player's own tickets while the game runs. Without the variable the
+write is accepted and dropped. Measured on 2026-11-12 with Minecraft 1.26.60.5
+in a survival world without cheats, the game writes its events in batches,
+every few minutes and when it is paused; the launcher sent all 56 of the
+session's events, the collector refused none, the account's
+`BlockBrokenTotal` and `DistanceTravelled` stats grew by what they carried,
+and crafting a wooden hoe unlocked "Time to Farm!" and "MOAR Tools". The
+packager refuses an `xgameruntime.dll` built without the class.
