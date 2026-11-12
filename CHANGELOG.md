@@ -17,6 +17,21 @@
   setup now says to install it. `BOL_NO_MUVM=1` keeps the launcher on the
   host (#250).
 
+### Fixed
+
+- **Fullscreen fills the screen with *Keep the mouse inside the window*
+  on.** That setting runs the game in a Wine virtual desktop, where the
+  game's title bar is one Wine draws. Switching to fullscreen took the bar
+  away, but the picture stayed where it was: a white band along the top, and
+  the bottom of the picture, the hotbar with it, below the screen. The game
+  draws into an X window of its own, which Wine creates below the title bar
+  and afterwards only resizes; the engine's fix for #78 keeps it from moving
+  it. The helper the launcher runs inside Wine for that setting
+  (`src/desktop-bridge.c`) now reports where the game's client area starts,
+  and the launcher moves the picture there, in both directions. Measured in
+  a virtual 1600×900 screen: after F11 the picture moved from 4,30 to 3,3 in
+  the game's window and the white band is gone (#202).
+
 ## 2.3.1 — 2026-11-11
 
 Other players keep their own skins on servers, the Realms button of the title
