@@ -42,7 +42,7 @@ from .fixups import (
     bump_stack_reserve,
     hide_signin_button,
 )
-from .gameinput import install_gameinput
+from .gameinput import builtin_gameinput_override, install_gameinput
 from .gamesetup import (LICENCE_REFUSED, LICENCE_SERVICE_REFUSED,
                         LICENCE_UNREACHABLE, STORE_SESSION_REFUSED, diagnose)
 from .gpu_safety import (
@@ -883,6 +883,11 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     # Disable incompatible VR/AGS paths; retain native cryptbase with fallback.
     overrides = ["cryptbase=n,b", "vrclient=", "vrclient_x64=", "openvr_api=",
                  "wineopenxr=", "amd_ags_x64="]
+    # Wine's builtin GameInput steals the game's mouse from a client that
+    # loads it (#281, #359); the native redist does the game's input.
+    gameinput_override = builtin_gameinput_override(active_prefix())
+    if gameinput_override:
+        overrides.append(gameinput_override)
     cur = os.environ.get("WINEDLLOVERRIDES", "")
     if cur:
         overrides.append(cur)
