@@ -148,7 +148,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native23"
 # the XGameEvent class achievements are graded from (0017, #152).
 WINEGDK_ARCHIVE_SHA256 = "46927aa8d180c7151a6240c5e2196136cd515041292dd848218ea809284cb3ed"
 # Build workflows verify this deterministic intermediate before reusing it.
-WINEGDK_PREFIX_SHA256 = "7c590b712430d67760c97258b8310d34e29a7293b2e05852bde866d1655eb994"
+WINEGDK_PREFIX_SHA256 = "02fccb6a4e65ef7a8646b6752efe49473dbf3d89e2b1394ea1ae582ffc8371af"
 
 SELF_REPO = WINEGDK_PREBUILT_REPO
 
