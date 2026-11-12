@@ -76,9 +76,10 @@ TIME_ZONE_PATCH = (
 GAME_EVENT_PATCH = (
     DELTA / "0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch"
 )
-# Applied after the SOURCE-SHA256SUMS check, because they change files the
-# manifest pins; their files join it with the next engine revision.
-PATCHES_AFTER_SOURCE_CHECK = {GAME_EVENT_PATCH}
+# The follow-ups after 0013. They were first applied around the manifest so
+# that native22 kept verifying; native23 pins every file they change.
+LATE_PATCHES = (FSYNC_PATCH, VM_COUNTERS_PATCH, TIME_ZONE_PATCH,
+                GAME_EVENT_PATCH)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -87,7 +88,16 @@ CHANGED_FILES = {
     "dlls/combase/marshal.c",
     "dlls/combase/stubmanager.c",
     "dlls/kernelbase/debug.c",
+    "dlls/ntdll/Makefile.in",
+    "dlls/ntdll/unix/fsync.c",
+    "dlls/ntdll/unix/fsync.h",
     "dlls/ntdll/unix/loader.c",
+    "dlls/ntdll/unix/process.c",
+    "dlls/ntdll/unix/server.c",
+    "dlls/ntdll/unix/sync.c",
+    "dlls/ntdll/unix/system.c",
+    "dlls/ntdll/unix/unix_private.h",
+    "dlls/ntdll/unix/virtual.c",
     "dlls/ole32/dcom.idl",
     "dlls/windows.storage.applicationdata/Makefile.in",
     "dlls/windows.storage.applicationdata/main.c",
@@ -111,6 +121,7 @@ CHANGED_FILES = {
     "dlls/xgameruntime/GDKComponent/System/Threading/XAsync.c",
     "dlls/xgameruntime/GDKComponent/System/Threading/XAsync.h",
     "dlls/xgameruntime/GDKComponent/System/XStore.c",
+    "dlls/xgameruntime/GDKComponent/System/XGameEvent.c",
     "dlls/xgameruntime/GDKComponent/InitInternalGDKC.c",
     "dlls/xgameruntime/GDKComponent/System/XGame.c",
     "dlls/xgameruntime/GDKComponent/System/XSystem.c",
@@ -127,7 +138,18 @@ CHANGED_FILES = {
     "include/windows.storage.pickers.idl",
     "include/xgame.idl",
     "include/xgameerr.h",
+    "include/wine/server_protocol.h",
     "libs/uuid/uuid.c",
+    "server/Makefile.in",
+    "server/fsync.c",
+    "server/fsync.h",
+    "server/inproc_sync.c",
+    "server/main.c",
+    "server/process.c",
+    "server/protocol.def",
+    "server/request_handlers.h",
+    "server/request_trace.h",
+    "server/thread.c",
 }
 PINNED_SOURCE_FILES = CHANGED_FILES | {"dlls/winex11.drv/init.c"}
 
@@ -233,7 +255,8 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
                      + SAVE_PICKER_PATCH.read_text()
                      + WAYLAND_SEAT_PATCH.read_text()
                      + GAMING_SERVICES_PATCH.read_text()
-                     + PRIVATE_USAGE_PATCH.read_text())
+                     + PRIVATE_USAGE_PATCH.read_text()
+                     + "".join(path.read_text() for path in LATE_PATCHES))
         self.assertTrue(text.startswith(f"From {WINEGDK_SOURCE_COMMIT} "))
         changed = {
             left for left, right in re.findall(
@@ -936,11 +959,9 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         # depend on a new configure check.
         self.assertNotIn("configure.ac", changed)
         self.assertNotIn("HAVE_LINUX_FUTEX_H", additions)
-        # SOURCE-SHA256SUMS still verifies after 0014: pinning these files
-        # changes the source-manifest pin the launcher checks against the
-        # installed engine, which belongs with the next engine revision.
-        self.assertFalse(changed & PINNED_SOURCE_FILES,
-                         changed & PINNED_SOURCE_FILES)
+        # native23 pins every file 0014 changes in SOURCE-SHA256SUMS.
+        self.assertLessEqual(changed, PINNED_SOURCE_FILES,
+                             changed - PINNED_SOURCE_FILES)
 
     def test_both_builders_require_the_fsync_fallback_in_the_server(self):
         for script in (SCRIPT, CONTAINER_SCRIPT):
@@ -1037,31 +1058,29 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         self.assertIn('"BOL_GAME_EVENT_LOG"',
                       (ROOT / "bol" / "gameevents.py").read_text())
 
-    def test_late_patches_touch_pinned_files_only_after_the_source_check(self):
-        """SOURCE-SHA256SUMS still verifies the tree it describes.
+    def test_late_patches_are_pinned_and_applied_before_the_source_check(self):
+        """SOURCE-SHA256SUMS describes the tree every engine is built from.
 
-        Pinning new hashes moves WINEGDK_SOURCE_MANIFEST_SHA256, which the
-        launcher checks the installed engine against, so a patch that changes
-        a pinned file goes on top of the verified tree until the next engine
-        revision moves both together.
+        0014 to 0017 were applied around the manifest while native22 was
+        current; native23 pins every file they change and moves
+        WINEGDK_SOURCE_MANIFEST_SHA256 with it, so no patch may land on top of
+        the verified tree any more.
         """
         late = sorted(
             path for path in DELTA.glob("*.patch")
             if path.name[:4] >= "0014"
         )
-        self.assertIn(GAME_EVENT_PATCH, late)
+        self.assertEqual(late, sorted(LATE_PATCHES))
         for path in late:
             changed = self._changed_files(path)
             with self.subTest(patch=path.name):
-                if path in PATCHES_AFTER_SOURCE_CHECK:
-                    self.assertTrue(changed & PINNED_SOURCE_FILES)
-                else:
-                    self.assertFalse(changed & PINNED_SOURCE_FILES,
-                                     changed & PINNED_SOURCE_FILES)
+                self.assertLessEqual(changed, PINNED_SOURCE_FILES,
+                                     changed - PINNED_SOURCE_FILES)
         self.assertEqual(
             self._changed_files(GAME_EVENT_PATCH) & PINNED_SOURCE_FILES,
             {"dlls/xgameruntime/main.c", "dlls/xgameruntime/private.h",
-             "dlls/xgameruntime/Makefile.in"},
+             "dlls/xgameruntime/Makefile.in",
+             "dlls/xgameruntime/GDKComponent/System/XGameEvent.c"},
         )
         check = 'sha256sum --strict -c "$SOURCE_SHA256SUMS"'
         for script in (SCRIPT, CONTAINER_SCRIPT):
@@ -1073,17 +1092,10 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
                         r'^readonly (VENDORED_\w+_PATCH)="[^"]*/'
                         + re.escape(path.name) + '"$',
                         text, re.MULTILINE).group(1)
-                    applied = text.index(f'apply "${name}"')
-                    if path in PATCHES_AFTER_SOURCE_CHECK:
-                        self.assertLess(verified, applied)
-                    else:
-                        self.assertLess(applied, verified)
-            with self.subTest(script=script.name):
-                self.assertLess(verified,
-                                text.index('apply "$VENDORED_GAME_EVENT_PATCH"'))
-                self.assertLess(
-                    text.index('apply --check "$VENDORED_GAME_EVENT_PATCH"'),
-                    text.index('apply "$VENDORED_GAME_EVENT_PATCH"'))
+                    self.assertLess(text.index(f'apply --check "${name}"'),
+                                    text.index(f'apply "${name}"'))
+                    self.assertLess(text.index(f'apply "${name}"'), verified)
+                    self.assertEqual(text.count(f'apply "${name}"'), 1)
 
     def test_packager_requires_game_events_in_both_architectures(self):
         text = PACKAGER.read_text()

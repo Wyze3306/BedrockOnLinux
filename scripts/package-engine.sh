@@ -384,10 +384,10 @@ verify_winegdk_source_provenance() {
     "ee0543f11737a11f5edec389967bb41482c7f5eda3807c24d171dd6bf6301274" \
     "WineGDK r12 source delta"
   verify_sha256 "$native_root/README.md" \
-    "252529901ecc1de4a50472891bd4235901b26b1fc9b03553947a51d6c8ce14fe" \
+    "d10a2dc2ebd7ea4a1b918d114ae068c67ee9c6022062008a2f4b3833ba846460" \
     "WineGDK native5 source-delta README"
   verify_sha256 "$native_root/SOURCE-SHA256SUMS" \
-    "e5b3763a60374f1a5b1506f459ad80f39fe302d2397f26e2d9b9d220af4e412b" \
+    "46e65becfc55b47ab4be5794365ecc23dd6a71a470713fc9113eadbaac237ccd" \
     "WineGDK native5 source hash lock"
   verify_sha256 \
     "$native_root/0001-winegdk-native5-Xbox-and-file-picker-runtime.patch" \

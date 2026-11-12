@@ -166,27 +166,27 @@ of the frame latency object (`NTSYNC_IOC_SEM_POST`) over 15 s.
 |---|---|---|---|---|
 | 60 FPS | upstream threshold | 20.0-21.7% | 53-60% | 16.67 / 17.15 / 173.6 ms |
 | 60 FPS | fixed 0.5 ms tail | 3.8-5.9% | 35-37% | 16.67 / 16.68 / 16.77 ms |
+| 141 FPS | upstream threshold | 29.4-30.5% | 116-120% | 7.09 / 7.30 / 48.51 ms |
+| 141 FPS | fixed 0.5 ms tail | 16.3-21.2% | 90-110% | 7.09 / 7.11 / 11.38 ms |
 
-### Shipping it
+At 141 FPS the upstream tail is 1 ms plus a sixth of a 7.1 ms frame, close to
+a third of every frame; the fixed tail leaves the thread's own present-wait
+work, most of what remains.
 
-Shipping it is a new engine revision, so it waits for the maintainer's go-ahead:
+### Shipped in native23
 
-1. Publish the payload: `gh workflow run build-vkd3d.yml --ref <branch> -f
-   publish=true`, or let `release.yml` do it, since it builds a vkd3d release
-   that does not exist yet. The release is named by
-   `scripts/vkd3d-release-tag.sh` after the hash of `OUTPUT-SHA256SUMS`
-   (`vkd3d-3.0.1-nv-dgc-32d230b6254d`), so the `vkd3d-3.0.1-nv-dgc` release
-   keeps the native14-native22 payload those engines were assembled from.
-2. Bump `WINEGDK_BUILD_REV` in `bol/config.py` and
-   `REQUIRED_VARIANT_HASHES_BUILD_REV` in `bol/vkd3d.py` together, and set the
-   `d3d12core.dll` hashes of both variants in `REQUIRED_VARIANT_HASHES` to
-   `fb087ac16045927ffe2003ef210925b53d701add127927957fc0e8647c89b8aa`
+native23, a pre-release built for 3.0.0, is the first engine with this fix:
+
+1. The payload is published as `vkd3d-3.0.1-nv-dgc-32d230b6254d`, named by
+   `scripts/vkd3d-release-tag.sh` after the hash of `OUTPUT-SHA256SUMS`, so
+   the `vkd3d-3.0.1-nv-dgc` release keeps the native14-native22 payload those
+   engines were assembled from.
+2. `WINEGDK_BUILD_REV` in `bol/config.py` and
+   `REQUIRED_VARIANT_HASHES_BUILD_REV` in `bol/vkd3d.py` moved together, and
+   the `d3d12core.dll` hashes of both variants in `REQUIRED_VARIANT_HASHES`
+   are `fb087ac16045927ffe2003ef210925b53d701add127927957fc0e8647c89b8aa`
    (x86_64) and `ec67019917132762cda430bd0f12df2d352937bb98345b336f5a2f93bab9ddb0`
-   (i386). The `d3d12.dll` hashes stay.
-3. Build the engine in two passes as usual: the first run of
-   `build-engine.yml` prints the archive SHA-256 to pin as
-   `WINEGDK_ARCHIVE_SHA256`, the second publishes it. The WineGDK prefix is
-   reused unchanged.
+   (i386). The `d3d12.dll` hashes stayed.
 
 ## Rebuild
 

@@ -137,6 +137,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: vkd3d-proton universal DGC 3.0.1
           make_latest: false
+          prerelease: true
           body: >
             Reproducible universal vkd3d-proton (EXT + restored NV DGC) build.
             SHA-256 ${{ steps.pack.outputs.sha256 }}.

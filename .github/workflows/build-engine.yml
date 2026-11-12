@@ -228,6 +228,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Managed engine ${{ env.REV }}
           make_latest: false
+          prerelease: true
           body: >
             Reproducible engine build of GDK-Proton-xuser (${{ env.REV }}),
             verified to match the SHA-256 pinned in bol/config.py.

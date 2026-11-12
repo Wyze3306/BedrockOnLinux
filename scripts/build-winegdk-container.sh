@@ -270,18 +270,6 @@ git -C "$SRC" apply --check "$VENDORED_TIME_ZONE_PATCH" \
   || { echo "!! time zone check patch does not apply" >&2; exit 1; }
 git -C "$SRC" apply "$VENDORED_TIME_ZONE_PATCH"
 
-echo "== Verifying reviewed source hashes"
-[ -f "$SOURCE_SHA256SUMS" ] || { echo "!! missing SOURCE-SHA256SUMS" >&2; exit 1; }
-[ "$(sha256sum "$SOURCE_SHA256SUMS" | cut -d' ' -f1)" = \
-  "$EXPECTED_SOURCE_MANIFEST_SHA256" ] \
-  || { echo "!! SOURCE-SHA256SUMS does not match the config pin" >&2; exit 1; }
-( cd "$SRC" && sha256sum --strict -c "$SOURCE_SHA256SUMS" >/dev/null ) \
-  || { echo "!! exported source does not match the reviewed native delta" >&2; exit 1; }
-
-# 0017 changes xgameruntime files SOURCE-SHA256SUMS pins, so it goes on top
-# of the verified tree; its files join the manifest with the next engine
-# revision, together with the WINEGDK_SOURCE_MANIFEST_SHA256 the launcher
-# checks the installed engine against.
 echo "== Applying the XGameEvent runtime class"
 [ -f "$VENDORED_GAME_EVENT_PATCH" ] \
   || { echo "!! missing XGameEvent patch" >&2; exit 1; }
@@ -291,6 +279,14 @@ echo "== Applying the XGameEvent runtime class"
 git -C "$SRC" apply --check "$VENDORED_GAME_EVENT_PATCH" \
   || { echo "!! XGameEvent patch does not apply" >&2; exit 1; }
 git -C "$SRC" apply "$VENDORED_GAME_EVENT_PATCH"
+
+echo "== Verifying reviewed source hashes"
+[ -f "$SOURCE_SHA256SUMS" ] || { echo "!! missing SOURCE-SHA256SUMS" >&2; exit 1; }
+[ "$(sha256sum "$SOURCE_SHA256SUMS" | cut -d' ' -f1)" = \
+  "$EXPECTED_SOURCE_MANIFEST_SHA256" ] \
+  || { echo "!! SOURCE-SHA256SUMS does not match the config pin" >&2; exit 1; }
+( cd "$SRC" && sha256sum --strict -c "$SOURCE_SHA256SUMS" >/dev/null ) \
+  || { echo "!! exported source does not match the reviewed native delta" >&2; exit 1; }
 
 echo "== Configuring + building WineGDK (i386 + x86_64)"
 ( cd "$BUILD"

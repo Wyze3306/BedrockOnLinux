@@ -204,19 +204,17 @@ rather than behind a new configure check, and the server protocol files that
 builders also refuse a wineserver that lacks the fallback.
 
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
-native5 delta and its follow-ups through `0013`. The Bullseye builder applies
+native5 delta and its follow-ups through `0017`. The Bullseye builder applies
 the reviewed r12 and native patches when the target commit is unavailable,
-always applies `0002` through `0016`, then verifies the complete resulting
-source tree. `0014` changes none of the pinned files and is itself pinned by
-its SHA-256 in both builders; its sources join the manifest with the next
-engine revision, because the manifest's own hash is the
+always applies `0002` through `0017`, then verifies the complete resulting
+source tree; the container builder does the same on the target commit. Each
+patch is also pinned by its own SHA-256 in both builders and in the
+packager. `0014` to `0017` were first applied around the manifest, so that the
 `WINEGDK_SOURCE_MANIFEST_SHA256` the launcher checks against the installed
-engine. `0015` and `0016` are pinned the same way. `0017` is applied last, on
-top of the verified tree, because it changes `dlls/xgameruntime/main.c`,
-`private.h` and `Makefile.in`, which the manifest pins at their `0013` state;
-it is pinned by its own SHA-256 in both builders and in the packager, and its
-four files join `SOURCE-SHA256SUMS`, and the manifest hash in the launcher,
-with the next engine revision.
+engine stayed valid for native22; native23 adds the files they change to the
+manifest and moves that pin with it. Because the prefix release is named
+after the manifest hash, the native23 prefix is published under a new name
+and the native22 one stays as it was.
 
 The `0015` and `0016` patches take two Wine calls Minecraft makes on every
 frame off its main thread, the one that builds each frame and caps the frame

@@ -146,6 +146,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: WineGDK prefix ${{ env.SHORT }}-${{ env.MANIFEST_SHORT }}
           make_latest: false
+          prerelease: true
           body: >
             Reproducible WineGDK build (debian:bullseye container) from source
             commit ${{ steps.pack.outputs.commit }}. SHA-256

@@ -91,6 +91,15 @@
   and the launcher moves the picture there, in both directions. Measured in
   a virtual 1600×900 screen: after F11 the picture moved from 4,30 to 3,3 in
   the game's window and the white band is gone (#202).
+- **Engine native23 (pre-release).** vkd3d-proton's frame limiter, which
+  the launcher uses for a cap below the display's refresh rate and for
+  BOL_FRAME_RATE, ended every wait with a 1 ms spin plus a sixth of the
+  frame; under Wine a 0.5 ms tail is enough. Its thread drops from about a
+  fifth of a core to a twentieth at 60 FPS, and from 30% to 16-21% at
+  141 FPS, with steadier frame times (#202). The engine also falls back to
+  fsync on kernels without ntsync, takes two Wine calls the game makes on
+  every frame off its main thread (#202), and serves the XGameEvent class
+  that Xbox Live grades achievements from (#152).
 
 ## 2.3.1 — 2026-11-11
 

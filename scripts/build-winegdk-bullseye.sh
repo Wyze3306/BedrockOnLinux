@@ -58,7 +58,7 @@ readonly VENDORED_TIME_ZONE_PATCH_SHA256="6054f33a5a95c5beaf12039dca8b303fdfa66c
 readonly VENDORED_GAME_EVENT_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch"
 readonly VENDORED_GAME_EVENT_PATCH_SHA256="c791f7bcab535204649c27ade0d328f669134f6044a1130362aeb5df964b28ad"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
-readonly SOURCE_SHA256SUMS_SHA256="e5b3763a60374f1a5b1506f459ad80f39fe302d2397f26e2d9b9d220af4e412b"
+readonly SOURCE_SHA256SUMS_SHA256="46e65becfc55b47ab4be5794365ecc23dd6a71a470713fc9113eadbaac237ccd"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
 readonly GLIBC_CEILING="2.31"
@@ -782,6 +782,11 @@ git -C "$WORK_ROOT/source" apply --check "$VENDORED_TIME_ZONE_PATCH" ||
   die "vendored time zone check patch does not apply"
 git -C "$WORK_ROOT/source" apply "$VENDORED_TIME_ZONE_PATCH" ||
   die "could not apply vendored time zone check patch"
+printf '==> Applying the XGameEvent runtime class\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_GAME_EVENT_PATCH" ||
+  die "vendored XGameEvent patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_GAME_EVENT_PATCH" ||
+  die "could not apply vendored XGameEvent patch"
 [[ -f "$SOURCE_SHA256SUMS" ]] || die "WineGDK source hash manifest is missing"
 [[ "$(sha256sum "$SOURCE_SHA256SUMS" | cut -d' ' -f1)" == \
     "$SOURCE_SHA256SUMS_SHA256" ]] ||
@@ -790,15 +795,6 @@ git -C "$WORK_ROOT/source" apply "$VENDORED_TIME_ZONE_PATCH" ||
   cd "$WORK_ROOT/source"
   sha256sum --strict -c "$SOURCE_SHA256SUMS" >/dev/null
 ) || die "exported WineGDK source does not match the reviewed native delta"
-# 0017 changes xgameruntime files SOURCE-SHA256SUMS pins, so it goes on top
-# of the verified tree; its files join the manifest with the next engine
-# revision, together with the WINEGDK_SOURCE_MANIFEST_SHA256 the launcher
-# checks the installed engine against.
-printf '==> Applying the XGameEvent runtime class\n'
-git -C "$WORK_ROOT/source" apply --check "$VENDORED_GAME_EVENT_PATCH" ||
-  die "vendored XGameEvent patch does not apply"
-git -C "$WORK_ROOT/source" apply "$VENDORED_GAME_EVENT_PATCH" ||
-  die "could not apply vendored XGameEvent patch"
 
 printf '==> Building WineGDK in Bullseye\n'
 BOL_WINEGDK_INTERNAL=1 unshare "${USER_NAMESPACE_ARGS[@]}" \
