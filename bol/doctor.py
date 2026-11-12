@@ -139,9 +139,11 @@ def doctor(acknowledge_gpu_crash=False):
         gui_library = deps.missing_shared_library(import_error) \
             if import_error else deps.xcb_plugin_missing_library()
     if gui_library:
-        package = deps.install_hint(gui_library)
-        miss.append(package.rsplit(" ", 1)[-1] if package and
-                    package.startswith("sudo ") else gui_library)
+        libraries = deps.missing_qt_libraries(gui_library)
+        command = deps.install_hint(*libraries)
+        # "sudo <manager> <verb> <package>..." -> the packages.
+        miss.extend(command.split()[3:] if command and
+                    command.startswith("sudo ") else libraries)
     cr_ok = deps.have("cryptography")
     print(f"  {'cryptography':12} : "
           f"{'OK (login)' if cr_ok else 'MISSING (login)'}")

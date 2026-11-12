@@ -198,14 +198,21 @@ def _open_gui():
 
 
 def _missing_gui_library(deps, library, purpose=""):
-    hint = deps.install_hint(library)
+    # Every one this host lacks, not only the one the loader stopped at.
+    libraries = deps.missing_qt_libraries(library)
+    hint = deps.install_hint(*libraries)
+    if len(libraries) == 1:
+        needs, them = f"the system library {library}{purpose}", "it"
+        where = "the package your distribution ships it in"
+    else:
+        needs = (f"the system libraries {', '.join(libraries[:-1])} and "
+                 f"{libraries[-1]}")
+        them, where = "them", "the packages your distribution ships them in"
     message = (
-        f"The launcher window needs the system library {library}{purpose}, "
-        f"which this system does not have. "
-        + (f"Install it ({hint}), " if hint else
-           "Install the package your distribution ships it in, ")
-        + f"then open the launcher again — `{APP} play` and "
-        f"`{APP} doctor` keep working without it.")
+        f"The launcher window needs {needs}, which this system does not "
+        f"have. Install {f'{them} ({hint})' if hint else where}, then open "
+        f"the launcher again — `{APP} play` and `{APP} doctor` keep working "
+        f"without {them}.")
     if not IS_TTY:
         desktop_notify(message)
     die(message)

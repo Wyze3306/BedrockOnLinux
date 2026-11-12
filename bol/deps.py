@@ -95,20 +95,52 @@ QT_LIBRARY_PACKAGES = {
 }
 
 
-def install_hint(library):
-    """"sudo <manager> install <package>" for ``library``, or None."""
-    packages = QT_LIBRARY_PACKAGES.get(library)
-    if not packages:
+def install_hint(*libraries):
+    """"sudo <manager> install <packages>" for ``libraries``, or None when
+    one of them is not in QT_LIBRARY_PACKAGES."""
+    packages = [QT_LIBRARY_PACKAGES.get(library) for library in libraries]
+    if not packages or None in packages:
         return None
-    apt, other, zypper = packages
-    for manager, command, package in (
-            ("apt-get", "sudo apt install", apt),
-            ("dnf", "sudo dnf install", other),
-            ("pacman", "sudo pacman -S", other),
-            ("zypper", "sudo zypper install", zypper)):
+
+    def names(column):
+        return " ".join(dict.fromkeys(entry[column] for entry in packages))
+
+    for manager, command, column in (
+            ("apt-get", "sudo apt install", 0),
+            ("dnf", "sudo dnf install", 1),
+            ("pacman", "sudo pacman -S", 1),
+            ("zypper", "sudo zypper install", 2)):
         if shutil.which(manager):
-            return f"{command} {package}"
-    return f"{apt} on Debian, Ubuntu and Mint, {other} on Fedora and Arch"
+            return f"{command} {names(column)}"
+    return f"{names(0)} on Debian, Ubuntu and Mint, {names(1)} on Fedora and Arch"
+
+
+def _qt_lib_dir():
+    try:
+        spec = importlib.util.find_spec("PySide6")
+    except Exception:
+        return None
+    located = list(getattr(spec, "submodule_search_locations", None) or [])
+    qt_lib = Path(located[0]) / "Qt" / "lib" if located else None
+    return qt_lib if qt_lib is not None and qt_lib.is_dir() else None
+
+
+def missing_qt_libraries(first):
+    """``first``, then every other library of QT_LIBRARY_PACKAGES that
+    neither this host nor the toolkit's own Qt/lib provides.
+
+    The loader stops at the first library it cannot find, so naming only that
+    one made a stock openSUSE three rounds of "install this, open it again"
+    (libgthread-2.0, then libxcb-cursor, then libxcb-shape).
+    """
+    if first not in QT_LIBRARY_PACKAGES:
+        return [first]
+    qt_lib = _qt_lib_dir()
+    return [first] + [
+        library for library in QT_LIBRARY_PACKAGES
+        if library != first
+        and not (qt_lib is not None and (qt_lib / library).exists())
+        and not _host_loads(library)]
 
 
 def qt_will_use_xcb(environ=None):

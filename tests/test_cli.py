@@ -528,6 +528,9 @@ class LauncherStartTests(unittest.TestCase):
                 mock.patch.object(deps, "have", return_value=True), \
                 mock.patch.object(deps, "fill_qt_library_gaps",
                                   return_value=[]) as filled, \
+                mock.patch.object(deps, "missing_qt_libraries",
+                                  return_value=["libgthread-2.0.so.0",
+                                                "libxcb-shape.so.0"]), \
                 mock.patch("shutil.which",
                            side_effect=lambda name: "/usr/bin/zypper"
                            if name == "zypper" else None), \
@@ -539,7 +542,11 @@ class LauncherStartTests(unittest.TestCase):
             cli.main()
         self.assertEqual(exited.exception.code, 1)
         filled.assert_called_once_with()
-        self.assertIn("sudo zypper install libgthread-2_0-0", output.getvalue())
+        # Both at once: the loader only ever names the first.
+        self.assertIn("libgthread-2.0.so.0 and libxcb-shape.so.0",
+                      output.getvalue())
+        self.assertIn("sudo zypper install libgthread-2_0-0 libxcb-shape0",
+                      output.getvalue())
         self.assertIn("libgthread-2.0.so.0", notified.call_args[0][0])
 
     def test_an_x11_plugin_qt_would_abort_on_is_named_first(self):
@@ -556,6 +563,8 @@ class LauncherStartTests(unittest.TestCase):
                                   return_value="libxcb-cursor.so.0"), \
                 mock.patch.object(deps, "install_hint",
                                   return_value="sudo apt install libxcb-cursor0"), \
+                mock.patch.object(deps, "missing_qt_libraries",
+                                  return_value=["libxcb-cursor.so.0"]), \
                 mock.patch.object(cli, "IS_TTY", False), \
                 mock.patch.object(cli, "desktop_notify") as notified, \
                 mock.patch("bol.gui.gui") as window, \

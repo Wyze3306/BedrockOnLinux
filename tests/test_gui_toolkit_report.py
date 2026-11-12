@@ -150,6 +150,47 @@ class XcbPluginTests(unittest.TestCase):
                                  expected)
         self.assertIsNone(deps.install_hint("libfoo.so.1"))
 
+    def test_every_missing_library_is_named_at_once(self):
+        # The loader stops at the first one; a stock openSUSE lacks three.
+        lacking = {"libxcb-cursor.so.0", "libxcb-shape.so.0"}
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(deps, "_host_loads",
+                                  side_effect=lambda name: name not in lacking), \
+                mock.patch("importlib.util.find_spec",
+                           return_value=mock.Mock(
+                               submodule_search_locations=[td])):
+            self.assertEqual(
+                deps.missing_qt_libraries("libgthread-2.0.so.0"),
+                ["libgthread-2.0.so.0", "libxcb-cursor.so.0",
+                 "libxcb-shape.so.0"])
+            # What the toolkit's own Qt/lib already carries is not missing.
+            (Path(td) / "Qt" / "lib").mkdir(parents=True)
+            (Path(td) / "Qt" / "lib" / "libxcb-cursor.so.0").write_bytes(b"")
+            self.assertEqual(
+                deps.missing_qt_libraries("libgthread-2.0.so.0"),
+                ["libgthread-2.0.so.0", "libxcb-shape.so.0"])
+        # A library this table does not know stays alone.
+        self.assertEqual(deps.missing_qt_libraries("libzstd.so.1"),
+                         ["libzstd.so.1"])
+
+    def test_one_command_installs_them_all(self):
+        with mock.patch("shutil.which",
+                        side_effect=lambda name: "/usr/bin/zypper"
+                        if name == "zypper" else None):
+            self.assertEqual(
+                deps.install_hint("libgthread-2.0.so.0", "libxcb-cursor.so.0",
+                                  "libxcb-shape.so.0"),
+                "sudo zypper install libgthread-2_0-0 libxcb-cursor0 "
+                "libxcb-shape0")
+        with mock.patch("shutil.which",
+                        side_effect=lambda name: "/usr/bin/dnf"
+                        if name == "dnf" else None):
+            self.assertEqual(
+                deps.install_hint("libxcb-shape.so.0", "libxcb-cursor.so.0"),
+                "sudo dnf install libxcb xcb-util-cursor")
+        self.assertIsNone(deps.install_hint("libxcb-cursor.so.0",
+                                            "libfoo.so.1"))
+
     def test_libgthread_is_its_own_package_on_opensuse_only(self):
         # GLib carries it everywhere else, so only zypper names a package
         # that a stock desktop is actually missing.
@@ -199,11 +240,17 @@ class DoctorPackageNameTests(unittest.TestCase):
                          "To install: sudo apt install python3-cryptography")
 
     def test_a_qt_that_cannot_import_is_not_system_ready(self):
-        # A stock openSUSE: PySide6 is there, libgthread-2_0-0 is not.
-        line = self._install_line(
-            "zypper", import_error="libgthread-2.0.so.0: cannot open shared "
-            "object file: No such file or directory")
-        self.assertEqual(line, "To install: sudo zypper in libgthread-2_0-0")
+        # A stock openSUSE: PySide6 is there, libgthread-2_0-0 is not, and
+        # neither are two of the xcb plugin's libraries.
+        with mock.patch.object(doctor.deps, "missing_qt_libraries",
+                               return_value=["libgthread-2.0.so.0",
+                                             "libxcb-cursor.so.0",
+                                             "libxcb-shape.so.0"]):
+            line = self._install_line(
+                "zypper", import_error="libgthread-2.0.so.0: cannot open "
+                "shared object file: No such file or directory")
+        self.assertEqual(line, "To install: sudo zypper in libgthread-2_0-0 "
+                               "libxcb-cursor0 libxcb-shape0")
 
 
 if __name__ == "__main__":
