@@ -182,7 +182,33 @@ kernelbase now asks for it, fills `PrivateUsage` when the caller's buffer has
 room for it and reports the `_EX` size in `cb`, as Windows does. `psapi.h`
 gains the structure.
 
+The `0014` patch brings back a fast synchronization path for kernels without
+ntsync. Upstream Wine 11 dropped esync and fsync, so its only in-process
+backend is the ntsync driver, which mainline Linux ships from 6.14: on Debian
+13's stock 6.12, Debian 12's 6.1 and the 6.8 of Ubuntu 22.04 HWE and Linux Mint
+21 and 22, every wait, `SetEvent`, mutex and semaphore operation was a
+wineserver round-trip, and the wineserver serialised Minecraft's worker
+threads behind one another. The patch is Valve's futex-based backend for
+Wine's inproc sync framework from the `proton_11.0` branch of
+ValveSoftware/wine (`b62913d8cab`, with the `054473d56e3` alignment fix),
+developed by Elizabeth Figura with later work by Paul Gofman and others. The
+wineserver still opens `/dev/ntsync` first and only falls back to fsync when
+that fails and `WINEFSYNC` is set, which Proton does unless `PROTON_NO_FSYNC`
+is given, so a kernel with ntsync behaves exactly as before; fsync itself needs
+`futex_waitv`, Linux 5.16 or later. Adapted to this tree: the system
+`<linux/ntsync.h>` stays in place of Valve's bundled copy, the per-game
+workarounds Proton's loader enables are environment switches read by
+`fsync_init()` and off by default, `<linux/futex.h>` is included on Linux
+rather than behind a new configure check, and the server protocol files that
+`tools/make_requests` generates are regenerated (protocol version 931). Both
+builders also refuse a wineserver that lacks the fallback.
+
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
-native5 delta and its follow-ups. The Bullseye builder applies the reviewed r12
-and native patches when the target commit is unavailable, always applies `0002`
-through `0013`, then verifies the complete resulting source tree.
+native5 delta and its follow-ups through `0013`. The Bullseye builder applies
+the reviewed r12 and native patches when the target commit is unavailable,
+always applies `0002` through `0014`, then verifies the complete resulting
+source tree. `0014` changes none of the pinned files and is itself pinned by
+its SHA-256 in both builders; its sources join the manifest with the next
+engine revision, because the manifest's own hash is the
+`WINEGDK_SOURCE_MANIFEST_SHA256` the launcher checks against the installed
+engine.

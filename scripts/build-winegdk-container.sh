@@ -49,6 +49,8 @@ readonly VENDORED_GAMING_SERVICES_PATCH="$PROJECT_ROOT/third_party/winegdk-nativ
 readonly VENDORED_GAMING_SERVICES_PATCH_SHA256="d43c0f2cf32b624bb12d6db890d6f9a3a45e72523837310d868bec78318f59ce"
 readonly VENDORED_PRIVATE_USAGE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0013-kernelbase-report-PrivateUsage-from-GetProcessMemoryInfo.patch"
 readonly VENDORED_PRIVATE_USAGE_PATCH_SHA256="850b8f80a23e1b9a5b25ab2b647125c7affe6650fe8f9c632678bba9dacae35e"
+readonly VENDORED_FSYNC_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0014-ntdll-server-fall-back-to-fsync-without-ntsync.patch"
+readonly VENDORED_FSYNC_PATCH_SHA256="bbf37dfe580536aada2594cfa274a028f4bfa9ed69a95070fa3a1bc98a8951ae"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
@@ -233,6 +235,16 @@ git -C "$SRC" apply --check "$VENDORED_PRIVATE_USAGE_PATCH" \
   || { echo "!! PrivateUsage patch does not apply" >&2; exit 1; }
 git -C "$SRC" apply "$VENDORED_PRIVATE_USAGE_PATCH"
 
+echo "== Applying the fsync fallback for kernels without ntsync"
+[ -f "$VENDORED_FSYNC_PATCH" ] \
+  || { echo "!! missing fsync fallback patch" >&2; exit 1; }
+[ "$(sha256sum "$VENDORED_FSYNC_PATCH" | cut -d' ' -f1)" = \
+  "$VENDORED_FSYNC_PATCH_SHA256" ] \
+  || { echo "!! fsync fallback patch hash mismatch" >&2; exit 1; }
+git -C "$SRC" apply --check "$VENDORED_FSYNC_PATCH" \
+  || { echo "!! fsync fallback patch does not apply" >&2; exit 1; }
+git -C "$SRC" apply "$VENDORED_FSYNC_PATCH"
+
 echo "== Verifying reviewed source hashes"
 [ -f "$SOURCE_SHA256SUMS" ] || { echo "!! missing SOURCE-SHA256SUMS" >&2; exit 1; }
 [ "$(sha256sum "$SOURCE_SHA256SUMS" | cut -d' ' -f1)" = \
@@ -261,6 +273,10 @@ for server in "$PREFIX"/bin/wineserver "$PREFIX"/bin-wow64/wineserver; do
   ntsync_servers=$((ntsync_servers + 1))
   grep -qa "/dev/ntsync" "$server" \
     || { echo "!! $server has no ntsync path — in-process sync compiled out" >&2; exit 1; }
+  # 0014: kernels without ntsync fall back to futex_waitv. The server only
+  # reads WINEFSYNC when that backend is compiled in.
+  grep -qa "WINEFSYNC" "$server" \
+    || { echo "!! $server has no fsync fallback — 0014 not built" >&2; exit 1; }
 done
 [ "$ntsync_servers" -gt 0 ] \
   || { echo "!! no wineserver below $PREFIX to verify" >&2; exit 1; }
