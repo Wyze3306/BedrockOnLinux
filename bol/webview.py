@@ -81,10 +81,15 @@ _PACKAGES = (("apt-get", "libwebkit2gtk-4.1-0"), ("dnf", "webkit2gtk4.1"),
 
 # ld.so, when the C library is older than a binary was linked against:
 # "…/libc.so.6: version `GLIBC_2.39' not found (required by …/xodus-cli)".
-# xodus-cli is built on the same Debian snapshot as the bundled runtime, so no
-# WebKitGTK -- the host's or the bundle's -- can get it past that (#264).
+# Up to 64d39eb87a56-p11, xodus-cli was built on the same Debian snapshot as
+# the bundled runtime, so no WebKitGTK -- the host's or the bundle's -- could
+# get it past that (#264). From -p14 it is linked against glibc 2.31 and the
+# object named is the bundle's, whose glibc floor a host WebKitGTK sidesteps.
 _GLIBC_TOO_OLD = re.compile(
     r"(?<!weak )version [`']GLIBC_(\d+(?:\.\d+)+)' not found")
+_GLIBC_REQUIRED_BY = re.compile(
+    r"(?<!weak )version [`']GLIBC_\d+(?:\.\d+)+' not found "
+    r"\(required by ([^)\n]+)\)")
 
 # WebKitGTK composites into a DMABUF buffer and hands that to the display
 # server. Where the handoff is refused the connection is torn down instead of
@@ -378,11 +383,20 @@ def _host_glibc():
     return version.strip() if name == "glibc" and version.strip() else None
 
 
-def glibc_too_old_message(text):
+def _only_in(owners, root):
+    """Whether every object the loader named lives under ``root``."""
+    root = Path(root)
+    return bool(owners) and all(
+        Path(owner.strip()).is_relative_to(root) for owner in owners)
+
+
+def glibc_too_old_message(text, bundle=XODUS_WEBVIEW_DIR):
     """What to tell a system whose glibc is older than xodus-cli needs.
 
     None unless the loader said so. The newest version it asked for is the
-    floor; installing WebKitGTK, or the bundled runtime, cannot lower it.
+    floor. When only objects of the bundled runtime under ``bundle`` asked for
+    it, the host's own WebKitGTK is the way around it; when xodus-cli did,
+    installing WebKitGTK, or the bundled runtime, cannot lower it.
     """
     wanted = _GLIBC_TOO_OLD.findall(text or "")
     if not wanted:
@@ -390,6 +404,16 @@ def glibc_too_old_message(text):
     floor = max(wanted, key=lambda version: tuple(
         int(part) for part in version.split(".")))
     host = _host_glibc()
+    if bundle is not None and _only_in(
+            _GLIBC_REQUIRED_BY.findall(text or ""), bundle):
+        return (
+            "Minecraft is downloaded and started through xodus-cli, which "
+            "needs the WebKitGTK library, and this system has none it can "
+            f"use. The bundled replacement needs glibc {floor} or newer"
+            + (f", and this system has glibc {host}" if host else "")
+            + f". Install WebKitGTK with your package manager "
+            f"({host_package_name()}), or use the Flatpak build, which "
+            "carries its own runtime.")
     return (
         "Minecraft is downloaded and started through xodus-cli, which needs "
         f"glibc {floor} or newer"
@@ -744,8 +768,10 @@ def apply(binary, env, force=False):
     """
     previous = portable_renderer(env)
     previous.update(quiet_accessibility(env))
+    host_loads = False
     if not force:
         failure = _host_failure(binary)
+        host_loads = failure is None
         if failure is None:
             blank = host_egl_failure(env)
             if host_tls_available(env) and blank is None:
@@ -774,13 +800,24 @@ def apply(binary, env, force=False):
         restore_env(env, previous)
         raise BolError(missing_message(str(exc))) from exc
     _, replaced = runtime_env(env, root)
-    previous.update(replaced)
     failure = load_failure(binary, env)
     if failure is not None:
+        too_old = glibc_too_old_message(failure, root)
+        if host_loads and too_old:
+            # The bundle was only meant to stand in for a host WebKitGTK that
+            # cannot sign in, and it cannot even load here: the host's still
+            # runs the download and the game, and at worst the sign-in shows
+            # the problem named above.
+            restore_env(env, replaced)
+            info("The bundled WebKitGTK runtime needs a newer glibc than "
+                 "this system has; keeping the system's WebKitGTK.")
+            return previous
+        previous.update(replaced)
         restore_env(env, previous)
-        raise BolError(glibc_too_old_message(failure) or missing_message(
+        raise BolError(too_old or missing_message(
             "The bundled WebKitGTK runtime did not load on this system: "
             + failure.splitlines()[0]))
+    previous.update(replaced)
     return previous
 
 
