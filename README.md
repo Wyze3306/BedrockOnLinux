@@ -100,6 +100,22 @@ Good to know:
   your own licence.
 - A few gigabytes of free disk space for the game and its runtime.
 
+### ARM computers (Apple silicon, Snapdragon, Raspberry Pi 5)
+
+Minecraft for Windows only exists for x86-64, so on ARM the game and Wine run
+through an x86-64 emulator. The launcher itself runs natively: start it from a
+checkout with `git clone https://github.com/Wyze3306/BedrockOnLinux` and
+`./BedrockOnLinux/bedrock-on-linux`.
+
+- **Apple silicon with Fedora Asahi Remix:** install muvm and FEX-Emu
+  (`sudo dnf install muvm fex-emu`). Asahi's kernel uses 16 KiB memory pages,
+  which Wine cannot run on, so the launcher starts itself inside a muvm
+  microVM with 4 KiB pages, the way Steam does there. Nothing else to set up.
+- **Other ARM systems:** install [FEX-Emu](https://fex-emu.com) with its
+  x86-64 RootFS, or Box64, registered with the kernel (binfmt_misc).
+
+`bedrock-on-linux doctor` shows on its `cpu` line which emulator is used.
+
 ## If something goes wrong
 
 Start with the built-in check, which looks at your system and tells you what is

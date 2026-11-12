@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Apple silicon under Asahi Linux.** Asahi's kernel uses 16 KiB memory
+  pages, and Wine and FEX-Emu need 4 KiB ones. With muvm installed, the
+  launcher now starts itself inside a muvm microVM, where muvm registers
+  FEX-Emu, and everything it runs from there gets 4 KiB pages, the host's
+  GPU, controllers and display, as Steam does on Asahi. Before, setup looked
+  for FEX-Emu on the host, found none (muvm registers it only inside the
+  microVM) and told the player to install what they already had. Inside
+  muvm the graphics check no longer counts RandR providers: the display it
+  reaches there is the host's, whose providers say nothing about the
+  microVM's GPU, and a count of zero refuses PLAY. Without muvm,
+  setup now says to install it. `BOL_NO_MUVM=1` keeps the launcher on the
+  host (#250).
+
 ## 2.3.1 — 2026-11-11
 
 Other players keep their own skins on servers, the Realms button of the title

@@ -11,6 +11,11 @@ import sys
 
 
 def main():
+    # Apple silicon under Asahi: Wine and FEX-Emu need the 4 KiB pages of a
+    # muvm microVM, so the whole launcher moves there before it starts
+    # anything x86-64 (#250).
+    from .hostarch import relaunch_in_muvm
+    relaunch_in_muvm()
     if len(sys.argv) > 1 and sys.argv[1] == "optiscaler":
         from .optiscaler import cli_main
         entry = lambda: cli_main(sys.argv[2:])

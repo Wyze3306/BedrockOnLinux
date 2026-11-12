@@ -73,6 +73,19 @@ class GraphicsSafetyTests(unittest.TestCase):
             )
         self.assertIn("zero RandR GPU providers", problem)
 
+    def test_inside_muvm_the_bridged_display_is_not_asked(self):
+        # muvm's DISPLAY reaches the host's server; the game draws on the
+        # microVM's virtual GPU, which no provider there stands for (#250).
+        def xrandr(*_args, **_kwargs):
+            raise AssertionError("RandR must not be asked inside muvm")
+
+        self.assertIsNone(gpu_safety.graphics_safety_problem(
+            {"DISPLAY": ":1", "BOL_IN_MUVM": "1"},
+            xrandr_runner=xrandr,
+            provider_probe=xrandr,
+            journal_runner=self.clean_journal,
+        ))
+
     def test_x11_hardware_provider_is_allowed(self):
         def xrandr(*_args, **_kwargs):
             return result("Providers: number : 1\n")

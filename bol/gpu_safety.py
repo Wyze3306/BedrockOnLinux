@@ -1047,7 +1047,10 @@ def graphics_safety_problem(
             "reboot; after repairing/updating the driver, acknowledge it with "
             f"'{acknowledge_gpu_crash_command()}'"
         )
-    if _x11_session(env):
+    # Inside muvm (Apple silicon under Asahi, #250) DISPLAY is muvm's bridge
+    # to the host's display server, and the game draws on the microVM's
+    # virtual GPU, which no RandR provider of that server stands for.
+    if _x11_session(env) and not env.get("BOL_IN_MUVM"):
         providers = _xrandr_provider_count(env, xrandr_runner)
         if providers is None:
             probe = (_randr_provider_count if provider_probe is None
