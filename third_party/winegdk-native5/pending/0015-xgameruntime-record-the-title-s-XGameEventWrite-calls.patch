@@ -1,0 +1,305 @@
+From: BedrockOnLinux contributors
+Subject: [PATCH] xgameruntime: record the title's XGameEventWrite calls
+
+A GDK title reports gameplay to Xbox Live through XGameEventWrite and
+nothing else. Minecraft's achievements are event based: the service
+grades them from these events, and achievements.xboxlive.com refuses a
+client-side unlock with 400 code 49 ("None of the submitted achievements
+may be updated in this fashion"). QueryApiImpl had no class behind
+{bbfbdcc7-bfe7-409b-a5ca-edf054960b4d}, answered E_NOTIMPL, and XSAPI's
+EventsService::WriteInGameEvent gave up, so nothing a player did under
+Wine was ever reported and no achievement ever unlocked (issue #152).
+
+Serve the class. Its id doubles as the interface id, as for
+XGameRuntimeFeatureImpl, and the write is vtable slot 3, called as
+XGameEventWrite(user, scid, playSessionId, eventName, dimensionsJson,
+measurementsJson) with UTF-8 strings, as read out of the copy of the GDK
+static library Minecraft links. On Windows, Gaming Services uploads the
+events; here the runtime appends each one as a JSON object on its own
+line (time, xuid, scid, session, event, and the title's two property
+bags verbatim) to the file named by BOL_GAME_EVENT_LOG, and the launcher
+forwards them to the Xbox Live event collector with the player's own
+tickets. Without the variable the write is accepted and dropped, as a
+title expects from a runtime that has nowhere to send it.
+
+diff --git a/dlls/xgameruntime/GDKComponent/System/XGameEvent.c b/dlls/xgameruntime/GDKComponent/System/XGameEvent.c
+new file mode 100644
+index 0000000..db848b5
+--- /dev/null
++++ b/dlls/xgameruntime/GDKComponent/System/XGameEvent.c
+@@ -0,0 +1,229 @@
++/*
++ * XGameEvent: the class XGameEventWrite() resolves to.
++ *
++ * Copyright 2026 BedrockOnLinux contributors
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++/*
++ * A GDK title reports gameplay to Xbox Live through XGameEventWrite, and
++ * nothing else: achievements configured as event based are graded by the
++ * service from these events, never unlocked by the client
++ * (achievements.xboxlive.com answers a direct update with 400 code 49, "None
++ * of the submitted achievements may be updated in this fashion"). With the
++ * class missing, QueryApiImpl answered E_NOTIMPL, XSAPI's
++ * EventsService::WriteInGameEvent gave up, and a title running here could
++ * never unlock anything.
++ *
++ * The class id doubles as the interface id, as it does for
++ * XGameRuntimeFeatureImpl, and the write is vtable slot 3, read out of the
++ * copy of the GDK static library Minecraft links:
++ *
++ *   XGameEventWrite( user, scid, playSessionId, eventName,
++ *                    dimensionsJson, measurementsJson )
++ *
++ * every string UTF-8. Uploading belongs to Gaming Services on Windows; here
++ * the runtime only records each event, one JSON object per line, in the file
++ * named by BOL_GAME_EVENT_LOG, and the launcher forwards them to the Xbox
++ * Live event collector with the account's own tickets. Without the variable
++ * the write is accepted and dropped, as before.
++ */
++
++#include "../../private.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(gdkc);
++
++static LONG game_event_ref = 1;
++static CRITICAL_SECTION game_event_cs;
++static CRITICAL_SECTION_DEBUG game_event_cs_debug =
++{
++    0, 0, &game_event_cs,
++    { &game_event_cs_debug.ProcessLocksList, &game_event_cs_debug.ProcessLocksList },
++      0, 0, { (DWORD_PTR)(__FILE__ ": game_event_cs") }
++};
++static CRITICAL_SECTION game_event_cs = { &game_event_cs_debug, -1, 0, 0, 0, 0 };
++
++static HRESULT WINAPI game_event_QueryInterface( void *iface, REFIID iid, void **out )
++{
++    TRACE( "iface %p, iid %s, out %p\n", iface, debugstr_guid( iid ), out );
++    if (!out) return E_POINTER;
++    *out = iface;
++    InterlockedIncrement( &game_event_ref );
++    return S_OK;
++}
++
++static ULONG WINAPI game_event_AddRef( void *iface )
++{
++    return InterlockedIncrement( &game_event_ref );
++}
++
++static ULONG WINAPI game_event_Release( void *iface )
++{
++    return InterlockedDecrement( &game_event_ref );
++}
++
++/* Appends `text` as a JSON string, quotes included. Event names, service
++ * configuration ids and session ids are identifiers, but they come from the
++ * title and are escaped all the same. */
++static size_t json_string( char *dst, const char *text )
++{
++    static const char hex[] = "0123456789abcdef";
++    size_t n = 0;
++    const unsigned char *p;
++
++    if (dst) dst[n] = '"';
++    n++;
++    for (p = (const unsigned char *)(text ? text : ""); *p; p++)
++    {
++        if (*p == '"' || *p == '\\')
++        {
++            if (dst) { dst[n] = '\\'; dst[n + 1] = *p; }
++            n += 2;
++        }
++        else if (*p < 0x20)
++        {
++            if (dst)
++            {
++                memcpy( dst + n, "\\u00", 4 );
++                dst[n + 4] = hex[*p >> 4];
++                dst[n + 5] = hex[*p & 15];
++            }
++            n += 6;
++        }
++        else
++        {
++            if (dst) dst[n] = *p;
++            n++;
++        }
++    }
++    if (dst) dst[n] = '"';
++    return n + 1;
++}
++
++/* Appends a property bag the title already serialised as JSON, unquoted,
++ * with the line breaks Minecraft ends them with turned into spaces so the
++ * record stays on one line. An empty or missing bag is written as {}. */
++static size_t json_bag( char *dst, const char *bag )
++{
++    const char *p;
++    size_t n = 0;
++
++    if (!bag || !*bag) bag = "{}";
++    for (p = bag; *p; p++, n++)
++        if (dst) dst[n] = (*p == '\n' || *p == '\r') ? ' ' : *p;
++    return n;
++}
++
++static size_t game_event_format( char *dst, const char *time, UINT64 xuid, const char *scid,
++                                  const char *session, const char *name,
++                                  const char *dimensions, const char *measurements )
++{
++    char number[24];
++    size_t n = 0;
++
++#define PUT(s) do { size_t l_ = strlen( s ); if (dst) memcpy( dst + n, s, l_ ); n += l_; } while (0)
++    PUT( "{\"time\":" );
++    n += json_string( dst ? dst + n : NULL, time );
++    PUT( ",\"xuid\":" );
++    sprintf( number, "\"%I64u\"", xuid );
++    PUT( number );
++    PUT( ",\"scid\":" );
++    n += json_string( dst ? dst + n : NULL, scid );
++    PUT( ",\"session\":" );
++    n += json_string( dst ? dst + n : NULL, session );
++    PUT( ",\"event\":" );
++    n += json_string( dst ? dst + n : NULL, name );
++    PUT( ",\"dimensions\":" );
++    n += json_bag( dst ? dst + n : NULL, dimensions );
++    PUT( ",\"measurements\":" );
++    n += json_bag( dst ? dst + n : NULL, measurements );
++    PUT( "}\n" );
++#undef PUT
++    return n;
++}
++
++static void game_event_record( UINT64 xuid, const char *scid, const char *session, const char *name,
++                               const char *dimensions, const char *measurements )
++{
++    WCHAR path[MAX_PATH];
++    SYSTEMTIME now;
++    char time[32];
++    HANDLE file;
++    DWORD written;
++    size_t size;
++    char *line;
++
++    if (!GetEnvironmentVariableW( L"BOL_GAME_EVENT_LOG", path, ARRAY_SIZE(path) ))
++        return;
++
++    GetSystemTime( &now );
++    sprintf( time, "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ", now.wYear, now.wMonth, now.wDay,
++             now.wHour, now.wMinute, now.wSecond, now.wMilliseconds );
++
++    size = game_event_format( NULL, time, xuid, scid, session, name, dimensions, measurements );
++    if (!(line = malloc( size ))) return;
++    game_event_format( line, time, xuid, scid, session, name, dimensions, measurements );
++
++    /* One writer at a time keeps the lines whole; the reader only ever
++     * consumes complete lines. */
++    EnterCriticalSection( &game_event_cs );
++    file = CreateFileW( path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                        NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL );
++    if (file != INVALID_HANDLE_VALUE)
++    {
++        if (!WriteFile( file, line, size, &written, NULL ) || written != size)
++            WARN( "short write of an event record (%lu)\n", GetLastError() );
++        CloseHandle( file );
++    }
++    else WARN( "could not open %s (%lu)\n", debugstr_w( path ), GetLastError() );
++    LeaveCriticalSection( &game_event_cs );
++    free( line );
++}
++
++/* vtable[3]: XGameEventWrite( user, scid, playSessionId, eventName,
++ *                             dimensions, measurements ) */
++static HRESULT WINAPI game_event_Write( void *iface, XUserHandle user, const char *scid,
++                                        const char *play_session, const char *event_name,
++                                        const char *dimensions, const char *measurements )
++{
++    UINT64 xuid = 0;
++
++    TRACE( "user %p, scid %s, session %s, event %s, dimensions %s, measurements %s\n",
++           user, debugstr_a( scid ), debugstr_a( play_session ), debugstr_a( event_name ),
++           debugstr_a( dimensions ), debugstr_a( measurements ) );
++
++    if (!user || !scid || !event_name || !*event_name) return E_INVALIDARG;
++    if (FAILED( IXUserImpl_XUserGetId( x_user_impl, user, &xuid ) )) xuid = 0;
++
++    game_event_record( xuid, scid, play_session, event_name, dimensions, measurements );
++    return S_OK;
++}
++
++static const void *game_event_vtable[4] =
++{
++    game_event_QueryInterface,
++    game_event_AddRef,
++    game_event_Release,
++    game_event_Write,
++};
++
++static struct { const void **vtbl; } game_event_instance = { game_event_vtable };
++
++void *x_game_event_get( void )
++{
++    TRACE( "returning the game event implementation %p\n", &game_event_instance );
++    return &game_event_instance;
++}
+diff --git a/dlls/xgameruntime/Makefile.in b/dlls/xgameruntime/Makefile.in
+index 6613fcf..360fbdb 100644
+--- a/dlls/xgameruntime/Makefile.in
++++ b/dlls/xgameruntime/Makefile.in
+@@ -23,4 +23,5 @@ SOURCES = \
+ 	GDKComponent/System/User/XUser.c \
+ 	GDKComponent/System/User/DeviceAuth.c \
+ 	GDKComponent/System/XStore.c \
++	GDKComponent/System/XGameEvent.c \
+ 	GDKComponent/System/XServiceBroker.c
+diff --git a/dlls/xgameruntime/main.c b/dlls/xgameruntime/main.c
+index b250352..c71091c 100644
+--- a/dlls/xgameruntime/main.c
++++ b/dlls/xgameruntime/main.c
+@@ -408,6 +408,17 @@ HRESULT WINAPI QueryApiImpl( const GUID *runtimeClassId, REFIID interfaceId, voi
+         if (store) { *out = store; return S_OK; }
+     }
+ 
++    /* {bbfbdcc7-bfe7-409b-a5ca-edf054960b4d} XGameEvent: what XGameEventWrite
++     * queries, and the only road from a title to its event-based
++     * achievements and stats. The class id is also the interface id. */
++    if ( IsEqualGUID( runtimeClassId, &CLSID_XGameEventImpl ) )
++    {
++        extern void *x_game_event_get(void);
++        if (!out) return E_POINTER;
++        *out = x_game_event_get();
++        return S_OK;
++    }
++
+     /* {af406016} composite service broker */
+     if ( runtimeClassId->Data1 == 0xaf406016 )
+     {
+diff --git a/dlls/xgameruntime/private.h b/dlls/xgameruntime/private.h
+index 65fdc19..69b1151 100644
+--- a/dlls/xgameruntime/private.h
++++ b/dlls/xgameruntime/private.h
+@@ -79,6 +79,9 @@ extern UINT32 winegdk_game_title_id;
+ extern char winegdk_game_msa_app_id[17];
+ extern BOOLEAN winegdk_game_msa_full_trust;
+ 
++// bbfbdcc7-bfe7-409b-a5ca-edf054960b4d
++DEFINE_GUID(CLSID_XGameEventImpl, 0xbbfbdcc7, 0xbfe7, 0x409b, 0xa5, 0xca, 0xed, 0xf0, 0x54, 0x96, 0x0b, 0x4d);
++
+ // a85c3901-18ae-48c9-b066-d368f4523420
+ DEFINE_GUID(IID_IXTaskQueue, 0xa85c3901, 0x18ae, 0x48c9, 0xb0, 0x66, 0xd3, 0x68, 0xf4, 0x52, 0x34, 0x20);
+ 

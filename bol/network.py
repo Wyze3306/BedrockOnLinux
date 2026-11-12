@@ -385,8 +385,9 @@ def _social_checks(snapshot):
         "%d friends readable." % snapshot.friends))
     checks.append(NetworkCheck(
         "xbox sessions", "peoplehub", None,
-        "%d of %d friends are in a multiplayer session right now. A friend "
-        "who is not in one has no world to join, whatever the game shows."
+        "%d of %d friends are in a Minecraft world Xbox Live lists as "
+        "joinable right now. A friend who is not in one has no world to "
+        "join, whatever the game shows."
         % (snapshot.in_session, snapshot.friends)))
     return checks
 

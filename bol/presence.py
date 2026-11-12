@@ -219,10 +219,18 @@ def read_state(credentials, timeout=TIMEOUT_SECONDS):
 
 
 PEOPLEHUB_URL = ("https://peoplehub.xboxlive.com/users/me/people/social"
-                 "/decoration/multiplayer,presenceDetail")
+                 "/decoration/multiplayersummary,presencedetail")
 # PeopleHub's own contract, and the one this decoration list was measured
 # against. It also answers on 3, but that is not a reason to ask on 3.
 PEOPLEHUB_CONTRACT = "5"
+# Every Minecraft Bedrock title a friend can host a world from, whichever
+# platform it runs on: crossplay makes all of them joinable from here. Read
+# off live joinable activities and presence (2026-11-12): Windows,
+# Win32/Android, Xbox, PlayStation, iOS. "Minecraft Launcher" (1794566092)
+# is deliberately absent -- nobody hosts a world in it.
+MINECRAFT_TITLE_IDS = frozenset({
+    896928775, 1739947436, 1791712750, 1828326430, 2044456598, 1810924247,
+})
 
 
 class SocialSnapshot:
@@ -235,11 +243,15 @@ class SocialSnapshot:
     can't join my friend's world" (#243, #244) and the one nobody could
     answer, because nothing measured it.
 
-    ``in_session`` counts the presence of a session record, never anything
-    inside it. The interior of ``multiplayerSummary`` could not be measured
-    -- no friend was in a session while this was written, and Xbox returns
-    null for everyone who is not -- and a field name guessed from the outside
-    is exactly the kind of anchor that fails silently later.
+    ``in_session`` counts the friends with at least one joinable Minecraft
+    activity in ``multiplayerSummary.joinableActivities``. Up to 2.3.1 this
+    asked for a decoration named ``multiplayer``, which PeopleHub ignores:
+    every friend then came back with ``multiplayerSummary: null`` and the
+    count was always zero, even with a friend hosting a world. The real name
+    is ``multiplayersummary``; with it every friend carries a summary --
+    ``{"joinableActivities": [], "partyDetails": [], "inParty": 0}`` when
+    there is nothing to join -- so a summary existing means nothing and only
+    a joinable activity of a Minecraft title counts (measured 2026-11-12).
     """
 
     __slots__ = ("state", "friends", "in_session", "error")
@@ -249,6 +261,26 @@ class SocialSnapshot:
         self.friends = friends
         self.in_session = in_session
         self.error = error
+
+
+def _joinable_in_minecraft(person):
+    """Whether PeopleHub lists a Minecraft world this friend can be joined in."""
+    summary = person.get("multiplayerSummary") \
+        if isinstance(person, dict) else None
+    activities = summary.get("joinableActivities") \
+        if isinstance(summary, dict) else None
+    if not isinstance(activities, list):
+        return False
+    for activity in activities:
+        if not isinstance(activity, dict):
+            continue
+        try:
+            title = int(activity.get("titleId"))
+        except (TypeError, ValueError):
+            continue
+        if title in MINECRAFT_TITLE_IDS:
+            return True
+    return False
 
 
 def social_snapshot(credentials=None, timeout=TIMEOUT_SECONDS, path=None):
@@ -275,12 +307,7 @@ def social_snapshot(credentials=None, timeout=TIMEOUT_SECONDS, path=None):
         return SocialSnapshot(state=state,
                               error="the friends list could not be read "
                                     "(unexpected answer)")
-    in_session = 0
-    for person in people:
-        summary = person.get("multiplayerSummary") \
-            if isinstance(person, dict) else None
-        if isinstance(summary, dict) and summary:
-            in_session += 1
+    in_session = sum(1 for person in people if _joinable_in_minecraft(person))
     return SocialSnapshot(state=state, friends=len(people),
                           in_session=in_session)
 

@@ -234,6 +234,105 @@ class _HttpResp:
         return json.loads(self._raw)
 
 
+def _xbox_signature(priv, method, path, body_bytes, now=None):
+    """The ``Signature`` header Xbox Live auth endpoints want from a device.
+
+    Wire format: ver(4) + ts(8) + raw ECDSA-P-256 r||s (64), 76 bytes, in
+    base64. The bytes signed put 0x00 separators between every field:
+      ver(4) || \\0 || ts(8) || \\0 || method || \\0 || path || \\0 || auth || \\0 || body || \\0
+    and SHA-256 of that is what gets signed (matches Wine-side
+    DeviceAuth_SignRequest in dlls/xgameruntime/.../DeviceAuth.c).
+    """
+    import base64
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import (
+        decode_dss_signature,
+    )
+    now_ft = int(((time.time() if now is None else now) + 11644473600) * 1e7)
+    ver = (1).to_bytes(4, "big")
+    ts = now_ft.to_bytes(8, "big")
+    hash_input = (ver + b"\0" + ts + b"\0"
+                  + method.encode() + b"\0"
+                  + path.encode() + b"\0"
+                  + b"" + b"\0"
+                  + body_bytes + b"\0")
+    r, s = decode_dss_signature(
+        priv.sign(hash_input, ec.ECDSA(hashes.SHA256())))
+    return base64.b64encode(ver + ts + r.to_bytes(32, "big")
+                            + s.to_bytes(32, "big")).decode()
+
+
+def mint_xsts_from_preauth(relying_party, path=None, timeout=15):
+    """One device-bound user XSTS token for ``relying_party``, or None.
+
+    Built from what ``xbl_preauth`` already cached -- the device key, the
+    device token and the user token -- so it needs no Microsoft sign-in and
+    no SISU round trip: one request to xsts.auth.xboxlive.com, signed like
+    every other one this module makes. It serves audiences only a side
+    feature needs (the event tickets of ``bol.gameevents``), which must not
+    make the pre-auth chain itself any longer or any more fragile.
+
+    Returns ``{"token", "uhs", "expiry_epoch"}``, or None when the cache
+    cannot serve the request or Xbox Live refused it. Never raises.
+    """
+    import base64
+    import calendar
+    import urllib.request
+
+    try:
+        from cryptography.hazmat.primitives import serialization
+
+        cache = Path(path) if path is not None else DATA / "winegdk-preauth"
+        payload = json.loads((cache / "device.json").read_text())
+        priv = serialization.load_pem_private_key(
+            (cache / "device-key.pem").read_bytes(), password=None)
+        device_token = payload.get("device_token")
+        user_token = payload.get("user_token")
+        if not (isinstance(device_token, str) and device_token
+                and isinstance(user_token, str) and user_token):
+            return None
+        numbers = priv.public_key().public_numbers()
+        proof_key = {
+            "alg": "ES256", "crv": "P-256", "kty": "EC", "use": "sig",
+            "x": base64.b64encode(numbers.x.to_bytes(32, "big")).decode(),
+            "y": base64.b64encode(numbers.y.to_bytes(32, "big")).decode(),
+        }
+        body = json.dumps({
+            "RelyingParty": relying_party,
+            "TokenType": "JWT",
+            "Properties": {"SandboxId": "RETAIL",
+                           "UserTokens": [user_token],
+                           "DeviceToken": device_token,
+                           "ProofKey": proof_key},
+        }, separators=(",", ":")).encode()
+        request = urllib.request.Request(
+            "https://xsts.auth.xboxlive.com/xsts/authorize", data=body,
+            method="POST", headers={
+                "User-Agent": "XAL Xbox Live Game (Windows; SDK; 1.0.0.0)",
+                "Content-Type": "application/json",
+                "x-xbl-contract-version": "1",
+                "Signature": _xbox_signature(priv, "POST", "/xsts/authorize",
+                                             body),
+            })
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            answer = json.loads(response.read())
+        token = answer["Token"]
+        uhs = answer["DisplayClaims"]["xui"][0]["uhs"]
+        if not (isinstance(token, str) and token and uhs):
+            return None
+        expiry = None
+        try:
+            expiry = int(calendar.timegm(_parse_xbox_expiry(
+                answer.get("NotAfter", "")).utctimetuple()))
+        except (TypeError, ValueError):
+            pass
+        return {"token": token, "uhs": str(uhs), "expiry_epoch": expiry}
+    except Exception:  # a side feature: every failure means "no token"
+        return None
+
+
 _XBL_PREAUTH_DIAGNOSTIC = None
 _XBL_PREAUTH_DIAGNOSTIC_LOCK = threading.Lock()
 
@@ -932,7 +1031,7 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
                          "network" if refresh_unreachable else "signin")
     try:
         from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives import serialization
     except ImportError:
         return _fallback("xbl_preauth: a required Python dependency is "
                          "missing; cannot refresh online tokens.",
@@ -965,26 +1064,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
     y_b64 = base64.b64encode(pub_numbers.y.to_bytes(32, "big")).decode()
     proof_key = {"alg": "ES256", "crv": "P-256", "kty": "EC",
                  "use": "sig", "x": x_b64, "y": y_b64}
-    # Build the Xbox Live signature blob — wire format is ver(4) + ts(8) +
-    # raw ECDSA-P-256 r||s (64), 76 bytes total. The bytes SIGNED are a
-    # hash input that puts 0x00 separators between every field:
-    #   ver(4) || \0 || ts(8) || \0 || method || \0 || path || \0 || auth || \0 || body || \0
-    # SHA-256 of this is what gets signed (matches Wine-side
-    # DeviceAuth_SignRequest in dlls/xgameruntime/.../DeviceAuth.c).
-    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
     def _sign_header(method, path, body_bytes):
-        now_ft = int((time.time() + 11644473600) * 1e7)
-        ver = (1).to_bytes(4, "big")
-        ts = now_ft.to_bytes(8, "big")
-        hash_input = (ver + b"\0" + ts + b"\0"
-                      + method.encode() + b"\0"
-                      + path.encode() + b"\0"
-                      + b"" + b"\0"
-                      + body_bytes + b"\0")
-        sig_der = priv.sign(hash_input, ec.ECDSA(hashes.SHA256()))
-        r2, s2 = decode_dss_signature(sig_der)
-        sig_raw = r2.to_bytes(32, "big") + s2.to_bytes(32, "big")
-        return base64.b64encode(ver + ts + sig_raw).decode()
+        return _xbox_signature(priv, method, path, body_bytes)
     def _xbl_post(url, body_dict):
         import urllib.error
         import urllib.request
