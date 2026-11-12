@@ -396,12 +396,44 @@ _XBL_AGE_ERROR_CODES = {
     2148916236,  # Adult verification is required.
     2148916237,  # Adult verification is unavailable for this account.
     2148916238,  # Child account must be added to a Microsoft family.
+    2148916229,  # Family settings block online play.
 }
 
 _XBL_ACCOUNT_ERROR_CODES = {
+    2148916227,  # The account is suspended from Xbox Live.
     2148916233,  # The Microsoft account has no Xbox profile.
-    2148916234,
+    2148916234,  # The Xbox terms of use were never accepted.
     2148916235,  # Xbox Live is unavailable for the account/region.
+}
+
+# One XErr says exactly what to fix, and every one of them arrives as the same
+# bare "HTTP 401" otherwise: the generic account advice cannot tell a missing
+# profile from a suspension or a region Xbox Live does not serve.
+_XBL_ERROR_CODE_MESSAGES = {
+    2148916227: (
+        "Xbox Live has suspended this Microsoft account, so it cannot sign "
+        "in to any Xbox service. Check the enforcement status on "
+        "xbox.com, or play offline."
+    ),
+    2148916229: (
+        "This account's family settings block online play. An adult in the "
+        "Microsoft family must allow it in the Xbox privacy and online "
+        "safety settings, then sign out and sign in again."
+    ),
+    2148916233: (
+        "This Microsoft account has no Xbox profile yet. Sign in once on "
+        "xbox.com or in the Xbox app to create the profile and pick a "
+        "gamertag, then sign out and sign in again in the launcher."
+    ),
+    2148916234: (
+        "This Microsoft account has not accepted the Xbox terms of use. Sign "
+        "in on xbox.com and accept them, then sign out and sign in again in "
+        "the launcher."
+    ),
+    2148916235: (
+        "Xbox Live is not available in this Microsoft account's country or "
+        "region. Single-player worlds and LAN play still work."
+    ),
 }
 
 
@@ -471,6 +503,10 @@ def xbl_preauth_error_message():
     if diagnostic is None:
         return None
     message = diagnostic["message"]
+    error_code = diagnostic.get("error_code")
+    if error_code is not None:
+        message = _XBL_ERROR_CODE_MESSAGES.get(error_code, message)
+        message += " (Xbox error 0x%08X)" % error_code
     if diagnostic.get("category") in _XBL_CLOCK_CATEGORIES:
         try:
             from .network import clock_is_unsynchronized
@@ -479,6 +515,17 @@ def xbl_preauth_error_message():
         except Exception:
             pass
     return message
+
+
+def _xerr_suffix(error_code):
+    """`` (XErr 0x8015DC09)`` for a log line, or nothing without a code.
+
+    The XErr is a numeric, non-secret classifier; without it a support log
+    only reads "HTTP 401" and every account problem looks the same.
+    """
+    if error_code is None:
+        return ""
+    return " (XErr 0x%08X)" % error_code
 
 
 def _xbl_response_error(response):
@@ -1101,7 +1148,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
         return _fallback("xbl_preauth: device.auth POST failed "
                          "(network error).", "device-auth", "network")
     if r.status_code != 200:
-        return _fallback(f"xbl_preauth: device.auth HTTP {r.status_code}",
+        return _fallback(f"xbl_preauth: device.auth HTTP {r.status_code}"
+                         + _xerr_suffix(_xbl_response_error(r)[2]),
                          "device-auth", response=r)
     try:
         j = r.json()
@@ -1133,7 +1181,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
                 category, status, error_code = _xbl_response_error(ru)
                 _record_xbl_preauth_diagnostic(
                     "user-auth", category, status, error_code)
-                warn(f"xbl_preauth: user.auth HTTP {ru.status_code}")
+                warn(f"xbl_preauth: user.auth HTTP {ru.status_code}"
+                     + _xerr_suffix(error_code))
             else:
                 try:
                     uj = ru.json()
@@ -1174,7 +1223,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
             if record:
                 _record_xbl_preauth_diagnostic(
                     stage, category, status, error_code)
-            warn(f"xbl_preauth: {stage} HTTP {r.status_code}")
+            warn(f"xbl_preauth: {stage} HTTP {r.status_code}"
+                 + _xerr_suffix(error_code))
             return None
         try:
             payload = r.json()
@@ -1212,7 +1262,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
             if record:
                 _record_xbl_preauth_diagnostic(
                     stage, category, status, error_code)
-            warn(f"xbl_preauth: {stage} HTTP {r.status_code}")
+            warn(f"xbl_preauth: {stage} HTTP {r.status_code}"
+                 + _xerr_suffix(error_code))
             return None
         try:
             payload = r.json()
