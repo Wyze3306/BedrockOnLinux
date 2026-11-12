@@ -4,6 +4,12 @@
 
 ### Added
 
+- **`bedrock-on-linux inject` loads more DLLs into a running game.** Settings
+  injects one DLL automatically; `inject DLL…` adds others (a second tool, a
+  test harness such as [BedrockMCP](https://github.com/alvin0319/BedrockMCP))
+  without touching that setting. With `--wait` it follows a `play` started in
+  the background and injects once the main menu is up, the moment a player
+  injects by hand. See [docs/BEDROCKMCP.md](docs/BEDROCKMCP.md).
 - **Apple silicon under Asahi Linux.** Asahi's kernel uses 16 KiB memory
   pages, and Wine and FEX-Emu need 4 KiB ones. With muvm installed, the
   launcher now starts itself inside a muvm microVM, where muvm registers

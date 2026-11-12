@@ -196,6 +196,56 @@ def _report_launch_failure(message):
     desktop_notify(f"Minecraft did not start.\n{message}")
 
 
+def _game_started_at():
+    """When the running Minecraft process started (epoch seconds), or None."""
+    from .prefix import active_prefix, prefix_processes
+    try:
+        boot = next(int(line.split()[1])
+                    for line in Path("/proc/stat").read_text().splitlines()
+                    if line.startswith("btime "))
+        ticks = os.sysconf("SC_CLK_TCK")
+    except (OSError, StopIteration, ValueError):
+        return None
+    for pid in prefix_processes(active_prefix()):
+        try:
+            if b"Minecraft.Windows.exe" not in Path(
+                    f"/proc/{pid}/cmdline").read_bytes():
+                continue
+            # Field 22, counted after the parenthesised name, which may
+            # itself hold spaces.
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            return boot + int(stat.rsplit(")", 1)[1].split()[19]) / ticks
+        except (OSError, IndexError, ValueError):
+            continue
+    return None
+
+
+def _cmd_inject(dlls, wait=False, timeout=180.0):
+    """Inject each DLL into the running game, in order.
+
+    The launcher's own automatic injection takes a single DLL from Settings;
+    this adds others (a test harness, a second tool) to a game started any
+    way at all, without touching what the player configured. ``wait`` holds
+    until the game is up and at its main menu, the moment a player injects by
+    hand, so it can follow a ``play`` started in the background.
+    """
+    import time
+    from .inject import _await_injection_moment, run_injector
+    from .prefix import _mc_running
+    if wait:
+        deadline = time.monotonic() + timeout
+        while not _mc_running():
+            if time.monotonic() >= deadline:
+                raise BolError(f"Minecraft did not start within "
+                               f"{timeout:.0f} s.")
+            time.sleep(0.5)
+        since = _game_started_at() or time.time()
+        if not _await_injection_moment(0, since):
+            raise BolError("Minecraft exited before its main menu.")
+    for dll in dlls:
+        ok(f"Injected {run_injector(dll)} into Minecraft.")
+
+
 def main():
     p = argparse.ArgumentParser(prog=APP, description=f"{PRETTY} {VERSION}")
     sub = p.add_subparsers(dest="cmd")
@@ -245,6 +295,18 @@ def main():
     ip.add_argument("files", nargs="+", metavar="FILE",
                     help="content file(s) to import")
     sub.add_parser("repair", help="reset the Wine prefix")
+    ij = sub.add_parser(
+        "inject",
+        help="inject client DLL(s) into the running game, besides the one "
+             "Settings injects automatically")
+    ij.add_argument("dlls", nargs="+", metavar="DLL",
+                    help="64-bit DLL(s) to load, in order")
+    ij.add_argument("--wait", action="store_true",
+                    help="wait for the game to start and reach its main "
+                         "menu first (for use after a background 'play')")
+    ij.add_argument("--timeout", type=float, default=180.0, metavar="S",
+                    help="with --wait, how long to wait for the game to "
+                         "start (default: 180)")
     dp = sub.add_parser("doctor", help="check host requirements")
     dp.add_argument(
         "--acknowledge-gpu-crash",
@@ -415,6 +477,8 @@ def main():
             cmd_import(a.files)
         elif a.cmd == "repair":
             reset_prefix()
+        elif a.cmd == "inject":
+            _cmd_inject(a.dlls, wait=a.wait, timeout=a.timeout)
         elif a.cmd == "betterrtx":
             from .betterrtx import cli as betterrtx_cli
             if a.action == "install" and not a.target:

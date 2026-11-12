@@ -527,5 +527,83 @@ class LauncherStartTests(unittest.TestCase):
             cli.main()
 
 
+class InjectCommandTests(unittest.TestCase):
+    """`inject` loads extra DLLs without touching the automatic one."""
+
+    def _main(self, *argv):
+        with mock.patch.object(sys, "argv", ["bedrock-on-linux", *argv]), \
+                mock.patch.object(cli, "ok"):
+            cli.main()
+
+    def test_each_dll_is_injected_in_order(self):
+        with mock.patch("bol.inject.run_injector",
+                        side_effect=lambda dll: Path(dll).name) as inject, \
+                mock.patch("bol.inject._await_injection_moment") as moment:
+            self._main("inject", "/a/first.dll", "/b/second.dll")
+        self.assertEqual([c.args[0] for c in inject.call_args_list],
+                         ["/a/first.dll", "/b/second.dll"])
+        # Without --wait the game is expected to be at its menu already.
+        moment.assert_not_called()
+
+    def test_wait_holds_for_the_menu_of_the_running_game(self):
+        with mock.patch("bol.prefix._mc_running", return_value=True), \
+                mock.patch.object(cli, "_game_started_at",
+                                  return_value=1234.0), \
+                mock.patch("bol.inject._await_injection_moment",
+                           return_value=True) as moment, \
+                mock.patch("bol.inject.run_injector",
+                           return_value="x.dll") as inject:
+            self._main("inject", "--wait", "/a/x.dll")
+        # Markers older than this game's start belong to an earlier session.
+        moment.assert_called_once_with(0, 1234.0)
+        inject.assert_called_once_with("/a/x.dll")
+
+    def test_wait_reports_a_game_that_exits_before_its_menu(self):
+        output = io.StringIO()
+        with mock.patch("bol.prefix._mc_running", return_value=True), \
+                mock.patch.object(cli, "_game_started_at", return_value=None), \
+                mock.patch("bol.inject._await_injection_moment",
+                           return_value=False), \
+                mock.patch("bol.inject.run_injector") as inject, \
+                contextlib.redirect_stdout(output), \
+                contextlib.redirect_stderr(output), \
+                self.assertRaises(SystemExit) as exited:
+            self._main("inject", "--wait", "/a/x.dll")
+        self.assertEqual(exited.exception.code, 1)
+        self.assertIn("exited before its main menu", output.getvalue())
+        inject.assert_not_called()
+
+    def test_wait_gives_up_on_a_game_that_never_starts(self):
+        output = io.StringIO()
+        with mock.patch("bol.prefix._mc_running", return_value=False), \
+                mock.patch("bol.inject.run_injector") as inject, \
+                contextlib.redirect_stdout(output), \
+                contextlib.redirect_stderr(output), \
+                self.assertRaises(SystemExit):
+            self._main("inject", "--wait", "--timeout", "0", "/a/x.dll")
+        self.assertIn("did not start", output.getvalue())
+        inject.assert_not_called()
+
+    def test_game_start_time_comes_from_the_game_process(self):
+        stat = "4242 (Minecraft.Windo) S " + " ".join(
+            ["0"] * 18 + ["5000"] + ["0"] * 10)
+        files = {
+            "/proc/stat": "cpu 1 2 3\nbtime 1000\n",
+            "/proc/4242/stat": stat,
+        }
+
+        def read_text(path, *a, **k):
+            return files[str(path)]
+
+        with mock.patch("bol.prefix.active_prefix", return_value=Path("/p")), \
+                mock.patch("bol.prefix.prefix_processes",
+                           return_value=[4242]), \
+                mock.patch.object(Path, "read_text", read_text), \
+                mock.patch.object(Path, "read_bytes",
+                                  return_value=b"Z:\\Minecraft.Windows.exe\0"), \
+                mock.patch.object(os, "sysconf", return_value=100):
+            self.assertEqual(cli._game_started_at(), 1000 + 5000 / 100)
+
+
 if __name__ == "__main__":
     unittest.main()
