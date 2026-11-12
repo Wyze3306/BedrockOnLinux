@@ -30,14 +30,20 @@ Direct3D 12), X11 desktop.
    chmod 600 config.json
    ```
 
-3. Register it with Claude Code, passing the same token:
+3. Register it with Claude Code through the stdio relay of the fork's
+   companion, and the mouse companion beside it:
 
    ```bash
-   claude mcp add -s user --transport http bedrock http://127.0.0.1:18080/mcp --header "Authorization: Bearer $(python3 -c "import json;print(json.load(open('$HOME/.local/share/bedrock-mcp/config.json'))['auth_token'])")"
+   claude mcp add -s user bedrock -- python3 -I ~/Bureau/BedrockMCP-fork/companion/bedrock_mcp_proxy.py
+   claude mcp add -s user bedrock-input -- python3 -I ~/Bureau/BedrockMCP-fork/companion/bedrock_input_mcp.py
    ```
 
-   A request without the token gets HTTP 401. The server only listens on
-   127.0.0.1.
+   Registering the HTTP URL directly works too, but the endpoint only exists
+   while the game runs with the DLL injected, so the connector then shows as
+   broken, asking to be reconnected, whenever the game is closed. The relay is
+   always up: with no game it answers each call with how to start one, and it
+   reads the `auth_token` from `config.json`. A request without the token gets
+   HTTP 401. The server only listens on 127.0.0.1.
 
 `feed_signature` did not need regenerating on 1.26.60.5: the default from
 `config.example.json` matches `MouseDevice::feed` exactly once (RVA
