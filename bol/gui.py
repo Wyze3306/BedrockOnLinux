@@ -3891,7 +3891,9 @@ class MainWindow(QMainWindow):
 
         fr = self._switch("Limit frame rate to the display",
                         self.settings.get("limit_frame_rate", True),
-                        "Only applies when Minecraft has no limit of its own.")
+                        "Caps an unlimited game at the display's rate. On "
+                        "Wayland or gamescope it also paces vsync just under "
+                        "it, for less mouse delay.")
         fr.toggled.connect(lambda on: self._save_setting("limit_frame_rate", on))
         graphics.addWidget(fr)
 

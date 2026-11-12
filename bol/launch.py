@@ -102,6 +102,7 @@ from .util import (
 )
 from .vkd3d import prepare_universal_vkd3d
 from .waylanddrv import engine_wayland_driver_problem
+from .wine_registry import reg_delete, reg_sz, update_prefix_registry
 from .winegdk import ensure_winegdk
 from .x11 import tag_steam_game_windows
 
@@ -286,8 +287,22 @@ def _vsync_holds_limit(limit, options, refresh_probe=None):
     return refresh
 
 
+# How far under the display's refresh rate the launcher paces a game that
+# vsync would otherwise pace (see _configure_frame_rate_limit). The cap has to
+# stay under the rate the display really runs at, and the one RandR reports
+# can be a little off: 59.95 Hz for gamescope's 60.00 Hz output, 60 for a
+# 59.94 Hz panel. Each refresh the game misses shows its last frame twice:
+# once every 8 s at 60 Hz, every 3.5 s at 144 Hz.
+_PACE_UNDER_REFRESH = 0.002
+
+
+def _rate_under_refresh(refresh):
+    """The frame rate, to the hundredth, that keeps just under ``refresh``."""
+    return math.floor(refresh * (1.0 - _PACE_UNDER_REFRESH) * 100.0) / 100.0
+
+
 def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
-                                refresh_probe=None):
+                                refresh_probe=None, xwayland=False):
     """Pace Minecraft's frames with a limiter that sleeps instead of spinning.
 
     Minecraft's own *Max Framerate* waits for each frame's deadline by polling
@@ -312,6 +327,22 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
     other takes its place: the same 60.0 FPS on a 60 Hz display, and that
     thread back under 2%.
 
+    Not under Xwayland, though: on a Wayland desktop, or in gamescope. There
+    the swap chain's present-wait completes as soon as Xwayland passes the
+    frame on, not when it is shown, so neither the game's own frame latency
+    of one (it calls SetMaximumFrameLatency(1)) nor vkd3d-proton's latency
+    frames can see the frames queued behind it. With vsync alone each frame
+    reached the screen about four refreshes after the game presented it:
+    139 ms from a mouse movement to the moved picture at 60 Hz, measured in
+    gamescope against its composited output (#202). Paced just under the
+    refresh rate the queue stays empty, and the same movement shows in 75 ms,
+    still 74 ms a minute and a half later. So under Xwayland, with vsync on
+    and no limit of the player's below the refresh rate, the launcher holds
+    the game at the display's rate less _PACE_UNDER_REFRESH, and pays the
+    limiter's spin for it; the *Limit frame rate to the display* switch in
+    Settings turns that off. On a plain X11 server, where that queue was not
+    measured, vsync keeps the game alone as before (docs/INPUT-LATENCY.md).
+
     With no limit at all — vsync off and *Max Framerate* on Unlimited —
     nothing paces the render loop, and the main menu, the cheapest frame in
     the game, then runs into four figures of FPS and takes most of the GPU to
@@ -329,11 +360,14 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
     launch to be visible here. A ``VKD3D_FRAME_RATE`` set by hand, in either
     place, is an answer already and is left alone.
 
-    The limit is always whole frames per second, rounded up. That is not
-    cosmetic: a value carrying a decimal point is parsed as no limit at all
-    and silently does nothing, so a 143.85 Hz display has to be asked for as
-    144 — and rounding up rather than down is what keeps the cap from landing
-    just under the rate the display is actually driving.
+    The caps above are whole frames per second, rounded up. That is not
+    cosmetic: Proton turns VKD3D_FRAME_RATE into DXVK's dxgi.maxFrameRate,
+    which takes whole numbers only and reads one carrying a decimal point as
+    no limit at all, so a 143.85 Hz display has to be asked for as 144 — and
+    rounding up rather than down is what keeps the cap from landing just
+    under the rate the display is actually driving. The pace under the
+    refresh rate has to land just under it, so it keeps its decimals, and
+    _deliver_frame_rate_limit hands it to vkd3d-proton by another way.
 
     None of this applies to the Legacy compatibility renderer: Proton leaves
     vkd3d-proton out of the prefix for it, so nothing would read the limit,
@@ -362,10 +396,13 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
         return limit
 
     options_path = find_options_file(prefix)
+    options = read_game_options(options_path)
     own = game_frame_limit(options_path)
+    pace = xwayland and (settings or {}).get("limit_frame_rate", True)
     if own:
-        refresh = _vsync_holds_limit(own, read_game_options(options_path),
-                                     refresh_probe)
+        refresh = _vsync_holds_limit(own, options, refresh_probe)
+        if refresh and pace:
+            return _pace_under_refresh(env, refresh, own)
         if refresh:
             info("Minecraft's Max Framerate is %d FPS and vsync already holds "
                  "it to this display's %.2f Hz, so the launcher only turns "
@@ -382,9 +419,19 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
         env["VKD3D_FRAME_RATE"] = str(own)
         return own
 
+    if pace and vsync_is_on(options):
+        probe = _screen_refresh_hz if refresh_probe is None else refresh_probe
+        try:
+            refresh = probe()
+        except Exception:
+            refresh = None
+        # Vsync still paces the game when the display cannot be measured.
+        if not refresh or refresh <= 0:
+            return None
+        return _pace_under_refresh(env, refresh)
     if not (settings or {}).get("limit_frame_rate", True):
         return None
-    if not frame_rate_is_unlimited(read_game_options(options_path)):
+    if not frame_rate_is_unlimited(options):
         return None
     probe = _screen_refresh_hz if refresh_probe is None else refresh_probe
     try:
@@ -411,6 +458,76 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
          "uncapped." % (limit, refresh))
     env["VKD3D_FRAME_RATE"] = str(limit)
     return limit
+
+
+def _draws_through_xwayland(backend, wayland_display, own_gamescope,
+                            environ=None):
+    """Whether the game's X11 window reaches the screen through Xwayland.
+
+    It does as an X11 client of a Wayland desktop, of the gamescope the
+    launcher starts, or of the gamescope session it runs in, such as Steam's
+    Game Mode, which gives X11 clients no WAYLAND_DISPLAY. winewayland draws
+    to the compositor directly.
+    """
+    if backend == "wayland":
+        return False
+    return bool(wayland_display) or bool(own_gamescope) or \
+        in_gamescope_session(os.environ if environ is None else environ)
+
+
+def _pace_under_refresh(env, refresh, own=None):
+    """Pace a vsync'd game just under ``refresh`` (see the caller)."""
+    rate = _rate_under_refresh(refresh)
+    aside = ""
+    if own:
+        aside = (" Its own Max Framerate of %d FPS is turned off for the "
+                 "session and put back when the game closes." % own)
+    info("Vsync holds Minecraft to this display's %.2f Hz, but under "
+         "Xwayland each frame then waits several refreshes before it is "
+         "shown. The launcher paces the game at %.2f FPS instead, just under "
+         "the display, so each frame is shown at the next refresh: about "
+         "60 ms less between moving the mouse and seeing it at 60 Hz.%s Turn "
+         "off 'Limit frame rate to the display' in Settings ▸ Advanced to "
+         "leave it to vsync." % (refresh, rate, aside))
+    env["VKD3D_FRAME_RATE"] = "%.2f" % rate
+    return own or rate
+
+
+def _deliver_frame_rate_limit(env, prefix=None):
+    """Hand vkd3d-proton a frame-rate limit with decimals intact.
+
+    Proton takes VKD3D_FRAME_RATE out of the environment it starts Wine with
+    and passes it on as DXVK's dxgi.maxFrameRate, a whole number, so a value
+    such as 59.88 becomes no limit at all. Wine also adds the prefix's
+    HKCU\\Environment to the environment of the processes it starts, which
+    Proton never sees; vkd3d-proton reads its VKD3D_FRAME_RATE there with
+    decimals, and that value outranks the one DXGI passes it.
+
+    So a VKD3D_FRAME_RATE that is not a whole number moves out of ``env``
+    into the prefix, whoever set it. Every other launch removes the value,
+    so a pace chosen for one session never outlives it into the next. The
+    prefix must be stopped. Returns the rate written, or None.
+    """
+    rate = str(env.get("VKD3D_FRAME_RATE", "")).strip()
+    exact = bool(rate) and not rate.isdigit()
+    change = (reg_sz("Environment", "VKD3D_FRAME_RATE", rate) if exact
+              else reg_delete("Environment", "VKD3D_FRAME_RATE"))
+    try:
+        update_prefix_registry(
+            active_prefix() if prefix is None else prefix, user=[change])
+    except Exception as exc:
+        if not exact:
+            return None
+        # Through Proton it would mean no limit at all; vsync still paces.
+        env.pop("VKD3D_FRAME_RATE", None)
+        warn("The frame-rate limit of %s FPS could not be written into the "
+             "Wine prefix (%s), so this session runs without it."
+             % (rate, type(exc).__name__))
+        return None
+    if not exact:
+        return None
+    env.pop("VKD3D_FRAME_RATE", None)
+    return rate
 
 
 def _set_aside_game_frame_limit(prefix=None):
@@ -1030,16 +1147,6 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     # Required by the menu's indirect root-CBV updates (#27/#29/#30).
     _require_vkd3d_config(env, "force_raw_va_cbv")
     _configure_ray_tracing(env, s)
-    # The Advanced custom-environment field is applied at the end of this
-    # function, far too late to be read here, so overlay it explicitly: it is
-    # where BOL_FRAME_RATE is documented, and the supported way to set it.
-    # The limiter takes over Minecraft's own Max Framerate, read from its
-    # options.txt; another title has no such file, and its own setting.
-    frame_limit = _configure_frame_rate_limit(
-        env, s, active_prefix(),
-        environ={**os.environ,
-                 **custom_env_map(s.get("custom_env") or "")}) \
-        if bedrock else None
     diag = (s.get("diagnostics", False) or os.environ.get("BOL_DIAG") == "1")
     xlog = os.environ.get("BOL_XCURL_LOG")
     if xlog == "1" or (xlog is None and diag):
@@ -1117,6 +1224,17 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     _configure_runtime_compat(
         env, s, backend, bool(wl), diagnostics=diag,
     )
+    # The Advanced custom-environment field is applied at the end of this
+    # function, far too late to be read here, so overlay it explicitly: it is
+    # where BOL_FRAME_RATE is documented, and the supported way to set it.
+    # The limiter takes over Minecraft's own Max Framerate, read from its
+    # options.txt; another title has no such file, and its own setting.
+    frame_limit = _configure_frame_rate_limit(
+        env, s, active_prefix(),
+        environ={**os.environ,
+                 **custom_env_map(s.get("custom_env") or "")},
+        xwayland=_draws_through_xwayland(backend, wl, use_gamescope)) \
+        if bedrock else None
     _configure_graphics_cache(env, managed_engine=not custom_proton())
     _configure_gpu(env, s, environ={**os.environ,
                                     **custom_env_map(s.get("custom_env") or "")})
@@ -1184,6 +1302,10 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     cmd = _keep_game_out_of_swap(cmd, env)
     # Prevent diagnosis from attributing stale Proton logs to this launch.
     _clear_previous_proton_logs()
+    # After the custom environment, so a limit with decimals set there gets
+    # through Proton as well; for every title, so a pace a Bedrock session
+    # left in the prefix never reaches another one.
+    _deliver_frame_rate_limit(env)
     edition = None
     if bedrock:
         edition = _prepare_bedrock_session(s, frame_limit)

@@ -78,7 +78,8 @@
   the game at that rate, so the launcher now only turns the game's limiter
   off and adds none of its own. Measured on a 60 Hz display: the same
   60 FPS, and the game's CPU use in the menu down from 40% to 22% of a core
-  (#202).
+  (#202). On a Wayland desktop and in gamescope the launcher now paces
+  vsync itself, for the reason under *The camera follows the mouse sooner*.
 - **Fullscreen fills the screen with *Keep the mouse inside the window*
   on.** That setting runs the game in a Wine virtual desktop, where the
   game's title bar is one Wine draws. Switching to fullscreen took the bar
@@ -100,6 +101,19 @@
   fsync on kernels without ntsync, takes two Wine calls the game makes on
   every frame off its main thread (#202), and serves the XGameEvent class
   that Xbox Live grades achievements from (#152).
+- **The camera follows the mouse sooner on Wayland desktops and in
+  gamescope.** There Minecraft draws through Xwayland, which reports each
+  frame as presented as soon as it passes it on, so with vsync on frames
+  queued up unseen and each one reached the screen about four refreshes
+  after the game drew it: 139 ms from moving the mouse to seeing the
+  picture move at 60 Hz. The launcher now paces the game just under the
+  display's refresh rate (59.88 FPS at 60 Hz), which keeps that queue
+  empty: 75 ms. It costs vkd3d-proton's limiter, a twentieth of a CPU core
+  at 60 FPS with engine native23, and one repeated frame every 8 seconds.
+  **Settings ▸ Advanced ▸ Limit frame rate to the display** turns it off.
+  A `VKD3D_FRAME_RATE` with decimals, which Proton used to turn into no limit
+  at all, now reaches vkd3d-proton too. Measurements in
+  `docs/INPUT-LATENCY.md` (#202).
 
 ## 2.3.1 — 2026-11-11
 
