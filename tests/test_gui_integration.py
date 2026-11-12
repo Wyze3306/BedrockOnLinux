@@ -400,8 +400,8 @@ class TestOtherTitlesInThePicker:
     def test_each_edition_has_a_toggle(self, main_window):
         buttons = main_window.edition_buttons
         assert list(buttons)[:2] == ["release", "preview"]
-        assert buttons["dungeons"].text() == "Dungeons"
-        assert buttons["legends"].text() == "Legends"
+        assert buttons["dungeons"].accessibleName() == "Dungeons"
+        assert buttons["legends"].accessibleName() == "Legends"
         assert main_window.stable_btn is buttons["release"]
         assert main_window.preview_btn is buttons["preview"]
 

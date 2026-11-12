@@ -508,7 +508,8 @@ class ModsPage(QFrame):
     def __init__(self, win):
         super().__init__()
         self.win = win
-        self.setObjectName("Card")
+        # Flat, like every page: its cards sit straight on the window.
+        self.setObjectName("Page")
         self.state = {}
         self.builds = []
         self.catalogue = []
@@ -525,20 +526,14 @@ class ModsPage(QFrame):
         self._bridge.line.connect(self._on_log)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 18, 20, 14)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(10)
 
         head = QHBoxLayout()
-        titles = QVBoxLayout()
-        titles.setSpacing(0)
-        title = QLabel("Mods")
-        title.setObjectName("Title")
-        titles.addWidget(title)
-        sub = QLabel("LeviLamina mods from levimc.org — installed per "
-                     "Minecraft build")
-        sub.setObjectName("Muted")
-        titles.addWidget(sub)
-        head.addLayout(titles)
+        sub = QLabel("LeviLamina mods from levimc.org, installed per "
+                     "Minecraft build.")
+        sub.setObjectName("Sub")
+        head.addWidget(sub)
         head.addStretch(1)
         build_label = QLabel("Build")
         build_label.setObjectName("Sub")
@@ -548,12 +543,6 @@ class ModsPage(QFrame):
         self.build_combo.setMinimumWidth(230)
         self.build_combo.currentIndexChanged.connect(self._on_build)
         head.addWidget(self.build_combo)
-        back = QPushButton("← Back")
-        back.setObjectName("Ghost")
-        back.setFixedSize(76, 28)
-        back.setCursor(Qt.PointingHandCursor)
-        back.clicked.connect(win.toggle_mods)
-        head.addWidget(back)
         outer.addLayout(head)
 
         outer.addWidget(self._build_status())

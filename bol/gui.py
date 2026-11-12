@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import (
-    QObject, QPoint, QSocketNotifier, Qt, QThread, QTimer, Signal,
+    QObject, QPoint, QRect, QSocketNotifier, Qt, QThread, QTimer, Signal,
     Slot,
 )
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
@@ -390,10 +390,20 @@ class Theme:
         QPushButton#DangerSmall:disabled {{ color: {self.muted}; }}
         QPushButton#Danger {{ background: {self.red}; color: white; }}
         QPushButton#Danger:hover {{ background: {self.red_hov}; }}
-        QPushButton#Ghost {{ background: transparent; color: {self.sub}; }}
-        QPushButton#Ghost:hover {{ background: {self.card2}; color: {self.fg}; }}
-        QPushButton#GhostSmall {{ background: transparent; color: {self.sub}; font-size: 11px; padding: 4px 8px; }}
-        QPushButton#GhostSmall:hover {{ background: {self.card2}; color: {self.fg}; }}
+        QPushButton#Ghost {{ background: {self.card2}; color: {self.fg}; font-weight: 600; }}
+        QPushButton#Ghost:hover {{ background: {self.card3}; }}
+        QPushButton#GhostSmall {{ background: {self.card2}; color: {self.fg}; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 8px; }}
+        QPushButton#GhostSmall:hover {{ background: {self.card3}; }}
+        QPushButton#EditionRow {{ background: transparent; border-radius: 10px; padding: 0px; }}
+        QPushButton#EditionRow:hover {{ background: {self.card2}; }}
+        QPushButton#EditionRow:checked {{ background: {self.accent_dim}; }}
+        QFrame#Page {{ background: transparent; border: none; }}
+        QPushButton#FoldBtn {{
+            background: transparent; color: {self.muted};
+            border-radius: 6px; padding: 0px; font-size: 16px; font-weight: 700;
+        }}
+        QPushButton#FoldBtn:hover {{ background: {self.card2}; color: {self.fg}; }}
+        QPushButton#FoldBtn:disabled {{ color: {self.card3}; }}
         QPushButton#DangerSmall {{ background: {self.card2}; color: {self.red}; font-size: 11px; padding: 4px 8px; border-radius: 10px; }}
         QPushButton#DangerSmall:hover {{ background: {self.red}; color: white; }}
         QPushButton#IconBtn {{
@@ -569,8 +579,7 @@ class Theme:
         QProgressBar::chunk {{ background: {self.accent}; border-radius: 4px; }}
         QTabWidget::pane {{
             border: none;
-            background: {self.bg};
-            border-radius: 12px;
+            background: transparent;
             top: 4px;
         }}
         QTabBar {{ background: transparent; }}
@@ -913,6 +922,96 @@ class Popup(QFrame):
         pos = anchor.mapToGlobal(QPoint(0, -self.height() - gap))
         self.move(pos)
         self.show()
+
+
+# ======================================================================
+# Edition picker
+# ======================================================================
+
+# Each edition's badge: a colour and a glyph, so the games tell apart at a
+# glance in the dock and the menu.
+_EDITION_BADGES = {
+    "release": ("#43a047", "⛏"),
+    "preview": ("#d8a230", "🧪"),
+    "dungeons": ("#c4552c", "⚔"),
+    "legends": ("#6a4fc4", "🛡"),
+    "education": ("#2f7fd0", "🎓"),
+}
+
+
+def edition_pixmap(edition_id, size=28):
+    """A rounded badge for an edition; any unknown one gets a grey one."""
+    color, glyph = _EDITION_BADGES.get(edition_id, ("#5a6273", "◆"))
+    ratio = 2
+    pixmap = QPixmap(size * ratio, size * ratio)
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(color))
+    painter.drawRoundedRect(0, 0, size, size, size * 0.28, size * 0.28)
+    font = painter.font()
+    font.setPixelSize(int(size * 0.56))
+    painter.setFont(font)
+    painter.setPen(QColor("white"))
+    painter.drawText(QRect(0, 0, size, size), Qt.AlignCenter, glyph)
+    painter.end()
+    return pixmap
+
+
+def edition_caption(entry):
+    """The second line of an edition in the menu."""
+    if entry.get("id") == "release":
+        return "Minecraft Bedrock"
+    if entry.get("id") == "preview":
+        return "Minecraft Bedrock, beta builds"
+    return entry.get("name") or ""
+
+
+class EditionMenu(Popup):
+    """The editions, one row each with its badge; opens from the dock."""
+
+    def __init__(self, parent, editions):
+        super().__init__(parent, width=270, height=12 + 52 * len(editions))
+        self.setObjectName("Popup")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(2)
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.buttons = {}
+        for entry in editions:
+            b = QPushButton()
+            b.setObjectName("EditionRow")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedHeight(48)
+            b.setToolTip(entry["name"])
+            # The row draws its own labels; this is its name for screen
+            # readers (and for anything else asking what the row is).
+            b.setAccessibleName(entry.get("short") or entry["name"])
+            row = QHBoxLayout(b)
+            row.setContentsMargins(10, 4, 10, 4)
+            row.setSpacing(10)
+            badge = QLabel()
+            badge.setPixmap(edition_pixmap(entry["id"], 30))
+            badge.setAttribute(Qt.WA_TransparentForMouseEvents)
+            row.addWidget(badge)
+            words = QVBoxLayout()
+            words.setSpacing(0)
+            name = QLabel(entry.get("short") or entry["name"])
+            name.setStyleSheet("font-weight:700;")
+            name.setAttribute(Qt.WA_TransparentForMouseEvents)
+            words.addWidget(name)
+            caption = QLabel(edition_caption(entry))
+            caption.setObjectName("Muted")
+            caption.setAttribute(Qt.WA_TransparentForMouseEvents)
+            words.addWidget(caption)
+            row.addLayout(words, 1)
+            self.group.addButton(b)
+            self.buttons[entry["id"]] = b
+            v.addWidget(b)
 
 
 # ======================================================================
@@ -1446,6 +1545,7 @@ class MainWindow(QMainWindow):
         v.setSpacing(4)
 
         brand = QHBoxLayout(); brand.setSpacing(8)
+        self._rail_brand_row = brand
         icon_lbl = QLabel()
         if self.icon_pixmap:
             icon_lbl.setPixmap(self.icon_pixmap.scaled(
@@ -1454,16 +1554,24 @@ class MainWindow(QMainWindow):
         brand.addWidget(icon_lbl)
         self.rail_brand = QLabel("BedrockOnLinux"); self.rail_brand.setObjectName("Brand")
         brand.addWidget(self.rail_brand, 1)
-        v.addLayout(brand)
-        # Folds the rail down to its icons, and back; remembered.
-        self.rail_fold = QPushButton("«")
-        self.rail_fold.setObjectName("NavItem")
+        # Folds the rail down to its icons, and back; remembered. A small
+        # chevron beside the name; folded, it sits under the icon.
+        self.rail_fold = QPushButton("‹")
+        self.rail_fold.setObjectName("FoldBtn")
         self.rail_fold.setCursor(Qt.PointingHandCursor)
-        self.rail_fold.setFixedHeight(30)
-        self.rail_fold.clicked.connect(lambda: self.set_rail_collapsed(
-            not self._rail_folded()))
-        v.addWidget(self.rail_fold)
-        v.addSpacing(6)
+        self.rail_fold.setFixedSize(24, 24)
+        self.rail_fold.setToolTip("Fold the menu to its icons")
+        self.rail_fold.clicked.connect(lambda: self.set_rail_collapsed(True))
+        brand.addWidget(self.rail_fold)
+        v.addLayout(brand)
+        self.rail_unfold = QPushButton("›")
+        self.rail_unfold.setObjectName("FoldBtn")
+        self.rail_unfold.setCursor(Qt.PointingHandCursor)
+        self.rail_unfold.setFixedSize(24, 24)
+        self.rail_unfold.setToolTip("Show the menu's names")
+        self.rail_unfold.clicked.connect(lambda: self.set_rail_collapsed(False))
+        v.addWidget(self.rail_unfold, 0, Qt.AlignHCenter)
+        v.addSpacing(10)
 
         self.rail_group = QButtonGroup(self)
         self.rail_group.setExclusive(True)
@@ -1576,11 +1684,10 @@ class MainWindow(QMainWindow):
             b.setText(glyph if collapsed else f"{glyph}   {text}")
             b.setStyleSheet("text-align:center; padding:0; font-size:18px;"
                             if collapsed else "")
-        self.rail_fold.setText("»" if collapsed else "«  Collapse")
-        self.rail_fold.setToolTip("Show the menu's names" if collapsed
-                                  else "Fold the menu to its icons")
-        self.rail_fold.setStyleSheet("text-align:center; padding:0;"
-                                     if collapsed else "")
+        self.rail_fold.setVisible(not collapsed)
+        self.rail_unfold.setVisible(collapsed)
+        self._rail_brand_row.setAlignment(Qt.AlignHCenter if collapsed
+                                          else Qt.Alignment())
         self.rail_brand.setVisible(not collapsed)
         self.rail_foot.setVisible(not collapsed)
         for widget in (self.prof_label, self.prof_arrow, self.acct_text,
@@ -1597,11 +1704,11 @@ class MainWindow(QMainWindow):
         self.prof_icon.setStyleSheet("font-size:16px;" if collapsed else "")
         self.prof_card.setToolTip(f"Profile: {current_profile_name()}")
         # Too narrow to unfold: the button says why instead of doing nothing.
-        self.rail_fold.setEnabled(not (collapsed and self.width()
-                                       < self.RAIL_AUTO_FOLD))
-        if not self.rail_fold.isEnabled():
-            self.rail_fold.setToolTip("Widen the window to show the menu's "
-                                      "names")
+        narrow = self.width() < self.RAIL_AUTO_FOLD
+        self.rail_unfold.setEnabled(not narrow)
+        self.rail_unfold.setToolTip("Widen the window to show the menu's "
+                                    "names" if narrow
+                                    else "Show the menu's names")
 
     # Page name shown above it, by page.
     _PAGE_TITLES = {
@@ -1797,6 +1904,37 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout(dock)
         h.setContentsMargins(16, 14, 16, 14)
 
+        # Edition: one pill, its badge and name; the menu lists them all.
+        editions = list_editions(include_beta=True)
+        self.edition_field = QFrame(); self.edition_field.setObjectName("PillOnCard")
+        self.edition_field.setFixedHeight(52)
+        self.edition_field.setMinimumWidth(150)
+        self.edition_field.setCursor(Qt.PointingHandCursor)
+        self.edition_field.setToolTip("Choose the game or edition")
+        efl = QHBoxLayout(self.edition_field)
+        efl.setContentsMargins(10, 0, 12, 0); efl.setSpacing(10)
+        self.edition_badge = QLabel()
+        efl.addWidget(self.edition_badge)
+        self.edition_name = QLabel("")
+        self.edition_name.setStyleSheet("font-weight:700;")
+        efl.addWidget(self.edition_name, 1)
+        efl.addWidget(QLabel("▾"))
+        self.edition_field.mousePressEvent = lambda e: self.open_edition_menu()
+        h.addWidget(self.edition_field)
+
+        self.edition_menu = EditionMenu(self, editions)
+        self.edition_group = self.edition_menu.group
+        self.edition_buttons = self.edition_menu.buttons
+        self._edition_entries = {e["id"]: e for e in editions}
+        for edition_id, b in self.edition_buttons.items():
+            b.clicked.connect(
+                lambda _checked=False, eid=edition_id: self._pick_edition(eid))
+            b.toggled.connect(
+                lambda on, eid=edition_id: on and self._paint_edition_field(eid))
+        self.stable_btn = self.edition_buttons["release"]
+        self.preview_btn = self.edition_buttons["preview"]
+        self.education_btn = self.edition_buttons.get("education")
+
         # Version field
         self.ver_field = QFrame(); self.ver_field.setObjectName("PillOnCard")
         self.ver_field.setFixedSize(196, 52)
@@ -1807,33 +1945,6 @@ class MainWindow(QMainWindow):
         vfl.addWidget(QLabel("▾"))
         self.ver_field.mousePressEvent = lambda e: self.open_picker()
         h.addWidget(self.ver_field)
-
-        # Edition toggle
-        ed_field = QFrame(); ed_field.setObjectName("PillOnCard")
-        ed_field.setFixedHeight(52)
-        efl = QHBoxLayout(ed_field); efl.setContentsMargins(6, 8, 6, 8); efl.setSpacing(2)
-        self.edition_group = QButtonGroup(self)
-        self.edition_group.setExclusive(True)
-        # One toggle per edition: Stable and Preview, then the other titles
-        # of the family the Store sells (Minecraft Dungeons, Legends).
-        self.edition_buttons = {}
-        for entry in list_editions(include_beta=True):
-            label = entry.get("short") or entry["name"]
-            # As wide as its name and no wider: five editions share the dock.
-            b = btn(label, None, kind="ghost", h=32, tip=entry["name"])
-            b.setObjectName("Toggle")
-            b.setStyleSheet("padding: 0px 10px;")
-            b.setCheckable(True)
-            self.edition_group.addButton(b)
-            efl.addWidget(b)
-            b.clicked.connect(
-                lambda _checked=False, eid=entry["id"]:
-                self.select_edition(eid))
-            self.edition_buttons[entry["id"]] = b
-        self.stable_btn = self.edition_buttons["release"]
-        self.preview_btn = self.edition_buttons["preview"]
-        self.education_btn = self.edition_buttons.get("education")
-        h.addWidget(ed_field)
 
         h.addStretch(1)
 
@@ -1851,7 +1962,20 @@ class MainWindow(QMainWindow):
         return dock
 
     def _paint_edition_toggle(self):
-        pass  # QSS handles the checked-state colouring via #Toggle:checked
+        pass  # QSS handles the checked-state colouring via #EditionRow:checked
+
+    def _paint_edition_field(self, edition_id):
+        entry = self._edition_entries.get(edition_id) or {}
+        self.edition_badge.setPixmap(edition_pixmap(edition_id, 28))
+        self.edition_name.setText(entry.get("short") or entry.get("name")
+                                  or edition_id)
+
+    def open_edition_menu(self):
+        self.edition_menu.show_above(self.edition_field, gap=8)
+
+    def _pick_edition(self, edition_id):
+        self.edition_menu.close()
+        self.select_edition(edition_id)
 
     # ------------------------------------------------------------ log drawer
     def _build_log_drawer(self) -> QFrame:
@@ -3100,15 +3224,11 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ settings page
     def _build_settings(self) -> QWidget:
-        page = QFrame(); page.setObjectName("Card")
+        # Flat: the page title is above it and the menu is the way back, so
+        # the tabs and their cards sit straight on the window.
+        page = QFrame(); page.setObjectName("Page")
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(20, 18, 20, 18)
-        head = QHBoxLayout()
-        t = QLabel("Settings"); t.setObjectName("Title")
-        head.addWidget(t)
-        head.addStretch(1)
-        head.addWidget(btn("← Back", self.toggle_settings, kind="flat", w=76, h=28))
-        outer.addLayout(head)
+        outer.setContentsMargins(0, 0, 0, 0)
 
         tabs = QTabWidget()
         outer.addWidget(tabs, 1)
@@ -4259,15 +4379,9 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ changelog page
     def _build_changelog(self) -> QWidget:
-        page = QFrame(); page.setObjectName("Card")
+        page = QFrame(); page.setObjectName("Page")
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(20, 18, 20, 18)
-        head = QHBoxLayout()
-        t = QLabel("Changelog"); t.setObjectName("Title")
-        head.addWidget(t)
-        head.addStretch(1)
-        head.addWidget(btn("← Back", self.toggle_changelog, kind="flat", w=76, h=28))
-        outer.addLayout(head)
+        outer.setContentsMargins(0, 0, 0, 0)
 
         self.changelog_tabs = QTabWidget()
         outer.addWidget(self.changelog_tabs, 1)
@@ -4281,17 +4395,10 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ profiles page
     def _build_profiles_page(self) -> QWidget:
-        page = QFrame(); page.setObjectName("Card")
+        page = QFrame(); page.setObjectName("Page")
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(10)
-
-        head = QHBoxLayout()
-        t = QLabel("Manage Profiles"); t.setObjectName("Title")
-        head.addWidget(t)
-        head.addStretch(1)
-        head.addWidget(btn("← Back", self.toggle_profiles, kind="flat", w=76, h=28))
-        outer.addLayout(head)
 
         desc = QLabel("Each profile maintains an isolated Xbox sign-in, Wine "
                        "prefix, worlds, and settings.")
