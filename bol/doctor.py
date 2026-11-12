@@ -116,8 +116,8 @@ def doctor(acknowledge_gpu_crash=False):
         print(f"  {tool:12} : {'OK' if have else 'MISSING'}")
         if not have and not (tool == "curl" and shutil.which("wget")):
             miss.append(pkg)
-    # PySide6 is not named in `miss`: bol.deps.ensure_gui_deps() pip-installs
-    # the pinned PySide6-Essentials wheel on the first GUI launch, so a
+    # PySide6 is not named in `miss`: bol.deps.ensure_gui_deps() fetches the
+    # pinned PySide6-Essentials wheels on the first GUI launch, so a
     # portable .pyz or a bare checkout without it is ready even though the
     # import is not there yet. Reporting it as missing would also have to
     # name a package -- and there is no `python3-pyside6` to

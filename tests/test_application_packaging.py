@@ -200,10 +200,11 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
         self.assertEqual(
             deps.GUI_INSTALL_REQUIREMENTS,
             (
-                "PySide6-Essentials==6.9.3",
+                "PySide6-Essentials==" + deps.pyside6_line(),
                 "python-xlib==0.33",
             ),
         )
+        self.assertEqual(deps.pyside6_line((3, 12)), "6.9.3")
 
     def test_every_module_bol_deps_installs_is_one_bol_imports(self):
         # A missing GUI_DEPS module makes ensure_gui_deps() pip-install the
