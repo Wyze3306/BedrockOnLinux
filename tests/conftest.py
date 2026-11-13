@@ -23,6 +23,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # planted here would mask that.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# The suite must never check for updates on its own, whatever the developer
+# chose on this machine: bol.netpolicy reads this before the saved setting.
+# The tests about the choice itself clear it.
+os.environ.setdefault("BOL_NETWORK_UPDATES", "off")
+
 # bol/__init__.py turns Python 3.15's lazy imports off, but pytest has already
 # imported concurrent.futures and others by then, and their lazy names would
 # stay unresolvable once a GUI test imports PySide6 (#356). Resolve them now,
