@@ -26,6 +26,7 @@ from . import (
     discord,
     fullscreen_fix,
     gameevents,
+    instances,
     mods,
     packcache,
     presence as xbl_presence,
@@ -46,7 +47,7 @@ from .fixups import (
     hide_signin_button,
 )
 from .gameinput import builtin_gameinput_override, install_gameinput
-from .games import (edition_title, game_executable, is_bedrock,
+from .games import (build_version, edition_title, game_executable, is_bedrock,
                     selected_edition, uses_xbox_live)
 from .gamesetup import (LICENCE_REFUSED, LICENCE_SERVICE_REFUSED,
                         LICENCE_UNREACHABLE, STORE_SESSION_REFUSED, diagnose)
@@ -86,6 +87,7 @@ from .prefix import (
     set_aside_game_frame_limit,
     snapshot_game_options,
 )
+from .profiles import current_profile_info
 from .proton import custom_proton, patch_proton, proton_path
 from .swapguard import guard_game_command
 from .util import (
@@ -903,13 +905,23 @@ def _prefix_stably_idle_after_wrapper(timeout=10.0, interval=0.1,
         time.sleep(min(max(0.0, interval), remaining))
 
 
-def _prepare_launch_engine():
-    """Make the selected engine safe before any Wine process is executed."""
+def _prepare_launch_engine(engine_in_use=False):
+    """Make the selected engine safe before any Wine process is executed.
+
+    ``engine_in_use``: another profile's game is running on it right now.
+    That engine is prepared, or the game would not be up, and rewriting it
+    under a running game is the one thing that must not happen: it is used
+    as it is. The check that this profile's own prefix is idle stays.
+    """
     running = prefix_processes(active_prefix())
     if running:
         die("The BedrockOnLinux Wine prefix is already active "
             f"({len(running)} process(es)). Close Minecraft or use the "
             "explicit 'Force stop Minecraft' action before launching again.")
+    if engine_in_use:
+        info("Another profile is playing: the engine it runs on is used as "
+             "it is.")
+        return None
     managed_engine = not custom_proton()
     if managed_engine:
         ensure_winegdk()
@@ -1022,7 +1034,73 @@ def _prepare_bedrock_session(settings, frame_limit):
     return edition
 
 
-def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
+def _session_backend(env, use_gamescope):
+    """How this session's game reaches the screen (bol.instances)."""
+    if use_gamescope:
+        return instances.BACKEND_GAMESCOPE
+    if env.get("PROTON_ENABLE_WAYLAND") == "1":
+        return instances.BACKEND_WAYLAND
+    return instances.BACKEND_X11
+
+
+class _InstanceSession:
+    """This session's entry in the list of running games, while it lasts."""
+
+    def __init__(self, record=None, keeper=None):
+        self.record = record
+        self.keeper = keeper
+
+    def close(self):
+        if self.keeper is not None:
+            self.keeper.stop()
+        if self.record is not None:
+            instances.unregister(self.record.id)
+
+
+def _open_instance(proc, env, exe, game_dir, edition_entry, title, hidden,
+                   use_gamescope):
+    """Record the game that has just started, and keep it hidden if asked.
+
+    Never fails a launch: the list is for the launcher's windows and the
+    command line, and the game runs without it.
+    """
+    try:
+        profile = current_profile_info()
+        backend = _session_backend(env, use_gamescope)
+        record = instances.register(
+            profile=profile.get("name") or "Default",
+            slug=profile.get("slug") or "default",
+            home=DATA, prefix=active_prefix(), game_pid=proc.pid,
+            title=title, edition=(edition_entry or {}).get("id") or "",
+            version=build_version(game_dir) or "", game_dir=game_dir,
+            hidden=hidden, backend=backend,
+            display=env.get("DISPLAY") or "",
+            wm_class=Path(exe).name.lower())
+    except Exception as error:
+        warn("This session could not be added to the list of running "
+             "instances (%s); the game itself is not affected."
+             % type(error).__name__)
+        return _InstanceSession()
+    if hidden and not record.can_hide:
+        warn("This instance was asked to start hidden, but its window cannot "
+             "be hidden: " + (
+                 "it runs inside its own gamescope."
+                 if backend == instances.BACKEND_GAMESCOPE else
+                 "it draws through Wine's Wayland driver. Use the X11 input "
+                 "backend (the default) for hidden instances."
+                 if backend == instances.BACKEND_WAYLAND else
+                 "there is no X display."))
+    elif hidden:
+        info("This instance runs hidden: its window stays off the screen "
+             f"until it is shown from the Profiles page or with "
+             f"'instances show {record.id}'.")
+    keeper = instances.WindowKeeper(record.id)
+    keeper.start()
+    return _InstanceSession(record, keeper)
+
+
+def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
+                 hidden=False):
     s = load_settings()
     edition_entry, gd, game_exe = _selected_game(s)
     if not gd or game_exe is None:
@@ -1039,8 +1117,19 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
             f"{title}.")
     if not proton_path():
         die("GDK-Proton missing — run Install / Update.")
+    # Other profiles may be playing (bol.prefix.SessionLocks). The engine
+    # they run on, and the build's own files when one of them runs this very
+    # build, are then used as they are instead of being written to.
+    joined = not getattr(lock_fds, "sole", True)
+    build_in_use = joined and instances.game_dir_in_use(gd, exclude_home=DATA)
+    if build_in_use:
+        info("Another profile is running this build: its game files are "
+             "used as that session prepared them (mods, title screen).")
     # Engine preparation is GPU-free and may repair state from an older build.
-    _prepare_launch_engine()
+    if joined:
+        _prepare_launch_engine(engine_in_use=True)
+    else:
+        _prepare_launch_engine()
     # GPU-free advisory: an Intel dGPU on i915 cannot expose the DGC the
     # menu needs; warn before the cryptic page fault instead of after it.
     _warn_if_dgc_unavailable()
@@ -1132,10 +1221,10 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     encrypted_exe = xodus.exe_is_encrypted(Path(exe))
     # The 16 MB stack reserve (#27) is for Minecraft's own executable, which
     # Education's plaintext one is too; another title keeps its own.
-    if not encrypted_exe and (bedrock or
-                              edition_title(edition_entry) == "education"):
+    if not build_in_use and not encrypted_exe and (
+            bedrock or edition_title(edition_entry) == "education"):
         bump_stack_reserve(Path(exe))
-    if bedrock:
+    if bedrock and not build_in_use:
         # Bedrock's own title screen; Education's sign-in button is the only
         # way into that game, and its menus are not Bedrock's.
         hide_signin_button(Path(gd))
@@ -1168,7 +1257,9 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     env["WINEDLLOVERRIDES"] = ";".join(overrides)
     # LeviLamina, when this build has it and mods are on: its loader goes in
     # front of the game, or comes out when they are off (bol.mods).
-    if bedrock:
+    if bedrock and build_in_use:
+        mods.join_launch(Path(gd), env)
+    elif bedrock:
         mods.prepare_launch(Path(gd), env)
     # WindowsAppRuntime framework MSIX cannot install under Wine.
     env["MICROSOFT_WINDOWSAPPRUNTIME_BOOTSTRAP_INITIALIZE_SHOWUI"] = "0"
@@ -1299,7 +1390,12 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     slr_locales.configure(env)
     # Outermost of all, so the scope holds everything above it, gamescope
     # included; and after the custom environment, where its opt-out lives.
-    cmd = _keep_game_out_of_swap(cmd, env)
+    if joined:
+        # The guard only makes sense where the game fits in RAM beside the
+        # desktop (#314), and that was measured for one game, not several.
+        info("Another instance is running: this one is left free to swap.")
+    else:
+        cmd = _keep_game_out_of_swap(cmd, env)
     # Prevent diagnosis from attributing stale Proton logs to this launch.
     _clear_previous_proton_logs()
     # After the custom environment, so a limit with decimals set there gets
@@ -1311,6 +1407,10 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
         edition = _prepare_bedrock_session(s, frame_limit)
     else:
         info(f"Starting {title} …")
+    # Everything this session writes to the shared game and engine files is
+    # written: other profiles may start beside it from here on.
+    if hasattr(lock_fds, "share"):
+        lock_fds.share()
     glog = open(LOGS / "minecraft.log", "w")
     # Everything above that writes a settings file has written it by now, so
     # what is written after this is the game's.
@@ -1323,6 +1423,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     presence = discord.Session()
     xbl = xbl_presence.Session()
     game_events = gameevents.Forwarder()
+    instance = _InstanceSession()
     try:
         # From here until the teardown below has dealt with the marker, a
         # SIGTERM or SIGHUP waits for the game instead of killing the
@@ -1358,6 +1459,10 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
                      "GPU safety marker failed (%s)." %
                      type(marker_error).__name__)
             raise
+        # Before the hook below: a window that steps aside for the game may
+        # look the session up straight away.
+        instance = _open_instance(proc, env, exe, gd, edition_entry, title,
+                                  hidden, use_gamescope)
         if on_started is not None:
             # The caller owns a window that may have to step aside for the
             # game's own; never let that bookkeeping abort a running launch.
@@ -1456,6 +1561,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
                     ok(f"{title} is running — close the game window to come "
                        "back here.")
     finally:
+        instance.close()
         stopping = supervision.stop_requested_for() is not None
         # First: the teardown below can take a while, and nobody should be
         # left showing as in-game through it. When the launcher was asked to
@@ -1568,7 +1674,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     return rc
 
 
-def launch(on_started=None, notices=None, editor=False):
+def launch(on_started=None, notices=None, editor=False, hidden=False):
     """Run exactly one guarded launch for each user action.
 
     ``on_started`` is called once the game process exists, before the wait on
@@ -1576,12 +1682,17 @@ def launch(on_started=None, notices=None, editor=False):
     that shows one window at a time. ``notices``, when given, is a list that
     collects what the session left the player to know, for a window to show
     rather than leave in the log. ``editor`` opens Bedrock Editor instead of
-    the game.
+    the game. ``hidden`` keeps the game's window off the screen until it is
+    shown (bol.instances).
+
+    Other profiles may be playing at the same time: each has its own prefix
+    and its own lock, and the shared game files are held together.
     """
     try:
-        with launch_lock() as lock_fds:
+        with launch_lock(join=True) as lock_fds:
             return _launch_once(lock_fds, on_started=on_started,
-                                notices=notices, editor=editor)
+                                notices=notices, editor=editor,
+                                hidden=hidden)
     finally:
         # The session's teardown is over and its locks are released: a stop
         # signal it held for the game ends the process now.

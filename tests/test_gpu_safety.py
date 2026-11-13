@@ -1007,8 +1007,12 @@ class LauncherIdentityTests(unittest.TestCase):
             gpu_safety._acknowledgement_marker_scope(self.marker), "active")
 
     def test_a_marker_from_before_the_start_time_keeps_the_pid_answer(self):
+        # Another launcher that is alive is another profile playing: nothing
+        # to stop PLAY for, and still nothing an acknowledgement may clear.
         self._running_marker(launcher_pid=_live_pid(self))
-        self.assertIn("still marked active", self._problem())
+        self.assertIsNone(self._problem())
+        self.assertEqual(
+            gpu_safety._acknowledgement_marker_scope(self.marker), "active")
 
     def test_an_older_marker_naming_this_process_is_a_recycled_pid(self):
         # This launcher records its start time; a marker without one that

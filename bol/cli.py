@@ -240,6 +240,65 @@ def _report_launch_failure(message):
     desktop_notify(f"Minecraft did not start.\n{message}")
 
 
+def _list_instances():
+    """Print the games that are running, across every profile."""
+    from . import instances
+    running = instances.list_instances()
+    if not running:
+        info("No Minecraft instance is running.")
+        return
+    rows = [("ID", "PROFILE", "GAME", "WINDOW", "UP", "PID")]
+    for item in running:
+        build = " ".join(part for part in (item.title, item.version) if part)
+        rows.append((item.id, item.profile, build,
+                     "hidden" if item.hidden else "visible",
+                     instances.format_uptime(item.uptime()), str(item.pid)))
+    widths = [max(len(row[column]) for row in rows)
+              for column in range(len(rows[0]))]
+    for row in rows:
+        print("  ".join(cell.ljust(width)
+                        for cell, width in zip(row, widths)).rstrip())
+
+
+def _instance_targets(reference, everything):
+    from . import instances
+    if everything:
+        return instances.list_instances()
+    if not reference:
+        die("Name the instance (its ID or its profile, see "
+            f"'{APP} instances'), or pass --all.")
+    return [instances.find(reference)]
+
+
+def _cmd_instances(a, parser):
+    from . import instances
+    if a.instances_cmd in (None, "list"):
+        _list_instances()
+    elif a.instances_cmd in ("show", "hide"):
+        hide = a.instances_cmd == "hide"
+        targets = _instance_targets(a.instance, a.all)
+        if not targets:
+            info("No Minecraft instance is running.")
+        for item in targets:
+            changed = instances.set_hidden(item, hide)
+            ok(f"{item.id}: {'hidden' if hide else 'shown'}"
+               + ("" if changed else
+                  " (no window yet; it will follow as soon as the game "
+                  "opens one)" if hide else
+                  " (it had no hidden window)"))
+    elif a.instances_cmd == "close":
+        targets = _instance_targets(a.instance, a.all)
+        if not targets:
+            info("No Minecraft instance is running.")
+        for item in targets:
+            info(f"Closing {item.id} ({item.profile}) …")
+            result = instances.close_instance(item, force=a.force)
+            ok(f"{item.id}: closed." if result == "closed" else
+               f"{item.id}: stopped.")
+    else:
+        parser.print_help()
+
+
 def _plays_xbox_live():
     """Whether PLAY starts a game that signs in through Xbox Live."""
     from .games import uses_xbox_live
@@ -255,6 +314,10 @@ def main():
     play = sub.add_parser("play", help="launch Minecraft")
     play.add_argument("--editor", action="store_true",
                       help="open Bedrock Editor instead of the game")
+    play.add_argument("--hidden", action="store_true",
+                      help="keep the game's window off the screen until it "
+                           "is shown ('instances show'); for a game driven "
+                           "by a tool rather than played")
     play.add_argument("--update", action="store_true",
                       help="install the newest Minecraft build first (always "
                            "done when Settings ▸ General has it switched on)")
@@ -326,6 +389,29 @@ def main():
     )
     profiles_create.add_argument("name", metavar="NAME")
     profiles_sub.add_parser("list", help="list isolated profiles")
+    ins = sub.add_parser(
+        "instances",
+        help="list, hide, show or close the Minecraft instances that are "
+             "running, across every profile",
+    )
+    instances_sub = ins.add_subparsers(dest="instances_cmd")
+    instances_sub.add_parser("list", help="list running instances (default)")
+    for name, text in (
+            ("hide", "take an instance's window off the screen; the game "
+                     "keeps running"),
+            ("show", "put a hidden instance's window back on the screen"),
+            ("close", "close an instance: its window is asked to close, and "
+                      "the game is stopped if it does not")):
+        one = instances_sub.add_parser(name, help=text)
+        one.add_argument("instance", nargs="?", metavar="INSTANCE",
+                         help="an ID from 'instances', the start of one, or "
+                              "a profile name")
+        one.add_argument("--all", action="store_true",
+                         help="every running instance")
+        if name == "close":
+            one.add_argument("--force", action="store_true",
+                             help="stop the game's processes without asking "
+                                  "its window to close first")
     sc = sub.add_parser(
         "shortcut",
         help="create a desktop/Steam shortcut that launches Minecraft "
@@ -381,7 +467,9 @@ def main():
             # session finish its teardown before the launcher goes.
             supervision.install()
             update_game_before_play(always=a.update)
-            launch(editor=a.editor)
+            # Passed only when asked for: a visible launch is the call it
+            # has always been.
+            launch(editor=a.editor, **({"hidden": True} if a.hidden else {}))
         elif a.cmd == "shortcut":
             require_shortcuts_supported()
             profile = create_profile(a.profile) if a.profile else None
@@ -461,6 +549,8 @@ def main():
                     )
             else:
                 pp.print_help()
+        elif a.cmd == "instances":
+            _cmd_instances(a, ins)
         elif a.cmd == "update":
             rel = check_for_update()
             if not rel:

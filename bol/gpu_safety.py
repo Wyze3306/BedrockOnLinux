@@ -8,6 +8,7 @@ Everything here is obtained from the existing X server, sysfs, or text logs.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -21,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
 
-from .config import GAMES, WINEGDK_BUILD_REV
+from .config import DATA, GAMES, WINEGDK_BUILD_REV
 from .log import BolError, die, warn
 from .util import env_flag, launcher_command, steam_app_id
 
@@ -431,15 +432,104 @@ def _launcher_alive(state: dict) -> bool:
     return _process_start(pid) == started
 
 
+_TOKEN = re.compile(r"[0-9a-f]{32}")
+
+
+def _session_markers(marker: Path) -> list:
+    """The records of sessions that started while another one was running.
+
+    Profiles can play at the same time, each in its own launcher process, and
+    a record names one launcher. The first session keeps the marker's own
+    name, as every release has written it; each further one writes
+    ``<name>.<token>.json`` beside it.
+    """
+    stem = marker.name[:-len(".json")] if marker.name.endswith(".json") \
+        else marker.name
+    try:
+        return sorted(marker.parent.glob(f"{stem}.*.json"))
+    except OSError:
+        return []
+
+
+def _all_markers(marker: Path) -> list:
+    return [marker] + _session_markers(marker)
+
+
+def _session_marker(marker: Path, token: str) -> Path:
+    stem = marker.name[:-len(".json")] if marker.name.endswith(".json") \
+        else marker.name
+    return marker.with_name(f"{stem}.{token}.json")
+
+
+def _marker_for_token(marker: Path, token: str) -> Path:
+    """The file holding the record ``token`` owns: the marker or a sibling."""
+    state = _read_state(marker)
+    if state and secrets.compare_digest(str(state.get("token", "")), token):
+        return marker
+    if _TOKEN.fullmatch(str(token)):
+        return _session_marker(marker, token)
+    return marker
+
+
+def _concurrent_session(state: Optional[dict]) -> bool:
+    """Whether a record is another launcher's session, running right now.
+
+    That is another profile playing, not an incident: this boot, still in
+    its running phase, written by a launcher that is alive and is not this
+    process. Anything else about a record keeps meaning what it always has.
+    """
+    if not state or state.get("version") != _STATE_VERSION:
+        return False
+    if state.get("phase") != "running":
+        return False
+    boot = _boot_id()
+    if not boot or state.get("boot_id") != boot:
+        return False
+    if state.get("launcher_pid") == os.getpid():
+        return False
+    return _launcher_alive(state)
+
+
+def _home_session_over(home) -> bool:
+    """Whether the profile at ``home`` has no game session left.
+
+    A session holds its profile's launch lock from before the game starts,
+    and hands it to the game's wrapper, which keeps it for as long as it
+    runs. A lock that can be taken is a session that is over.
+    """
+    try:
+        fd = os.open(Path(home) / ".launch.lock", os.O_RDWR)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    return True
+
+
 def interrupted_launch_problem(path: Optional[Path] = None) -> Optional[str]:
     """Describe a launch which never returned to the launcher.
 
     Presence is authoritative even if the JSON was torn by a power loss.  This
     is deliberately conservative: a stale marker is removed only by the
-    explicit doctor acknowledgement after a reboot and inspection.
+    explicit doctor acknowledgement after a reboot and inspection. The record
+    of another profile's session that is running now is not a problem.
     """
 
     marker = Path(path) if path is not None else GPU_LAUNCH_MARKER
+    for candidate in _all_markers(marker):
+        problem = _marker_problem(candidate)
+        if problem:
+            return problem
+    return None
+
+
+def _marker_problem(marker: Path) -> Optional[str]:
     command = acknowledge_gpu_crash_command()
     try:
         marker.lstat()
@@ -459,6 +549,8 @@ def interrupted_launch_problem(path: Optional[Path] = None) -> Optional[str]:
             "once the graphics driver works, remove "
             f"'{marker}', or start once with BOL_ALLOW_UNSAFE_GPU=1"
         )
+    if _concurrent_session(state):
+        return None
     if state.get("version") == _LEGACY_MARKER_VERSION:
         # Schema 1 predates the durable wrapper-return phase. It cannot prove
         # whether Wine merely crashed in userspace (as in issue #31) or the GPU
@@ -552,8 +644,10 @@ def arm_gpu_launch(path: Optional[Path] = None,
                    environ: Optional[Mapping[str, str]] = None) -> str:
     """Durably mark a GPU launch immediately before spawning its process.
 
-    Without the override, an existing marker refuses the launch. With
-    BOL_ALLOW_UNSAFE_GPU=1, it is replaced by this launch's own.
+    Without the override, an existing marker refuses the launch, unless it
+    is the record of another profile's session running right now: this
+    session then records itself beside it. With BOL_ALLOW_UNSAFE_GPU=1, a
+    marker that is not such a session is replaced by this launch's own.
     """
 
     marker = Path(path) if path is not None else GPU_LAUNCH_MARKER
@@ -569,12 +663,23 @@ def arm_gpu_launch(path: Optional[Path] = None,
         "launcher_pid": os.getpid(),
         "launcher_start": _process_start(os.getpid()),
         "created": int(time.time()),
+        # Whose session this is: its launch lock says when it is over.
+        "home": str(DATA),
     }
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    target = marker
     try:
         if env_flag(env.get("BOL_ALLOW_UNSAFE_GPU")):
-            _replace_marker_under_override(marker)
-        fd = os.open(marker, flags, 0o600)
+            for stale in _all_markers(marker):
+                if not _concurrent_session(_read_state(stale)):
+                    _replace_marker_under_override(stale)
+        try:
+            fd = os.open(marker, flags, 0o600)
+        except FileExistsError:
+            if not _concurrent_session(_read_state(marker)):
+                raise
+            target = _session_marker(marker, token)
+            fd = os.open(target, flags, 0o600)
     except FileExistsError as exc:
         raise BolError(
             "A previous Minecraft GPU launch is still marked interrupted. "
@@ -582,6 +687,7 @@ def arm_gpu_launch(path: Optional[Path] = None,
             f"'{acknowledge_gpu_crash_command()}' if no current graphics "
             "fault remains."
         ) from exc
+    marker = target
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
@@ -600,6 +706,7 @@ def disarm_gpu_launch(token: str, path: Optional[Path] = None) -> bool:
     """Clear only the marker owned by a GPU process which returned normally."""
 
     marker = Path(path) if path is not None else GPU_LAUNCH_MARKER
+    marker = _marker_for_token(marker, token)
     state = _read_state(marker)
     if not state or not secrets.compare_digest(str(state.get("token", "")), token):
         return False
@@ -616,6 +723,7 @@ def mark_gpu_wrapper_returned(
     """Persist that UMU returned before checking Wine's final teardown."""
 
     marker = Path(path) if path is not None else GPU_LAUNCH_MARKER
+    marker = _marker_for_token(marker, token)
     state = _read_state(marker)
     if (not state or state.get("version") != _STATE_VERSION
             or state.get("phase") != "running"
@@ -650,9 +758,20 @@ def retire_idle_current_boot_marker(path: Optional[Path] = None) -> bool:
     a running marker whose launcher is still alive, malformed state, and
     token races remain untouched. Kernel, journal, and display-provider
     checks still run immediately after this recovery.
+
+    The caller's lock and idle prefix are its own profile's. The record of
+    another profile's session goes only once that profile's launch lock is
+    free, which its game's wrapper holds for as long as it runs.
     """
 
     marker = Path(path) if path is not None else GPU_LAUNCH_MARKER
+    retired = False
+    for candidate in _all_markers(marker):
+        retired = _retire_idle_marker(candidate) or retired
+    return retired
+
+
+def _retire_idle_marker(marker: Path) -> bool:
     state = _read_state(marker)
     if not state or state.get("version") != _STATE_VERSION:
         return False
@@ -666,8 +785,18 @@ def retire_idle_current_boot_marker(path: Optional[Path] = None) -> bool:
     elif phase != "running":
         return False
     # Markers written before the launcher's start time was recorded lack it.
-    if set(state) - {"launcher_start"} != expected_fields:
+    if set(state) - {"launcher_start", "home"} != expected_fields:
         return False
+    home = state.get("home")
+    if home is not None:
+        if not isinstance(home, str) or not home:
+            return False
+        try:
+            foreign = Path(home).resolve() != Path(DATA).resolve()
+        except (OSError, RuntimeError):
+            return False
+        if foreign and not _home_session_over(home):
+            return False
     launcher_start = state.get("launcher_start")
     if launcher_start is not None and (
             isinstance(launcher_start, bool)
@@ -713,8 +842,22 @@ def retire_idle_current_boot_marker(path: Optional[Path] = None) -> bool:
 
 
 def _acknowledgement_marker_scope(marker: Path) -> str:
-    """Classify a marker as none/previous/current/active/unknown."""
+    """Classify the markers as none/previous/current/active/unknown.
 
+    With several records, the answer is the one that asks for the most care:
+    a session still running, then a record that cannot be read, then one of
+    this boot. "previous" means every record there is dates from before it.
+    """
+
+    scopes = {_one_marker_scope(candidate)
+              for candidate in _all_markers(marker)}
+    for scope in ("active", "unknown", "current", "previous"):
+        if scope in scopes:
+            return scope
+    return "none"
+
+
+def _one_marker_scope(marker: Path) -> str:
     try:
         marker.lstat()
     except FileNotFoundError:
@@ -758,7 +901,8 @@ def acknowledge_gpu_safety_incident(
     })
     if status.marker_present:
         try:
-            marker.unlink()
+            for candidate in _all_markers(marker):
+                candidate.unlink(missing_ok=True)
         except OSError:
             # Leaving the marker in place remains fail-closed. The caller can
             # report the filesystem error instead of pretending it was clear.

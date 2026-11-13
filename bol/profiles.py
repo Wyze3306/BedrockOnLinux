@@ -399,14 +399,19 @@ def launcher_executable(explicit=None):
     return str(Path(sys.argv[0]).expanduser().resolve())
 
 
-def _gui_command(exe):
-    """Run the launcher at `exe` in GUI mode, under this interpreter if it is
-    a Python script. The Nix flake's makeWrapper and Guix's wrap-program put
-    a shell script by that name on PATH, and Python cannot read one."""
+def _launcher_argv(exe, *arguments):
+    """Run the launcher at `exe` with `arguments`, under this interpreter if
+    it is a Python script. The Nix flake's makeWrapper and Guix's
+    wrap-program put a shell script by that name on PATH, and Python cannot
+    read one."""
     if exe.endswith(".py") or (Path(exe).name == APP
                                and _is_python_script(exe)):
-        return [sys.executable, exe, "gui"]
-    return [exe, "gui"]
+        return [sys.executable, exe, *arguments]
+    return [exe, *arguments]
+
+
+def _gui_command(exe):
+    return _launcher_argv(exe, "gui")
 
 
 def _is_python_script(path):
@@ -595,3 +600,90 @@ def open_profile_window(profile_path=None, base_data=None, executable=None):
     )
 
 
+def _profile_environment(profile_path=None, base_data=None):
+    """This process's environment, pointed at a profile (None: Default)."""
+    from .config import DEFAULT_DATA
+    base_root = _profile_base(base_data)
+    env = dict(os.environ)
+    if profile_path:
+        env["BOL_HOME"] = str(Path(profile_path).expanduser().resolve())
+    elif base_root.resolve() != DEFAULT_DATA.resolve():
+        env["BOL_HOME"] = str(base_root.resolve())
+    else:
+        env.pop("BOL_HOME", None)
+    return env
+
+
+def profile_home(profile_path=None, base_data=None):
+    """Where a profile keeps its data: its folder, or the main root."""
+    if profile_path:
+        return Path(profile_path).expanduser().resolve()
+    return _profile_base(base_data)
+
+
+def start_profile_game(profile_path=None, hidden=False, base_data=None,
+                       executable=None):
+    """Start Minecraft for a profile in a launcher process of its own.
+
+    Every profile plays in its own process: its prefix, its account and its
+    locks are that process's ``BOL_HOME``. The game it starts shows up in
+    the list of running instances (bol.instances), from where it can be
+    hidden, shown and closed. A launch that fails says so in a desktop
+    notification, like a launcher-free shortcut.
+    """
+    import subprocess
+    arguments = ["play"] + (["--hidden"] if hidden else [])
+    return subprocess.Popen(
+        _launcher_argv(launcher_executable(explicit=executable), *arguments),
+        env=_profile_environment(profile_path, base_data),
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def profile_account(profile_path=None, base_data=None):
+    """The Xbox account a profile is signed in with, read from its files.
+
+    ``{"signed_in": bool, "gamertag": str or None}``. The gamertag is only
+    known once a launch has signed that account in to Xbox Live.
+    """
+    home = profile_home(profile_path, base_data)
+    signed_in = False
+    try:
+        token = json.loads(
+            (home / "msa" / "token.json").read_text(encoding="utf-8"))
+        signed_in = bool(isinstance(token, dict)
+                         and token.get("refresh_token"))
+    except (OSError, ValueError):
+        pass
+    gamertag = None
+    if signed_in:
+        try:
+            device = json.loads((home / "winegdk-preauth" / "device.json")
+                                .read_text(encoding="utf-8"))
+            value = device.get("xbl_gamertag") \
+                if isinstance(device, dict) else None
+            gamertag = str(value) if value else None
+        except (OSError, ValueError):
+            pass
+    return {"signed_in": signed_in, "gamertag": gamertag}
+
+
+def profile_build(profile_path=None, base_data=None):
+    """The build a profile would start next, as "<edition> <version>"; or
+    None when it has none selected."""
+    home = profile_home(profile_path, base_data)
+    try:
+        settings = json.loads(
+            (home / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    game_dir = settings.get("game_dir") if isinstance(settings, dict) else None
+    if not game_dir:
+        return None
+    folder = Path(str(game_dir))
+    if not folder.is_dir():
+        return None
+    return f"{folder.parent.name.capitalize()} {folder.name}"

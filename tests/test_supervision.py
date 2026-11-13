@@ -175,7 +175,7 @@ class LaunchEndsTheSessionTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     @contextmanager
-    def _no_lock(self):
+    def _no_lock(self, join=False):
         yield ()
 
     def _launch(self, body):
