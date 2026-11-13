@@ -47,6 +47,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from . import ed25519
 from .config import APP, DATA, VERSION, WINEGDK_PREBUILT_REPO
@@ -60,9 +61,9 @@ URLS = (
 )
 # key id -> base64 of the 32-byte Ed25519 public key. More than one entry is
 # how a key is rotated: ship the new key beside the old one, sign with both
-# for a release cycle, then drop the old one. Empty means the feed is not in
-# service: nothing is fetched and nothing cached is applied. The private half
-# never enters this repository -- docs/updates.md says where it lives.
+# for a release cycle, then drop the old one. Empty would mean the feed is not
+# in service: nothing fetched, nothing cached applied. The private half never
+# enters this repository -- docs/updates.md says where it lives.
 PUBLIC_KEYS = {}
 
 COMPONENTS = ("xodus", "openssl_xcurl", "webview")
@@ -77,7 +78,15 @@ _REV = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _ASSET = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\Z")
 _VERSION = re.compile(r"\d+(\.\d+){1,3}\Z")
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
-_ASSET_URL_PREFIX = f"https://github.com/{WINEGDK_PREBUILT_REPO}/releases/"
+# A pin's download: one asset of one release of this repository, spelled
+# with nothing a server could read as another path ("..", "%2e", a query).
+# The SHA-256 is what makes the bytes right; this is what keeps a stolen
+# signing key from pointing installs at a repository of its holder's.
+_ASSET_URL = re.compile(
+    "https://github\\.com/" + re.escape(WINEGDK_PREBUILT_REPO)
+    + r"/releases/download/"
+    r"[A-Za-z0-9](?:[A-Za-z0-9_+-]|\.(?!\.)){0,63}/"
+    r"[A-Za-z0-9](?:[A-Za-z0-9_+-]|\.(?!\.)){0,127}\Z")
 LEVELS = ("info", "warning", "critical")
 
 _lock = threading.Lock()
@@ -99,16 +108,25 @@ def _b64(text, what):
         raise FeedError(f"{what} is not base64") from exc
 
 
+def _checkout():
+    """Whether this is the launcher run from its git checkout."""
+    try:
+        return (Path(__file__).resolve().parent.parent / ".git").exists()
+    except OSError:
+        return False
+
+
 def public_keys():
     """{key id: 32 raw bytes} this launcher trusts.
 
-    BOL_FEED_PUBKEY (``id:base64``) replaces the compiled-in set for one run,
-    for a maintainer trying a staging feed. It is the local user's own
-    environment: whoever can set it can already run anything as them.
+    In a git checkout, BOL_FEED_PUBKEY (``id:base64``) replaces the
+    compiled-in set for one run, so a maintainer can try a staging feed. An
+    installed launcher ignores it: its trust root is not something an
+    environment variable, a wrapper script or a desktop entry may change.
     """
     override = os.environ.get("BOL_FEED_PUBKEY", "").strip()
     source = PUBLIC_KEYS
-    if override and ":" in override:
+    if override and ":" in override and _checkout():
         key_id, _, encoded = override.partition(":")
         source = {key_id: encoded}
     keys = {}
@@ -212,8 +230,7 @@ def _validate_pin(component, pin):
     _need(pin["rev"] not in replaces, f"{what} replaces itself")
     url = pin.get("url")
     if url is not None:
-        _need(isinstance(url, str) and url.startswith(_ASSET_URL_PREFIX)
-              and len(url) < 400 and "\n" not in url,
+        _need(isinstance(url, str) and _ASSET_URL.match(url),
               f"{what}.url is not one of the project's release assets")
     _opt_version(pin, "min_launcher", what)
     _opt_version(pin, "max_launcher", what)

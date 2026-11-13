@@ -85,7 +85,6 @@ def arm(target, old_version, new_version):
     _remove(note_path())
     _write(marker_path(), {
         "target": os.path.realpath(str(target)),
-        "backup": str(backup_path(os.path.realpath(str(target)))),
         "from": old_version, "to": new_version, "starts": 0,
         "time": int(time.time())})
 
@@ -113,8 +112,11 @@ def last_rollback():
 
 
 def _restore(marker):
-    target, backup = marker["target"], marker.get("backup") or ""
-    if not os.path.isfile(backup):
+    # The backup's place is derived, never read from the marker: a file in
+    # the data directory must not get to name what replaces the launcher.
+    target = marker["target"]
+    backup = str(backup_path(target))
+    if not os.path.isfile(backup) or os.path.islink(backup):
         return False
     os.replace(backup, target)
     return True

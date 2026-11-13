@@ -104,6 +104,18 @@ class RollbackTests(unittest.TestCase):
         self.execv.assert_not_called()
         self.assertEqual(self.app.read_bytes(), b"new launcher")
 
+    def test_the_marker_cannot_name_the_file_that_is_put_back(self):
+        planted = self.dir / "planted"
+        planted.write_bytes(b"someone else's launcher")
+        rollback.arm(self.app, "3.0.0", "3.0.1")
+        marker = rollback._read(rollback.marker_path())
+        marker["backup"] = str(planted)
+        rollback._write(rollback.marker_path(), marker)
+        for _ in range(rollback.MAX_UNCONFIRMED + 1):
+            self._start()
+        self.assertEqual(self.app.read_bytes(), b"old launcher")
+        self.assertTrue(planted.exists())
+
     def test_a_corrupt_marker_never_stops_a_start(self):
         rollback.marker_path().parent.mkdir(parents=True)
         rollback.marker_path().write_text("{ not json")

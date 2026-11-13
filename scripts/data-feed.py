@@ -2,6 +2,7 @@
 """Sign and publish the launcher's data feed (see docs/updates.md).
 
     scripts/data-feed.py keygen              create the signing key, once
+    scripts/data-feed.py passwd              put a passphrase on the key
     scripts/data-feed.py sign                feed/manifest.json -> signed file
     scripts/data-feed.py verify FILE         check a signed file as a launcher would
     scripts/data-feed.py release v3.0.1      record a launcher release's digests
@@ -14,6 +15,7 @@ writes it refuses a path inside a git work tree.
 
 import argparse
 import base64
+import getpass
 import json
 import os
 import re
@@ -82,15 +84,75 @@ def generate_key(key_id):
     return {"keyid": key_id, "private": _b64(seed), "public": _b64(public)}
 
 
-def load_key(path):
+def _exposed(path):
+    """Why the key file is readable by more than its owner, or None."""
+    try:
+        status = Path(path).stat()
+    except OSError:
+        return None
+    if status.st_uid != os.getuid():
+        return "is not owned by you"
+    if status.st_mode & 0o077:
+        return f"has mode {status.st_mode & 0o777:o}; it must be 600"
+    return None
+
+
+def load_key(path, ask=getpass.getpass):
+    """The key in `path`, its seed decrypted in memory only.
+
+    A key with a passphrase is stored as an encrypted PKCS#8 PEM; the
+    passphrase is asked on the terminal and is never read from the
+    environment or the command line, where other processes could see it.
+    """
+    exposed = _exposed(path)
+    if exposed:
+        die(f"the signing key {path} {exposed}. If anyone else could have "
+            "read it, rotate it (docs/updates.md).")
     try:
         key = json.loads(Path(path).read_text(encoding="utf-8"))
-        seed = base64.b64decode(key["private"], validate=True)
-        if len(seed) != 32 or not isinstance(key["keyid"], str):
+        if not isinstance(key["keyid"], str):
             raise ValueError("not a feed signing key")
-    except (OSError, ValueError, KeyError) as exc:
+        if "encrypted" in key:
+            _private_key, serialization = _ed25519()
+            loaded = serialization.load_pem_private_key(
+                key["encrypted"].encode("ascii"),
+                ask(f"Passphrase for {path}: ").encode("utf-8"))
+            seed = loaded.private_bytes(serialization.Encoding.Raw,
+                                        serialization.PrivateFormat.Raw,
+                                        serialization.NoEncryption())
+            key = dict(key, private=_b64(seed))
+        seed = base64.b64decode(key["private"], validate=True)
+        if len(seed) != 32:
+            raise ValueError("not a feed signing key")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         die(f"cannot read the signing key {path}: {exc}")
     return key
+
+
+def write_key(path, key):
+    """Write `key` so that it never exists with wider permissions."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    staged = path.with_name(path.name + ".tmp")
+    staged.unlink(missing_ok=True)
+    descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(key, stream, indent=1)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(staged, path)
+
+
+def encrypt_key(key, passphrase):
+    """`key` with its seed replaced by a passphrase-encrypted PEM."""
+    private_key, serialization = _ed25519()
+    pem = private_key.from_private_bytes(
+        base64.b64decode(key["private"])).private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.BestAvailableEncryption(passphrase.encode("utf-8")))
+    return {"keyid": key["keyid"], "public": key["public"],
+            "encrypted": pem.decode("ascii")}
 
 
 def sign_payload(manifest, keys):
@@ -191,14 +253,24 @@ def cmd_keygen(args):
         die(f"{path} already exists; a new key is a rotation, see "
             "docs/updates.md")
     key = generate_key(args.id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(key, stream, indent=1)
-        stream.write("\n")
+    write_key(path, key)
     print(f"Private key written to {path} (mode 600). Back it up offline.")
+    print("It has no passphrase yet: run  scripts/data-feed.py passwd")
     print("Add this line to PUBLIC_KEYS in bol/feed.py:")
     print(f'    "{key["keyid"]}": "{key["public"]}",')
+
+
+def cmd_passwd(args):
+    path = key_path(args.key)
+    key = load_key(path)
+    first = getpass.getpass("New passphrase: ")
+    if len(first) < 12:
+        die("use at least 12 characters")
+    if first != getpass.getpass("Again: "):
+        die("the two passphrases differ; the key is unchanged")
+    write_key(path, encrypt_key(key, first))
+    print(f"{path} is now encrypted. Without the passphrase it cannot "
+          "sign: there is no recovery, only a rotation.")
 
 
 def cmd_sign(args):
@@ -298,6 +370,11 @@ def main(argv=None):
     keygen.add_argument("--id", default=time.strftime("bol-%Y"),
                         help="key id launchers know it by")
     keygen.set_defaults(run=cmd_keygen)
+
+    passwd = commands.add_parser(
+        "passwd", help="encrypt the signing key with a passphrase")
+    passwd.add_argument("--key", help=f"key file (default {DEFAULT_KEY})")
+    passwd.set_defaults(run=cmd_passwd)
 
     def signing(command):
         command.add_argument("--source", default=str(SOURCE))
