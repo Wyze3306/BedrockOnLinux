@@ -11,6 +11,10 @@ import sys
 
 
 def main():
+    # First of all: an update that left a launcher unable to start is undone
+    # here, before anything of the new version has had a chance to fail.
+    from .rollback import guard
+    guard()
     # Apple silicon under Asahi: Wine and FEX-Emu need the 4 KiB pages of a
     # muvm microVM, so the whole launcher moves there before it starts
     # anything x86-64 (#250).
