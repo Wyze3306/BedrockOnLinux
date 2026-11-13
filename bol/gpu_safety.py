@@ -912,6 +912,49 @@ def _kernel_journal_text(binary: str, runner, boot: int) -> Optional[str]:
             + getattr(result, "stderr", ""))[-2_000_000:]
 
 
+def _previous_boot_clean_stamp() -> Optional[Path]:
+    """Where "the previous boot's journal holds no GPU fault" is kept.
+
+    Under ``$XDG_RUNTIME_DIR``: memory that the system empties at every
+    boot, and that only this user can write.
+    """
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if not runtime or not os.path.isabs(runtime):
+        return None
+    return Path(runtime) / "bedrock-on-linux" / "previous-boot-clean"
+
+
+def _previous_boot_known_clean() -> bool:
+    """Whether this boot already read the previous boot's journal as clean.
+
+    That journal is finished: nothing is added to it once the machine has
+    restarted, so reading it again at every PLAY answers the same question
+    with the same text, and a persistent journal can take a second to open.
+    Only a clean reading is remembered, under this boot's own identifier; a
+    fault, an unreadable journal and the current boot are read every time.
+    """
+    stamp = _previous_boot_clean_stamp()
+    boot = _boot_id()
+    if stamp is None or not boot:
+        return False
+    try:
+        return stamp.read_text().strip() == boot
+    except OSError:
+        return False
+
+
+def _remember_previous_boot_clean() -> None:
+    stamp = _previous_boot_clean_stamp()
+    boot = _boot_id()
+    if stamp is None or not boot:
+        return
+    try:
+        stamp.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        stamp.write_text(boot + "\n")
+    except OSError:
+        pass
+
+
 def _kernel_driver_fault_scope(runner=None, notes=None) -> Optional[str]:
     """Return ``current``/``previous`` for an unacknowledged kernel fault.
 
@@ -924,6 +967,7 @@ def _kernel_driver_fault_scope(runner=None, notes=None) -> Optional[str]:
         binary = "journalctl"
     if not binary:
         return None
+    real_journal = runner is None
     runner = runner or subprocess.run
     current = _kernel_journal_text(binary, runner, 0)
     if current is not None and _gpu_fault_in_text(current):
@@ -933,9 +977,13 @@ def _kernel_driver_fault_scope(runner=None, notes=None) -> Optional[str]:
         notes.append(RECOVERED_HANG_NOTE)
     if _previous_boot_fault_acknowledged():
         return None
+    if real_journal and _previous_boot_known_clean():
+        return None
     previous = _kernel_journal_text(binary, runner, -1)
     if previous is not None and _gpu_fault_in_text(previous):
         return "previous"
+    if real_journal and previous is not None:
+        _remember_previous_boot_clean()
     return None
 
 

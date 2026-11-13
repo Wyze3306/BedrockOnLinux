@@ -648,6 +648,7 @@ class OnlinePreauthPayloadTests(unittest.TestCase):
 
             urlopen.assert_called()
 
+    @mock.patch.dict("os.environ", {"BOL_PREAUTH_SERIAL": "1"})
     def test_achievements_use_user_only_xsts_and_services_keep_sisu(self):
         expiry = "2999-01-01T00:00:00.1234567Z"
         epoch = "e" * 32
@@ -757,6 +758,7 @@ class OnlinePreauthPayloadTests(unittest.TestCase):
             self.assertEqual(stored["realms_token"], "realms")
             self.assertRegex(stored["realms_expiry_epoch"], r"^[0-9]+$")
 
+    @mock.patch.dict("os.environ", {"BOL_PREAUTH_SERIAL": "1"})
     def test_achievements_xsts_failure_does_not_block_core_preauth(self):
         expiry = "2999-01-01T00:00:00Z"
         epoch = "f" * 32
@@ -858,6 +860,51 @@ class SisuRefusalFallbackTests(unittest.TestCase):
         return {"Token": "xsts-" + relying_party, "NotAfter": self.expiry,
                 "DisplayClaims": {"xui": [xui]}}
 
+    def test_the_six_tokens_are_asked_for_together(self):
+        import threading
+
+        gate = threading.Barrier(6, timeout=10)
+        together = []
+
+        def urlopen(request, timeout=None):
+            body = json.loads(request.data)
+            if request.full_url.startswith("https://device.auth"):
+                return self._Response(
+                    200, {"Token": "device", "NotAfter": self.expiry})
+            if request.full_url.startswith("https://user.auth"):
+                return self._Response(
+                    200, {"Token": "user", "NotAfter": self.expiry})
+            # Answered only once all six are waiting on Xbox Live at once.
+            together.append(gate.wait())
+            if request.full_url.startswith("https://sisu"):
+                return self._Response(200, {
+                    "AuthorizationToken":
+                        self._xsts_token(body["RelyingParty"])})
+            return self._Response(
+                200, self._xsts_token(body["RelyingParty"]))
+
+        epoch = "b" * 32
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cache = root / "winegdk-preauth"
+            cache.mkdir()
+            (cache / ".account-epoch").write_text(epoch + "\n")
+            with mock.patch.object(auth, "DATA", root), \
+                    mock.patch.dict("os.environ"), \
+                    mock.patch("urllib.request.urlopen",
+                               side_effect=urlopen), \
+                    mock.patch.object(auth, "warn"), \
+                    mock.patch.object(auth, "info"), \
+                    mock.patch.object(auth, "ok"):
+                import os
+                os.environ.pop("BOL_PREAUTH_SERIAL", None)
+                self.assertTrue(auth.xbl_preauth("fresh-access-token", epoch))
+            stored = json.loads((cache / "device.json").read_text())
+        self.assertEqual(len(together), 6)
+        self.assertEqual(stored["realms_token"],
+                         "xsts-https://pocket.realms.minecraft.net/")
+        self.assertEqual(stored["xbl_xuid"], "1234")
+
     def _run(self, xsts_status):
         """Drive a full pre-auth where every SISU call is refused.
 
@@ -892,6 +939,8 @@ class SisuRefusalFallbackTests(unittest.TestCase):
             cache.mkdir()
             (cache / ".account-epoch").write_text(epoch + "\n")
             with mock.patch.object(auth, "DATA", root), \
+                    mock.patch.dict("os.environ",
+                                    {"BOL_PREAUTH_SERIAL": "1"}), \
                     mock.patch("urllib.request.urlopen",
                                side_effect=urlopen), \
                     mock.patch.object(auth, "warn"), \

@@ -46,8 +46,6 @@ from .gamesetup import do_setup
 from . import betterrtx, gpus
 from .inject import run_injector
 from . import icons
-from .gui_content import ContentPage
-from .gui_mods import ModsPage
 from .launch import direct_launch_readiness, launch, single_window_session
 from . import saves
 from .navigation import ControllerNav
@@ -1803,6 +1801,8 @@ class MainWindow(QMainWindow):
         """Show the Add-ons & Maps page, optionally on a kind, a search or
         one project's page."""
         if self.content_page is None:
+            # Imported with the page: most sessions never open it.
+            from .gui_content import ContentPage
             self.content_page = ContentPage(self)
             self.stack.addWidget(self.content_page)
         if self.stack.currentWidget() is not self.content_page:
@@ -4514,6 +4514,7 @@ class MainWindow(QMainWindow):
             self._nav_follow_page()
         else:
             if self.mods_page is None:
+                from .gui_mods import ModsPage
                 self.mods_page = ModsPage(self)
                 self.stack.addWidget(self.mods_page)
             self.stack.setCurrentWidget(self.mods_page)

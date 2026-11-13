@@ -1688,6 +1688,7 @@ GAME_ARGS = json.loads({game_args!r})
 LAUNCHER_PATH = {launcher_path!r}
 EXE_NAME = {exe_name!r}
 STAGE_DIR = {stage_dir!r}
+PYCACHE_PREFIX = {pycache_prefix!r}
 # What the game's environment looked like before it was adjusted for
 # `xodus-cli run`: the bundled WebKitGTK runtime, where the host has none, and
 # the Xodus home the licence is read from. Neither belongs to the game. Wine
@@ -1742,12 +1743,27 @@ except OSError as exc:
             pass
     sys.exit("could not stage the decrypted game in %s: %s" % (STAGE_DIR, exc))
 
+# Every image now has its staged copy, and that copy is what Wine maps. The
+# descriptors came without FD_CLOEXEC, so the exec below would hand them to
+# umu-run, which lives as long as the game does: the decrypted executable,
+# 300 to 400 MB of it, held in memory a second time for the whole session,
+# and unswappable where the game's scope forbids swap (bol.swapguard).
+for fd_number, _mapped in ENTRIES:
+    try:
+        os.close(fd_number)
+    except OSError:
+        pass
+
 # Raise the PE stack reserve exactly as the plaintext path does (issue #27).
 # The loader reads the field when it maps the image, so it has to happen
 # before the exec below. Never fatal: a game that starts with a 1 MB stack
 # still beats one that does not start at all.
 try:
     sys.path.insert(0, LAUNCHER_PATH)
+    # Where the launcher keeps its bytecode when it is installed read-only
+    # (see the bedrock-on-linux script), so this import is not a compilation.
+    if PYCACHE_PREFIX:
+        sys.pycache_prefix = PYCACHE_PREFIX
     from bol.fixups import _raise_stack_reserve
 
     if nt_name in staged:
@@ -1863,6 +1879,7 @@ def wrap_encrypted_launch(argv, game_dir: Path, work_dir: Path,
                         launcher_path=launcher_path,
                         exe_name=Path(argv[-1]).name,
                         stage_dir=str(stage_dir),
+                        pycache_prefix=sys.pycache_prefix,
                         webview_env=json.dumps(restore or {})),
         encoding="utf-8")
     wrapper.chmod(0o755)

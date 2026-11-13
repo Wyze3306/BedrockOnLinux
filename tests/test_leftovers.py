@@ -78,6 +78,25 @@ class Reaper(unittest.TestCase):
             self.at(t)
         self.assertEqual(self.kills, [])
 
+    def test_a_running_game_is_watched_without_scanning_the_machine(self):
+        scans = []
+        procs = {10: "minecraft.windows.exe", 11: "microsoftedgeupdate.exe"}
+        reaper = leftovers.LeftoverReaper(
+            "/pfx", scan=lambda _p: scans.append(1) or list(procs),
+            image=lambda pid: procs.get(pid, ""),
+            kill=lambda pid, sig: self.kills.append((pid, sig)),
+            clock=self.clock)
+        for t in range(0, 60, 2):
+            self.clock.now = t
+            reaper.tick()
+        self.assertEqual(len(scans), 1)
+        del procs[10]
+        for t in range(60, 80, 2):
+            self.clock.now = t
+            reaper.tick()
+        self.assertGreater(len(scans), 1)
+        self.assertEqual(self.kills[0], (11, signal.SIGTERM))
+
     def test_scans_are_spaced_out(self):
         calls = []
         reaper = leftovers.LeftoverReaper(

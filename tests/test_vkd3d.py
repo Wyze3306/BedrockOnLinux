@@ -281,6 +281,39 @@ class ManifestValidationTests(EngineFixture, unittest.TestCase):
         with self.assertRaisesRegex(BolError, "missing or escapes the engine"):
             vkd3d.validate_engine_manifest(root, self.BUILD_REV)
 
+    def test_unchanged_files_are_hashed_once_per_process(self):
+        root = self.make_engine()
+        with mock.patch.object(vkd3d, "sha256_file",
+                               wraps=vkd3d.sha256_file) as hashed:
+            first = vkd3d.validate_engine_manifest(root, self.BUILD_REV)
+            hashes = hashed.call_count
+            self.assertGreater(hashes, 0)
+            again = vkd3d.validate_engine_manifest(root, self.BUILD_REV)
+            self.assertIs(again, first)
+            self.assertEqual(hashed.call_count, hashes)
+
+    def test_a_file_changed_since_is_validated_again(self):
+        root = self.make_engine()
+        vkd3d.validate_engine_manifest(root, self.BUILD_REV)
+        wine = root / "files/bin/wine"
+        data = bytearray(wine.read_bytes())
+        data[0] ^= 0xFF
+        wine.write_bytes(bytes(data))
+        with self.assertRaisesRegex(
+                BolError, "SHA-256 mismatch for critical file files/bin/wine"):
+            vkd3d.validate_engine_manifest(root, self.BUILD_REV)
+        # A refusal is never remembered.
+        with self.assertRaisesRegex(BolError, "SHA-256 mismatch"):
+            vkd3d.validate_engine_manifest(root, self.BUILD_REV)
+
+    def test_a_mode_lost_since_is_validated_again(self):
+        root = self.make_engine()
+        vkd3d.validate_engine_manifest(root, self.BUILD_REV)
+        wine = root / "files/bin/wine"
+        wine.chmod(wine.stat().st_mode & ~0o111)
+        with self.assertRaisesRegex(BolError, "not executable"):
+            vkd3d.validate_engine_manifest(root, self.BUILD_REV)
+
     def test_critical_file_hash_mismatch_is_rejected(self):
         root = self.make_engine()
         manifest = self.read_manifest()

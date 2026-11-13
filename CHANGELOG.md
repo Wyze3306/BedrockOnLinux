@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Changed
+
+- **Minecraft gets back the memory of a second copy of itself.** A Store
+  build is decrypted into memory at every start and handed to Wine as a
+  staged copy; the first copy stayed open in the launch wrapper for the whole
+  session: 324 MB with 1.26.60, 423 MB with Preview 1.26.70, which could not
+  even be swapped out where the game is kept out of swap. It is closed once
+  the staged copy exists.
+- **The launcher no longer reads every process on the machine every two
+  seconds while the game runs.** It did so to find what the game's WebView2
+  leaves behind once Minecraft closes, and that reading includes the game's
+  own process. While the game is up, only the game is looked at.
+- **PLAY checks the game engine once instead of three times.** Setup, the
+  launch after it and the graphics payload each hashed the Wine runtime and
+  the vkd3d DLLs again; a check already made in the same run stands for as
+  long as none of those files has changed on disk.
+- **The six Xbox Live tokens of a sign-in are requested together.** On a
+  start with no session left from earlier, they were asked for one after the
+  other. `BOL_PREAUTH_SERIAL=1` goes back to one request at a time.
+- **A .deb, .rpm or Flatpak install keeps its compiled Python.** Those
+  installs are read-only and ship no bytecode, so each start compiled the
+  whole launcher again; it is now kept in the user's cache directory
+  (0.32 s down to 0.16 s to load the window's code on the development
+  machine).
+- **The previous boot's kernel log is read once per boot** by the graphics
+  safety check, not at every PLAY, once it has been found clean. The current
+  boot's is still read every time.
+- The offline registry updates of a launch only look for running Wine
+  processes when they have something to write.
+
 ## 3.0.0 — 2026-11-12 (pre-release)
 
 A pre-release of the next major version. Add-ons, maps and texture packs

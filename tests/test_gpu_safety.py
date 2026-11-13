@@ -551,6 +551,52 @@ class GraphicsSafetyTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][calls[0].index("-b") + 1], "0")
 
+    def _real_journal(self, texts):
+        """Patches for a launch that runs the real journalctl, faked."""
+        calls = []
+
+        def run(args, **_kwargs):
+            boot = args[args.index("-b") + 1]
+            calls.append(boot)
+            return result(stdout=texts.get(boot, ""))
+
+        stamp = Path(self.tempdir.name) / "run" / "previous-boot-clean"
+        return calls, (
+            mock.patch.object(gpu_safety.shutil, "which",
+                              return_value="/usr/bin/journalctl"),
+            mock.patch.object(gpu_safety.subprocess, "run", run),
+            mock.patch.object(gpu_safety, "_previous_boot_clean_stamp",
+                              return_value=stamp))
+
+    def test_a_clean_previous_boot_is_read_once_per_boot(self):
+        calls, patches = self._real_journal({})
+        with patches[0], patches[1], patches[2]:
+            for _launch in range(3):
+                self.assertIsNone(gpu_safety._kernel_driver_fault_scope())
+        self.assertEqual(calls, ["0", "-1", "0", "0"])
+
+    def test_a_previous_boot_fault_is_read_at_every_launch(self):
+        calls, patches = self._real_journal(
+            {"-1": "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the "
+                   "bus."})
+        with patches[0], patches[1], patches[2]:
+            first = gpu_safety._kernel_driver_fault_scope()
+            second = gpu_safety._kernel_driver_fault_scope()
+        if first == "previous":
+            self.assertEqual(second, "previous")
+            self.assertEqual(calls, ["0", "-1", "0", "-1"])
+        else:
+            self.fail("the sample line is not one the fault filter knows")
+
+    def test_a_clean_reading_does_not_outlive_its_boot(self):
+        calls, patches = self._real_journal({})
+        with patches[0], patches[1], patches[2]:
+            gpu_safety._kernel_driver_fault_scope()
+            with mock.patch.object(gpu_safety, "_boot_id",
+                                   return_value="boot-next"):
+                gpu_safety._kernel_driver_fault_scope()
+        self.assertEqual(calls, ["0", "-1", "0", "-1"])
+
     def test_marker_only_ack_does_not_hide_previous_boot_driver_fault(self):
         self.ack.write_text(json.dumps({
             "version": gpu_safety._STATE_VERSION,

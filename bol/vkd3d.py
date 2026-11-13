@@ -257,7 +257,68 @@ def _validated_distribution_files(
     return validated
 
 
+# What one process has already validated: the arguments of the call, to the
+# result and to what every file it vouched for looked like on disk.
+_VALIDATED: Dict[tuple, Tuple[ValidatedEngineManifest, tuple]] = {}
+
+
+def _manifest_signature(root: Path, manifest: ValidatedEngineManifest):
+    """What the files a validation read look like on disk, without reading.
+
+    Size, modification time, inode and mode of the manifest, of every file
+    it lists and of the runtime links: a file replaced, edited in place,
+    retargeted or made non-executable changes at least one of them.
+    """
+    relatives = set(manifest.critical_files)
+    for files in manifest.variants.values():
+        relatives.update(files)
+    relatives.update(REQUIRED_EXECUTABLE_FILE_PATHS)
+    relatives.update(REQUIRED_RUNTIME_LINK_TARGETS)
+    signature = []
+    for path in [manifest.path] + [
+            root.joinpath(*PurePosixPath(relative).parts)
+            for relative in sorted(relatives)]:
+        for status in (os.lstat, os.stat):
+            found = status(path)
+            signature.append((str(path), found.st_size, found.st_mtime_ns,
+                              found.st_ino, found.st_mode))
+    return tuple(signature)
+
+
 def validate_engine_manifest(
+        engine_root: Path, build_rev: str,
+        required_variant: Optional[str] = None,
+        enforce_pins: bool = False) -> ValidatedEngineManifest:
+    """Validate the engine manifest, once per process for unchanged files.
+
+    One PLAY asks three times: setup, the launch that follows it, and the
+    activation of the vkd3d payload. Each used to hash the Wine runtime and
+    all eight vkd3d DLLs again. An answer already given stands for as long
+    as every file it covered still has the size, time, inode and mode it had
+    then; anything else, a failure included, is validated in full.
+    """
+    root = Path(engine_root)
+    key = (str(root), build_rev,
+           None if required_variant is None
+           else _normalise_variant(required_variant), bool(enforce_pins))
+    known = _VALIDATED.get(key)
+    if known is not None:
+        try:
+            if _manifest_signature(root, known[0]) == known[1]:
+                return known[0]
+        except OSError:
+            pass
+        del _VALIDATED[key]
+    manifest = _validate_engine_manifest(
+        root, build_rev, required_variant, enforce_pins)
+    try:
+        _VALIDATED[key] = (manifest, _manifest_signature(root, manifest))
+    except OSError:
+        pass
+    return manifest
+
+
+def _validate_engine_manifest(
         engine_root: Path, build_rev: str,
         required_variant: Optional[str] = None,
         enforce_pins: bool = False) -> ValidatedEngineManifest:

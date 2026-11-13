@@ -97,3 +97,53 @@ class LazyImportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BytecodeCacheTests(unittest.TestCase):
+    """A read-only install keeps its bytecode in the user's cache."""
+
+    def _start(self, writable, extra_env=None):
+        import shutil
+        import stat
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            install = root / "install"
+            shutil.copytree(ROOT / "bol", install / "bol",
+                            ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copy2(ROOT / "bedrock-on-linux", install)
+            package = install / "bol"
+            if not writable:
+                package.chmod(stat.S_IRUSR | stat.S_IXUSR)
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("APPIMAGE", "PYTHONDONTWRITEBYTECODE",
+                                "PYTHONPYCACHEPREFIX")}
+            env["XDG_CACHE_HOME"] = str(root / "cache")
+            env.update(extra_env or {})
+            try:
+                done = subprocess.run(
+                    [sys.executable, str(install / "bedrock-on-linux"),
+                     "versions", "--help"],
+                    env=env, capture_output=True, text=True, timeout=120)
+            finally:
+                package.chmod(stat.S_IRWXU)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            cached = list((root / "cache").rglob("*.pyc"))
+            beside = list(install.rglob("*.pyc"))
+        return cached, beside
+
+    def test_a_read_only_install_caches_under_the_users_cache(self):
+        cached, beside = self._start(writable=False)
+        self.assertTrue(cached)
+        self.assertEqual(beside, [])
+
+    def test_a_writable_tree_keeps_its_bytecode_beside_the_sources(self):
+        cached, beside = self._start(writable=True)
+        self.assertEqual(cached, [])
+        self.assertTrue(beside)
+
+    def test_an_appimage_is_left_alone(self):
+        # Mounted at a new path on every run: a cache keyed on paths would
+        # never be read back and would grow without end.
+        cached, _beside = self._start(
+            writable=False, extra_env={"APPIMAGE": "/x/BedrockOnLinux.AppImage"})
+        self.assertEqual(cached, [])

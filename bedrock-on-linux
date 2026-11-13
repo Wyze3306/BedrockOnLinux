@@ -11,6 +11,50 @@ for _cand in (_here,
         sys.path.insert(0, _cand)
         break
 
+
+def _keep_bytecode(package_root):
+    """Give Python somewhere to keep the bytecode of a read-only install.
+
+    A .deb, an .rpm and the Flatpak install ``bol`` where the user cannot
+    write, and ship no ``__pycache__`` so the packages stay reproducible, so
+    every start compiled the whole launcher again before doing anything. A
+    cache under the user's own cache directory is written once instead.
+
+    It is keyed on the contents of ``bol/config.py``, which holds the version
+    and every pin and so changes with each release: Python trusts a cached
+    file whose source has the same size and modification time, and a Flatpak
+    gives every file the same time. Not for a checkout or any other writable
+    tree, which keeps its bytecode beside the sources as usual, nor for an
+    AppImage, mounted at a different path on every run.
+    """
+    if sys.pycache_prefix or sys.dont_write_bytecode \
+            or os.environ.get("APPIMAGE"):
+        return
+    package = os.path.join(package_root, "bol")
+    if os.access(package, os.W_OK):
+        return
+    try:
+        import hashlib
+        with open(os.path.join(package, "config.py"), "rb") as config:
+            key = hashlib.sha256(
+                config.read() + sys.version.encode()).hexdigest()[:16]
+        base = os.path.join(
+            os.environ.get("XDG_CACHE_HOME")
+            or os.path.join(os.path.expanduser("~"), ".cache"),
+            "bedrock-on-linux", "pycache")
+        os.makedirs(os.path.join(base, key), mode=0o700, exist_ok=True)
+        for other in os.listdir(base):
+            if other != key:
+                import shutil
+                shutil.rmtree(os.path.join(base, other), ignore_errors=True)
+        sys.pycache_prefix = os.path.join(base, key)
+    except OSError:
+        pass
+
+
+if sys.path and os.path.isdir(os.path.join(sys.path[0], "bol")):
+    _keep_bytecode(sys.path[0])
+
 try:
     from bol.__main__ import main
 except ModuleNotFoundError:

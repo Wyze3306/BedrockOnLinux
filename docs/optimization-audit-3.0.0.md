@@ -15,6 +15,37 @@ Lecture non exhaustive : `bol/gui.py`, `bol/mods.py`, `bol/catalog.py` et le
 script `proton` du moteur n'ont été lus que par sondage. Les patches moteur
 ont été lus par leurs en-têtes, pas ligne à ligne.
 
+## État au 2026-11-13
+
+Fait sur cette branche, avec tests, sans mesure en jeu réel :
+
+- **Q1** memfd fermé après la copie (`bol/xodus.py`, gabarit du wrapper).
+- **Q2** cache de bytecode pour les installations en lecture seule (script
+  `bedrock-on-linux`). Mesuré : 0,32 s vers 0,16 s pour charger le code de
+  la fenêtre, soit moins que l'estimation ci-dessous. L'AppImage n'en
+  profite pas : son point de montage change à chaque exécution.
+- **Q3** validation du manifeste moteur mémorisée par signature de fichiers
+  (`bol/vkd3d.py`). `patch_proton` et les SHA-256 de `user32` et `umu-run`
+  restent refaits.
+- **Q4** le reaper ne regarde que le jeu tant qu'il tourne
+  (`bol/leftovers.py`).
+- **Q5** journal du boot précédent lu une fois par boot quand il est propre
+  (`bol/gpu_safety.py`). La lecture du boot courant reste en série.
+- **Q6**, en version réduite : le balayage de `/proc` n'a lieu que s'il y a
+  quelque chose à écrire (`bol/wine_registry.py`). Pas de transaction unique.
+- **M2**, en version prudente : `device` puis `user` restent en série, les
+  six jetons suivants partent ensemble (`bol/auth.py`),
+  `BOL_PREAUTH_SERIAL=1` pour revenir en arrière.
+- **M5**, pour les pages Mods et Contenu seulement (`bol/gui.py`).
+
+Non fait, et pourquoi :
+
+- **Q7** et **Q8** : gain trop faible pour la complexité (tampons à
+  invalider, sonde volontairement refaite).
+- **M1, M3, M4** : demandent une nouvelle révision du moteur ou de xodus,
+  donc une publication ; à décider explicitement.
+- **M6, M7** et les **paris** : à ne faire qu'après mesure.
+
 ## Les dix meilleures pistes
 
 | # | Piste | Gain estimé (non mesuré) | Effort | Risque |
