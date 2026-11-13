@@ -334,12 +334,76 @@ class ToolTests(unittest.TestCase):
                 mock.patch("sys.stderr"):
             tool.key_path(str(repo / "feed" / "signing.key"))
 
-    def test_no_public_key_ships_without_a_reason(self):
-        """Empty until the maintainer generates the real key: the feed is
-        then off, not trusting a key nobody holds."""
+    def test_a_key_file_others_can_read_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "feed.key"
+            tool.write_key(path, tool.generate_key("k"))
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(tool.load_key(path)["keyid"], "k")
+            path.chmod(0o644)
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
+                tool.load_key(path)
+
+    def test_a_passphrase_keeps_the_seed_out_of_the_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "feed.key"
+            key = tool.generate_key("k")
+            tool.write_key(path, tool.encrypt_key(key, "correct horse battery"))
+            self.assertNotIn(key["private"], path.read_text())
+            opened = tool.load_key(path, ask=lambda _p: "correct horse battery")
+            self.assertEqual(opened["private"], key["private"])
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
+                tool.load_key(path, ask=lambda _p: "wrong")
+
+    def test_a_pin_cannot_point_outside_this_repository(self):
+        base = "https://github.com/Wyze3306/BedrockOnLinux/releases/download/"
+        for url in (base + "../../../../evil/x/releases/download/t/a.tar.gz",
+                    base + "t/a.tar.gz?token=1", base + "t/%2e%2e/a",
+                    base + "t/..", base + "t/a/b",
+                    "https://github.com.evil.example/Wyze3306/BedrockOnLinux"
+                    "/releases/download/t/a",
+                    "http://github.com/Wyze3306/BedrockOnLinux/releases/"
+                    "download/t/a"):
+            with self.assertRaises(feed.FeedError, msg=url):
+                feed.validate(manifest(components={"stable": {"xodus": [
+                    dict(PIN, url=url)]}}))
+
+    def test_an_installed_launcher_ignores_a_key_from_the_environment(self):
+        override = {"BOL_FEED_PUBKEY": "evil:" + OTHER_KEY["public"]}
+        with mock.patch.dict("os.environ", override), \
+                mock.patch.object(feed, "PUBLIC_KEYS", {}):
+            with mock.patch.object(feed, "_checkout", return_value=False):
+                self.assertEqual(feed.public_keys(), {})
+            with mock.patch.object(feed, "_checkout", return_value=True):
+                self.assertEqual(list(feed.public_keys()), ["evil"])
+
+    def test_the_embedded_keys_are_well_formed_public_keys(self):
+        self.assertTrue(feed.PUBLIC_KEYS)
         for key_id, encoded in feed.PUBLIC_KEYS.items():
             self.assertRegex(key_id, r"^[a-z0-9-]+$")
             self.assertEqual(len(__import__("base64").b64decode(encoded)), 32)
+
+    def test_no_private_key_material_is_in_the_repository(self):
+        """Nothing tracked looks like a signing key or a PEM private key."""
+        import subprocess
+        root = Path(__file__).resolve().parent.parent
+        listed = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"],
+            capture_output=True, check=False).stdout.decode().split("\0")
+        marker = "-----BEGIN " + "ENCRYPTED PRIVATE KEY-----"
+        plain = "-----BEGIN " + "PRIVATE KEY-----"
+        for name in filter(None, listed):
+            self.assertFalse(name.endswith("feed-signing.key"), name)
+            path = root / name
+            if path.suffix in (".py", ".json", ".md", ".sh", ".yml", ""):
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeError):
+                    continue
+                self.assertNotIn(marker, text, name)
+                self.assertNotIn(plain, text, name)
+                if name.startswith("feed/"):
+                    self.assertNotIn('"private"', text, name)
 
     def test_each_signing_moves_the_serial_forward(self):
         first = tool.stamp({"schema": 1}, floor=0, now=1000)

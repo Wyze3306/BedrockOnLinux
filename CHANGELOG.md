@@ -19,7 +19,7 @@
   signature matches a key built into the launcher, a downgraded file is
   refused, every download it names is checked against a signed SHA-256, and
   without it the launcher runs on what it shipped with. PLAY never waits on
-  it. It stays off until the project's signing key ships in a release.
+  it.
 - **You are told what the launcher connects to, and you choose.** Before the
   first connection a notice lists every host, what is sent there and why,
   and asks how updates are checked: automatically, only when you ask, or

@@ -60,8 +60,9 @@ that serves something else is just a failed refresh. On top of the signature:
   failure), and only if the player chose *Automatic*. With no key, no cache
   or no network the launcher runs on what it shipped with.
 
-Until a real key is in `PUBLIC_KEYS` the feed is switched off: nothing is
-fetched and the launcher behaves as it did before.
+With `PUBLIC_KEYS` empty the feed is switched off: nothing is fetched and
+the launcher behaves as it did before. An installed launcher takes its keys
+from there and nowhere else.
 
 ## The signing key
 
@@ -75,10 +76,22 @@ Create it once:
 scripts/data-feed.py keygen
 ```
 
-This writes `~/.config/bedrock-on-linux/feed-signing.key` (mode 600) and
-prints the line to add to `PUBLIC_KEYS` in `bol/feed.py`. That line ships
-with the next launcher release; launchers released before it never use the
-feed.
+This writes `~/.config/bedrock-on-linux/feed-signing.key` (mode 600, in a
+directory of mode 700) and prints the line to add to `PUBLIC_KEYS` in
+`bol/feed.py`. That line ships with the next launcher release; launchers
+released before it never use the feed. The current key is `bol-2026`.
+
+Then put a passphrase on it:
+
+```bash
+scripts/data-feed.py passwd
+```
+
+The file then holds the key encrypted (PKCS#8), and signing asks for the
+passphrase on the terminal. It is never read from the environment or the
+command line. A copy of an encrypted key is safe to keep on a USB stick; a
+copy of an unencrypted one is the key itself. The script refuses a key file
+that anyone but its owner can read.
 
 - Keep the key on the maintainer's machine, and a copy offline (a USB stick
   or a password manager). `BOL_FEED_KEY` points the script at another path.
@@ -94,7 +107,9 @@ feed.
 - **If the key leaks**, remove its public key from `PUBLIC_KEYS` and release.
   What an attacker could do with it is bounded by the validation in
   `bol/feed.py`: point a component at another *release asset of this
-  repository*, add anchor patterns, show notices.
+  repository* (the URL rule admits nothing else, and uploading one takes
+  write access to the repository as well), add anchor patterns, show
+  notices with an https link.
 
 ## Publishing a data fix
 
@@ -128,8 +143,9 @@ BOL_FEED_URL=file:///tmp/feed/manifest.json \
   bedrock-on-linux update --data-only
 ```
 
-`BOL_FEED_PUBKEY=id:base64` makes one run trust another key, for a staging
-feed signed with a throwaway key.
+From a git checkout only, `BOL_FEED_PUBKEY=id:base64` makes one run trust
+another key, for a staging feed signed with a throwaway key. An installed
+launcher ignores the variable.
 
 ## The source format
 

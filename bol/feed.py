@@ -64,7 +64,9 @@ URLS = (
 # for a release cycle, then drop the old one. Empty would mean the feed is not
 # in service: nothing fetched, nothing cached applied. The private half never
 # enters this repository -- docs/updates.md says where it lives.
-PUBLIC_KEYS = {}
+PUBLIC_KEYS = {
+    "bol-2026": "l1TQHPqrkZPEYo9DrcK3N2p/D/rgMYsO58QxIvtkGhk=",
+}
 
 COMPONENTS = ("xodus", "openssl_xcurl", "webview")
 CHANNELS = ("stable", "prerelease")
