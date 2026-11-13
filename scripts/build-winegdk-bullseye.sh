@@ -325,6 +325,8 @@ internal_build_stage() {
   bind_directory "$work_root/tmp" "$rootfs/work/tmp"
   bind_directory "$work_root/home" "$rootfs/work/home"
 
+  cp -- "$PROJECT_ROOT/scripts/pe-stamp.py" "$work_root/tmp/pe-stamp.py"
+
   chroot "$rootfs" /usr/bin/env -i \
     HOME=/work/home TMPDIR=/work/tmp \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -337,7 +339,14 @@ internal_build_stage() {
         --disable-tests \
         --prefix=/work/prefix
       make -j"$MAKE_JOBS"
-      make install
+      # Stripped, the way Wine itself installs a release: its install rule
+      # strips each module and writes the builtin mark back onto the PE ones.
+      # The debugging sections were two thirds of the engine: 2.5 GB
+      # installed, 863 MB to download, and again in every prefix.
+      make install INSTALL_PROGRAM_FLAGS=-s
+      # strip rewrites each PE file with the time of the run (binutils 2.35
+      # does not read SOURCE_DATE_EPOCH there); put the link time back.
+      python3 /work/tmp/pe-stamp.py "$SOURCE_DATE_EPOCH" /work/prefix/lib/wine
       # ntdll links libunwind but the sniper runtime ships none; bundle the
       # bullseye libunwind so the engine is self-contained (matches the
       # container build and the upstream engine layout).

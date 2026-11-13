@@ -97,7 +97,7 @@ if [[ -n "$WINEGDK_PREFIX" ]]; then
   WINEGDK_PREFIX="$(cd "$WINEGDK_PREFIX" && pwd -P)"
 fi
 
-for tool in cmp cp find flock grep gzip install objdump python3 readelf readlink \
+for tool in cmp cp dd find flock grep gzip install objdump python3 readelf readlink \
   sha256sum strings tar; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "!! required packaging tool is missing: $tool" >&2
@@ -225,6 +225,36 @@ PY
 # is relocatable and does not leak maintainer-specific paths. With a hard-link
 # snapshot this only unlinks staging entries; ENGINE_DIR remains untouched.
 rm -rf "$STAGED_ENGINE/files/include"
+
+# Neither is read by anything the engine runs. Wine Mono is the .NET runtime:
+# none of the supported titles is managed code, and the launcher starts Wine
+# with mscoree disabled, so its 257 MiB only ever travelled. Gecko stays: it
+# is what mshtml draws Minecraft Education's sign-in with. The import
+# libraries (*.a, 111 MiB) are for linking Windows programs against Wine.
+rm -rf "$STAGED_ENGINE/files/share/wine/mono"
+find "$STAGED_ENGINE/files/lib/wine" -type f -name '*.a' -delete
+
+# The WineGDK overlay is installed stripped (build-winegdk-*.sh). Refuse a
+# prefix that still carries its debugging sections, or one whose strip lost
+# the mark Wine recognises its own modules by: without it every builtin DLL
+# would load as a native one.
+for module in ntdll.dll kernelbase.dll user32.dll xgameruntime.dll; do
+  for arch in x86_64-windows i386-windows; do
+    candidate="$STAGED_ENGINE/files/lib/wine/$arch/$module"
+    [[ -f "$candidate" ]] || continue
+    if objdump -h "$candidate" | grep -q '\.debug_info'; then
+      echo "!! $arch/$module still carries debugging sections;" \
+        "build the WineGDK prefix with INSTALL_PROGRAM_FLAGS=-s" >&2
+      exit 1
+    fi
+    [[ "$(dd if="$candidate" bs=1 skip=64 count=16 status=none)" \
+       == "Wine builtin DLL" ]] || {
+      echo "!! $arch/$module lost its Wine builtin mark when stripped" >&2
+      exit 1
+    }
+  done
+done
+echo "   stripped WineGDK modules verified; Wine Mono and import libraries removed"
 
 # GE-Proton release archives may carry maintainer bytecode caches (including
 # embedded build paths). They are neither runtime inputs nor reproducible

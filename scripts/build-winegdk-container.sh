@@ -293,7 +293,16 @@ echo "== Configuring + building WineGDK (i386 + x86_64)"
   SOURCE_DATE_EPOCH="$EXPECTED_SOURCE_DATE_EPOCH" \
     "$SRC/configure" --enable-archs=i386,x86_64 --disable-tests --prefix="$PREFIX"
   SOURCE_DATE_EPOCH="$EXPECTED_SOURCE_DATE_EPOCH" make -j"$(nproc)"
-  make install )
+  # Stripped, the way Wine itself installs a release: its install rule strips
+  # each module and writes the builtin mark back onto the PE ones. The
+  # debugging sections were two thirds of the engine: 2.5 GB installed,
+  # 863 MB to download, and again in every prefix.
+  SOURCE_DATE_EPOCH="$EXPECTED_SOURCE_DATE_EPOCH" \
+    make install INSTALL_PROGRAM_FLAGS=-s )
+# strip rewrites each PE file with the time of the run (binutils 2.35 does
+# not read SOURCE_DATE_EPOCH there); put the link time back.
+python3 "$PROJECT_ROOT/scripts/pe-stamp.py" "$EXPECTED_SOURCE_DATE_EPOCH" \
+  "$PREFIX/lib/wine"
 # Wine's installed headers embed the builder's absolute source path and are not
 # runtime material; drop them so the prefix is relocatable + reproducible.
 rm -rf "$PREFIX/include"

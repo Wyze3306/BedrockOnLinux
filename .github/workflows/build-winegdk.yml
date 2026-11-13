@@ -92,7 +92,10 @@ jobs:
             echo "::error::WineGDK source manifest does not match its committed identity." >&2
             exit 1
           fi
-          out="winegdk-prefix-${short}-${manifest_short}.tar.gz"
+          # Named after the commit, the patch manifest and the build recipe
+          # (scripts/winegdk-release-tag.sh).
+          tag="$(scripts/winegdk-release-tag.sh)"
+          out="winegdk-prefix-${tag#winegdk-}.tar.gz"
           # Deterministic tar + gzip -n so the prefix tarball is reproducible.
           # Includes the .bol-winegdk-* provenance dotfiles the packager requires.
           tar --sort=name --format=gnu --hard-dereference \
@@ -117,6 +120,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           {
             echo "TARBALL=$out"
+            echo "PREFIX_TAG=$tag"
             echo "SHORT=$short"
             echo "MANIFEST_SHORT=$manifest_short"
           } >> "$GITHUB_ENV"
@@ -142,9 +146,9 @@ jobs:
         if: ${{ inputs.publish }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: winegdk-${{ env.SHORT }}-${{ env.MANIFEST_SHORT }}
+          tag_name: ${{ env.PREFIX_TAG }}
           target_commitish: ${{ github.sha }}
-          name: WineGDK prefix ${{ env.SHORT }}-${{ env.MANIFEST_SHORT }}
+          name: WineGDK prefix ${{ env.PREFIX_TAG }}
           make_latest: false
           prerelease: true
           body: >

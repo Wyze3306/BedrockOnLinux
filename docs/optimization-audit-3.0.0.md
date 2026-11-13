@@ -42,8 +42,20 @@ Non fait, et pourquoi :
 
 - **Q7** et **Q8** : gain trop faible pour la complexité (tampons à
   invalider, sonde volontairement refaite).
-- **M1, M3, M4** : demandent une nouvelle révision du moteur ou de xodus,
+- **M3, M4** : demandent une nouvelle révision du moteur ou de xodus,
   donc une publication ; à décider explicitement.
+
+Préparé, non construit, non publié :
+
+- **M1** : révision `wow64-archs-native24`. Les deux scripts de build
+  installent Wine strippé (`make install INSTALL_PROGRAM_FLAGS=-s`, la voie
+  de Wine, qui réécrit la marque builtin), `scripts/pe-stamp.py` remet
+  l'horodatage PE que strip remplace par l'heure courante, le packager
+  retire wine-mono et les bibliothèques d'import, et le préfixe WineGDK
+  strippé a sa propre release (`scripts/winegdk-release-tag.sh`). Les pins
+  `WINEGDK_PREFIX_SHA256` et `WINEGDK_ARCHIVE_SHA256` nomment encore les
+  octets de native23 : il reste les deux passes CI. Le lanceur démarre Wine
+  avec `mscoree` désactivé, jamais essayé en jeu réel.
 - **M6, M7** et les **paris** : à ne faire qu'après mesure.
 
 ## Les dix meilleures pistes

@@ -4,6 +4,11 @@
 
 ### Changed
 
+- **The game engine is less than half its size** (engine native24, not
+  published yet). Wine's modules are installed without their debugging
+  sections, which were two thirds of them, and Wine Mono, which nothing the
+  launcher runs uses, is left out with the import libraries. The code is
+  native23's.
 - **Minecraft gets back the memory of a second copy of itself.** A Store
   build is decrypted into memory at every start and handed to Wine as a
   staged copy; the first copy stayed open in the launch wrapper for the whole

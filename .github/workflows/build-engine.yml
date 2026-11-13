@@ -100,20 +100,18 @@ jobs:
       - name: Download + verify released WineGDK
         if: ${{ !inputs.rebuild_from_source }}
         run: |
-          commit="$(grep -m1 '^WINEGDK_SOURCE_COMMIT = ' bol/config.py | cut -d'"' -f2)"
-          short="${commit:0:12}"
-          source_manifest="$(grep -m1 '^WINEGDK_SOURCE_MANIFEST_SHA256 = ' bol/config.py | cut -d'"' -f2)"
-          manifest_short="${source_manifest:0:12}"
           mkdir -p "${{ runner.temp }}/wg-dl"
-          gh release download "winegdk-${short}-${manifest_short}" -R "${{ github.repository }}" \
+          tag="$(scripts/winegdk-release-tag.sh)"
+          prefix_archive="winegdk-prefix-${tag#winegdk-}.tar.gz"
+          gh release download "$tag" -R "${{ github.repository }}" \
             -p 'winegdk-prefix-*.tar.gz*' -D "${{ runner.temp }}/wg-dl"
-          gh attestation verify "${{ runner.temp }}/wg-dl/winegdk-prefix-${short}-${manifest_short}.tar.gz" \
+          gh attestation verify "${{ runner.temp }}/wg-dl/${prefix_archive}" \
             -R "${{ github.repository }}"
-          (cd "${{ runner.temp }}/wg-dl" && sha256sum -c "winegdk-prefix-${short}-${manifest_short}.tar.gz.sha256")
+          (cd "${{ runner.temp }}/wg-dl" && sha256sum -c "${prefix_archive}.sha256")
           # Also fail closed unless the reused prefix matches the committed pin,
           # not just its own published sidecar.
           pin="$(grep -m1 '^WINEGDK_PREFIX_SHA256 = ' bol/config.py | cut -d'"' -f2)"
-          echo "${pin}  ${{ runner.temp }}/wg-dl/winegdk-prefix-${short}-${manifest_short}.tar.gz" | sha256sum -c -
+          echo "${pin}  ${{ runner.temp }}/wg-dl/${prefix_archive}" | sha256sum -c -
 
       - name: Unpack WineGDK prefix
         run: |

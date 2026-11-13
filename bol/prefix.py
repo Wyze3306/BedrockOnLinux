@@ -956,7 +956,8 @@ def headless_setup_env(env, native_cryptbase=False):
     result.pop("XAUTHORITY", None)
     result.pop("PROTON_ENABLE_WAYLAND", None)
     result["SDL_VIDEODRIVER"] = "dummy"
-    setup_keys = {"cryptbase", "winevulkan", "dxgi", "d3d11", "d3d12"}
+    setup_keys = {"cryptbase", "winevulkan", "dxgi", "d3d11", "d3d12",
+                  "mscoree"}
     current = [
         item for item in result.get("WINEDLLOVERRIDES", "").split(";")
         if item and item.partition("=")[0].strip().lower() not in setup_keys
@@ -965,7 +966,10 @@ def headless_setup_env(env, native_cryptbase=False):
     # native implementations could recurse through advapi32, so retain the
     # builtin-only behavior when no safe DLL was staged.
     cryptbase = "cryptbase=n,b" if native_cryptbase else "cryptbase=b"
-    overrides = [cryptbase, "winevulkan=", "dxgi=", "d3d11=", "d3d12="]
+    # The managed engine ships no Wine Mono from native24 on, and a prefix
+    # being created would otherwise stop to download and install one.
+    overrides = [cryptbase, "winevulkan=", "dxgi=", "d3d11=", "d3d12=",
+                 "mscoree="]
     result["WINEDLLOVERRIDES"] = ";".join(overrides + current)
     return result
 

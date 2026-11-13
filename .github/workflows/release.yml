@@ -88,10 +88,6 @@ jobs:
             echo "::error::Build Xodus with publish=false and pin the reviewed archive before releasing."
             exit 1
           fi
-          commit="$(grep -m1 '^WINEGDK_SOURCE_COMMIT = ' $cfg | cut -d'"' -f2)"
-          wshort="${commit:0:12}"
-          wmanifest="$(grep -m1 '^WINEGDK_SOURCE_MANIFEST_SHA256 = ' "$cfg" | cut -d'"' -f2)"
-          wmshort="${wmanifest:0:12}"
           wpre="$(grep -m1 '^WINEGDK_PREFIX_SHA256 = ' $cfg | cut -d'"' -f2)"
           # Named after the committed output hash lock, so a rebuilt payload
           # resolves to a release of its own (scripts/vkd3d-release-tag.sh).
@@ -118,7 +114,8 @@ jobs:
               [ "$(needs_build "xodus-${xodus_rev}" "xodus-webview-${webview_rev}.tar.xz" "$webview_sha")" = "true" ]; then
             bxo=true
           fi
-          bw="$(needs_build "winegdk-${wshort}-${wmshort}" "winegdk-prefix-${wshort}-${wmshort}.tar.gz" "$wpre")"
+          wtag="$(scripts/winegdk-release-tag.sh)"
+          bw="$(needs_build "$wtag" "winegdk-prefix-${wtag#winegdk-}.tar.gz" "$wpre")"
           # vkd3d has no single committed tarball SHA (its wrapper is not the
           # integrity boundary; the DLL hashes in OUTPUT-SHA256SUMS are). So it
           # reuses on existence, which is safe because the tag is named after

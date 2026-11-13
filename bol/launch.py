@@ -1162,6 +1162,11 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False):
     gameinput_override = builtin_gameinput_override(active_prefix())
     if gameinput_override:
         overrides.append(gameinput_override)
+    if not custom_proton():
+        # The managed engine ships no Wine Mono (native24): nothing it runs
+        # is .NET, and a stray load of the CLR would otherwise open Wine's
+        # "install Mono" dialog in front of the game instead of failing.
+        overrides.append("mscoree=")
     cur = os.environ.get("WINEDLLOVERRIDES", "")
     if cur:
         overrides.append(cur)

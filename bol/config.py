@@ -101,7 +101,12 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
 # The commit alone does not identify vendored follow-up patches.
 WINEGDK_SOURCE_MANIFEST_SHA256 = "356ce8528c080bb5e97208e08d95ee91089922dd0669ef1c3aac4679b8bd3bd5"
-WINEGDK_BUILD_REV = "wow64-archs-native23"
+# How the WineGDK prefix is built from that source, when not the way it first
+# was: it is part of what the bytes are, so it is part of the name of the
+# release that holds them (scripts/winegdk-release-tag.sh). "stripped"
+# installs Wine's modules without their debugging sections.
+WINEGDK_PREFIX_RECIPE = "stripped"
+WINEGDK_BUILD_REV = "wow64-archs-native24"
 # native22 carries the ntdll loader patches the Microsoft Store packages need:
 # 0007 maps the main image from a descriptor, 0008 from a path so it survives
 # the Steam Linux Runtime container. Their game executable stays encrypted on
@@ -146,6 +151,11 @@ WINEGDK_BUILD_REV = "wow64-archs-native23"
 # (#202), falls back to fsync on kernels without ntsync (0014), takes two
 # per-frame Wine calls off Minecraft's main thread (0015, 0016) and serves
 # the XGameEvent class achievements are graded from (0017, #152).
+#
+# native24 is native23 without what it never ran: Wine's modules are
+# installed stripped of their debugging sections, and Wine Mono and the
+# import libraries are left out. The code is the same; the engine is not
+# 2.5 GB on disk any more, nor its archive 863 MB.
 WINEGDK_ARCHIVE_SHA256 = "67be80852e20d74fb5d936de4350fd8b7406f1f0955f5f722bbd2ba38abd5f8c"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "02fccb6a4e65ef7a8646b6752efe49473dbf3d89e2b1394ea1ae582ffc8371af"

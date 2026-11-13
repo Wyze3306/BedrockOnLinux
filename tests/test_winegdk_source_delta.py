@@ -610,21 +610,19 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         build = BUILD_WORKFLOW.read_text()
         engine = ENGINE_WORKFLOW.read_text()
         release = RELEASE_WORKFLOW.read_text()
+        # One script names the release, from the commit, the manifest and
+        # the build recipe; no workflow spells the name out itself.
+        tag_script = (ROOT / "scripts/winegdk-release-tag.sh").read_text()
+        self.assertIn("pin WINEGDK_SOURCE_MANIFEST_SHA256", tag_script)
         self.assertIn(
-            'out="winegdk-prefix-${short}-${manifest_short}.tar.gz"',
-            build,
-        )
+            'echo "winegdk-${commit:0:12}-${manifest:0:12}'
+            '${recipe:+-$recipe}"', tag_script)
+        self.assertIn('tag="$(scripts/winegdk-release-tag.sh)"', build)
+        self.assertIn('out="winegdk-prefix-${tag#winegdk-}.tar.gz"', build)
+        self.assertIn("tag_name: ${{ env.PREFIX_TAG }}", build)
+        self.assertIn('gh release download "$tag"', engine)
         self.assertIn(
-            "tag_name: winegdk-${{ env.SHORT }}-${{ env.MANIFEST_SHORT }}",
-            build,
-        )
-        self.assertIn(
-            'gh release download "winegdk-${short}-${manifest_short}"',
-            engine,
-        )
-        self.assertIn(
-            '"winegdk-${wshort}-${wmshort}" '
-            '"winegdk-prefix-${wshort}-${wmshort}.tar.gz"',
+            'needs_build "$wtag" "winegdk-prefix-${wtag#winegdk-}.tar.gz"',
             release,
         )
         self.assertIn(
