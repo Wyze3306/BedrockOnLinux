@@ -237,7 +237,7 @@ def _write_install_record(dest, edition, version, url):
         "product": edition["product"],
         "version": version,
         "source_url": url,
-        "xodus_rev": xodus.XODUS_REV,
+        "xodus_rev": xodus.effective_rev(),
         "installed": int(time.time()),
     }
     target = Path(dest) / _INSTALL_METADATA

@@ -57,7 +57,7 @@ from .config import (
     XODUS_WEBVIEW_REV,
     XODUS_WEBVIEW_SHA256,
 )
-from .log import BolError, info, ok
+from .log import BolError, info, ok, warn
 from .util import asset_url, download, env_flag, gh_releases
 
 # The GUI and the game launch both ask several times per run whether the host
@@ -433,12 +433,47 @@ def installed():
         current = marker.read_text(encoding="utf-8").strip()
     except OSError:
         return False
-    return (current == XODUS_WEBVIEW_REV
+    # The pinned runtime still counts when the data feed names a newer one:
+    # ensure_runtime() moves to it when it can, and a feed that cannot be
+    # served must not take a working sign-in away.
+    return (current in (XODUS_WEBVIEW_REV, _pin()[0])
             and (XODUS_WEBVIEW_DIR / _WEBKIT_LIB).is_file())
 
 
-def _local_asset():
+# Feed revisions that failed to install in this process: not tried again
+# on every sign-in and every launch.
+_FEED_PIN_FAILED = set()
+
+
+def _pin(embedded=False):
+    """(rev, sha256, url, asset) of the runtime to install.
+
+    The signed data feed (bol.feed) may replace the pinned revision; the
+    archive is still only accepted by its SHA-256.
+    """
+    rev, sha256, url = XODUS_WEBVIEW_REV, XODUS_WEBVIEW_SHA256, None
+    if not embedded:
+        from . import feed
+        rev, sha256, url = feed.resolve(
+            "webview", XODUS_WEBVIEW_REV, XODUS_WEBVIEW_SHA256)
+        if rev in _FEED_PIN_FAILED:
+            rev, sha256, url = XODUS_WEBVIEW_REV, XODUS_WEBVIEW_SHA256, None
+    asset = ASSET if rev == XODUS_WEBVIEW_REV \
+        else f"xodus-webview-{rev}.tar.xz"
+    return rev, sha256, url, asset
+
+
+def _installed_rev():
+    try:
+        return (XODUS_WEBVIEW_DIR / ".rev").read_text(
+            encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def _local_asset(asset=None):
     """The reviewed archive shipped beside an unreleased candidate, if any."""
+    asset = asset or ASSET
     anchors = []
     appimage = os.environ.get("APPIMAGE", "").strip()
     if appimage:
@@ -447,20 +482,27 @@ def _local_asset():
         anchors.append(Path(sys.argv[0]).expanduser().resolve().parent)
     except (OSError, RuntimeError):
         pass
-    return next((anchor / ASSET for anchor in anchors
-                 if (anchor / ASSET).is_file()), None)
+    return next((anchor / asset for anchor in anchors
+                 if (anchor / asset).is_file()), None)
 
 
-def _fetch():
+def _fetch(pin=None):
     """The verified archive, downloaded if it is not already beside us."""
-    expected = XODUS_WEBVIEW_SHA256.strip().lower()
+    _rev, pinned_sha256, direct_url, ASSET = pin or _pin(embedded=True)
+    expected = pinned_sha256.strip().lower()
     if not expected:
         raise BolError(
             f"The bundled WebKitGTK runtime '{ASSET}' has not been published "
             "yet, so it cannot be verified or installed.")
-    archive = _local_asset()
+    archive = _local_asset(ASSET)
     local = archive is not None
-    if not local:
+    if not local and direct_url:
+        archive = CACHE / ASSET
+        if not archive.is_file():
+            info("Downloading WebKitGTK for the Microsoft sign-in "
+                 "(one-time, ~80 MB) …")
+            download(direct_url, archive, "WebKitGTK runtime", attempts=2)
+    elif not local:
         try:
             # Every release, as for the OpenSSL XCurl set (bol.fixups).
             releases = gh_releases(WINEGDK_PREBUILT_REPO, fetch_all=True)
@@ -514,9 +556,24 @@ def ensure_runtime():
     Raises BolError with something the user can act on; callers add the
     host-package alternative, which is the better answer wherever it works.
     """
-    if installed():
+    pin = _pin()
+    if installed() and _installed_rev() == pin[0]:
         return XODUS_WEBVIEW_DIR
-    archive = _fetch()
+    if pin[0] != XODUS_WEBVIEW_REV:
+        try:
+            return _install_runtime(pin)
+        except BolError as exc:
+            _FEED_PIN_FAILED.add(pin[0])
+            warn(f"The updated sign-in runtime ({pin[0]}) could not be "
+                 f"installed ({exc}); using the one this launcher pins.")
+            if installed():
+                return XODUS_WEBVIEW_DIR
+            pin = _pin(embedded=True)
+    return _install_runtime(pin)
+
+
+def _install_runtime(pin):
+    archive = _fetch(pin)
     XODUS_WEBVIEW_DIR.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".webview-dl-",
                                     dir=XODUS_WEBVIEW_DIR.parent))
@@ -534,7 +591,7 @@ def ensure_runtime():
                 "The WebKitGTK runtime archive carries no "
                 "libwebkit2gtk-4.1.so.0.")
         _rewrite_loader_cache(staging, XODUS_WEBVIEW_DIR)
-        (staging / ".rev").write_text(XODUS_WEBVIEW_REV + "\n",
+        (staging / ".rev").write_text(pin[0] + "\n",
                                       encoding="utf-8")
         shutil.rmtree(previous, ignore_errors=True)
         if XODUS_WEBVIEW_DIR.exists():

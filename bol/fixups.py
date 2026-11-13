@@ -171,21 +171,59 @@ def _hbui_gate_patch(data):
     genuinely need XSAPI social/persona, which does not work under Wine (they
     then loop or crash). That is an engine-level problem, not a UI patch.
     """
-    for m in _HBUI_GATE.finditer(data):
-        # Bound the window at the next function declaration: the marks are
-        # common enough that an unbounded look-ahead matches the neighbour.
-        stop = data.find("}function ", m.end())
-        body = data[m.end():stop if stop != -1 else m.end() + 2000]
-        if not all(mark in body for mark in _HBUI_GATE_MARKS):
-            continue
-        selector = _HBUI_GATE_SELECTOR.match(data, m.end())
-        if not selector:
-            continue
-        if data.startswith(_HBUI_GATE_RETURN, selector.end()):
-            return data, "already"
-        return (data[:selector.end()] + _HBUI_GATE_RETURN
-                + data[selector.end():], "applied")
+    for gate, marks, selector_re in _hbui_gate_rules():
+        for m in gate.finditer(data):
+            # Bound the window at the next function declaration: the marks
+            # are common enough that an unbounded look-ahead matches the
+            # neighbour.
+            stop = data.find("}function ", m.end())
+            body = data[m.end():stop if stop != -1 else m.end() + 2000]
+            if not all(mark in body for mark in marks):
+                continue
+            selector = selector_re.match(data, m.end())
+            if not selector:
+                continue
+            if data.startswith(_HBUI_GATE_RETURN, selector.end()):
+                return data, "already"
+            return (data[:selector.end()] + _HBUI_GATE_RETURN
+                    + data[selector.end():], "applied")
     return data, "missing"
+
+
+def _hbui_feed_rules():
+    """Anchor sets the signed data feed adds for builds that rebundled.
+
+    A new Minecraft build that moves the anchors used to wait for a launcher
+    release. The feed can only say *where* the same two fixed insertions go
+    -- ``return"";`` and ``return null;`` -- never what is inserted.
+    """
+    try:
+        from . import feed
+        return feed.hbui_rules()
+    except Exception:
+        return []
+
+
+def _hbui_gate_rules():
+    """(function pattern, marks, selector pattern): ours, then the feed's."""
+    rules = [(_HBUI_GATE, _HBUI_GATE_MARKS, _HBUI_GATE_SELECTOR)]
+    for rule in _hbui_feed_rules():
+        gate = rule.get("gate")
+        if gate:
+            rules.append((re.compile(gate["function"]), tuple(gate["marks"]),
+                          re.compile(gate["selector"])))
+    return rules
+
+
+def _hbui_link_rules():
+    """(anchor pattern, already-patched pattern): ours, then the feed's."""
+    rules = [(_HBUI_LINK, _HBUI_LINK_DONE)]
+    for rule in _hbui_feed_rules():
+        link = rule.get("link")
+        if link:
+            rules.append((re.compile(link["anchor"]),
+                          re.compile(link["done"])))
+    return rules
 
 
 def _hbui_gate_from_2_3_0(data):
@@ -204,12 +242,15 @@ def _hbui_link_patch(data):
     holds the immutable sign-in source -- so React's hook order is preserved,
     unlike a naive return at the top. Returns ``(text, status)``.
     """
-    if _HBUI_LINK_DONE.search(data):
+    rules = _hbui_link_rules()
+    if any(done.search(data) for _anchor, done in rules):
         return data, "already"
-    m = _HBUI_LINK.search(data)
-    if not m:
-        return data, "missing"
-    return data[:m.end(1)] + "return null;" + data[m.end(1):], "applied"
+    for anchor, _done in rules:
+        m = anchor.search(data)
+        if m:
+            return (data[:m.end(1)] + "return null;" + data[m.end(1):],
+                    "applied")
+    return data, "missing"
 
 
 def _hbui_bundles(game_dir):
@@ -327,14 +368,35 @@ def ensure_openssl_xcurl_set():
     """Fetch + unpack the OpenSSL XCurl set (release asset, 20 MB) into
     OPENSSL_XCURL_SET on first use. Idempotent via a .rev marker; any
     network/IO failure degrades quietly — _install_openssl_xcurl() then
-    keeps the Schannel XCurl and warns."""
+    keeps the Schannel XCurl and warns.
+
+    A newer set named by the signed data feed (bol.feed) is tried first;
+    when it cannot be installed, the set this launcher pins is.
+    """
+    from . import feed
+    rev, sha256, url = feed.resolve(
+        "openssl_xcurl", OPENSSL_XCURL_REV, OPENSSL_XCURL_ARCHIVE_SHA256)
+    if rev != OPENSSL_XCURL_REV:
+        if _ensure_openssl_xcurl_set(rev, sha256, url, exact=True):
+            return True
+        warn(f"The updated online-login components ({rev}) could not be "
+             "installed; using the ones this launcher shipped with.")
+    return _ensure_openssl_xcurl_set(
+        OPENSSL_XCURL_REV, OPENSSL_XCURL_ARCHIVE_SHA256, None)
+
+
+def _ensure_openssl_xcurl_set(rev, pinned_sha256, direct_url, exact=False):
+    """Install set `rev`. With `exact`, an older set already in place does
+    not count as success."""
     marker = OPENSSL_XCURL_SET / ".rev"
     have = (OPENSSL_XCURL_SET / "libcurl-4.dll").exists() and \
            (OPENSSL_XCURL_SET / "xcurl-cashim.dll").exists()
     if have and marker.exists() and \
-            marker.read_text().strip() == OPENSSL_XCURL_REV:
+            marker.read_text().strip() == rev:
         return True
-    asset = f"openssl-xcurl-set-{OPENSSL_XCURL_REV}.tar.gz"
+    if exact:
+        have = False
+    asset = f"openssl-xcurl-set-{rev}.tar.gz"
     # Unreleased AppImage/zipapp candidates carry this reviewed asset beside
     # the launcher, just like the engine archive. Prefer that exact sibling so
     # local cross-distribution testing does not depend on publishing anything.
@@ -350,7 +412,10 @@ def ensure_openssl_xcurl_set():
                 if (anchor / asset).is_file()), None)
     local_archive = tar is not None
     url = None
-    if not local_archive:
+    if not local_archive and direct_url:
+        url = direct_url
+        tar = CACHE / asset
+    elif not local_archive:
         try:
             # Every release, not the newest thirty: the set stays in the
             # release it was uploaded to, and once thirty more had been
@@ -368,7 +433,7 @@ def ensure_openssl_xcurl_set():
             warn(f"OpenSSL XCurl set asset '{asset}' not published yet.")
             return have
         tar = CACHE / asset
-    expected_hash = OPENSSL_XCURL_ARCHIVE_SHA256.strip().lower()
+    expected_hash = pinned_sha256.strip().lower()
     retry_available = not local_archive
     while True:
         if not tar.is_file():
@@ -376,7 +441,8 @@ def ensure_openssl_xcurl_set():
                 return have
             info("Downloading the online-login components (one-time) …")
             try:
-                download(url, tar, "Online-login components")
+                download(url, tar, "Online-login components",
+                         **({"attempts": 2} if exact else {}))
             except BolError:
                 return have
 
@@ -445,7 +511,7 @@ def ensure_openssl_xcurl_set():
         marker_tmp = Path(marker_name)
         try:
             with os.fdopen(marker_fd, "w") as marker_stream:
-                marker_stream.write(OPENSSL_XCURL_REV)
+                marker_stream.write(rev)
             marker_tmp.replace(marker)
         finally:
             marker_tmp.unlink(missing_ok=True)
