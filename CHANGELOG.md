@@ -12,12 +12,35 @@
 - **Hidden games.** "Play hidden" on a profile, or `play --hidden`, starts
   Minecraft with its window kept off the screen, for a tool that drives the
   game rather than a player. It can be shown at any time.
+- **Fixes without a new release.** The launcher can fetch a small signed
+  data file with what used to need a release: anchors for a Minecraft build
+  that rearranged its menus, a rebuilt downloader or sign-in runtime, and
+  notices when Microsoft's services are down. It is accepted only when its
+  signature matches a key built into the launcher, a downgraded file is
+  refused, every download it names is checked against a signed SHA-256, and
+  without it the launcher runs on what it shipped with. PLAY never waits on
+  it. It stays off until the project's signing key ships in a release.
+- **You are told what the launcher connects to, and you choose.** Before the
+  first connection a notice lists every host, what is sent there and why,
+  and asks how updates are checked: automatically, only when you ask, or
+  never. Settings has a Network tab with the same list, `bedrock-on-linux
+  network` prints it, and the README has it too. No telemetry or identifier
+  is sent, to anyone.
+- **A release channel setting**: stable, or pre-releases as well.
+- `bedrock-on-linux --version`.
 
 ### Changed
 
 - **The Profiles page was rebuilt.** One card per profile with its Xbox
   account, build and folder, Play and Play hidden in view, and Folder,
   Rename and Delete in a menu.
+- **Launcher updates are checked, tried and reversible.** Every install kind
+  now goes through the same steps: the download must match its SHA-256 (a
+  release that states none is refused), the new launcher is started once
+  before it replaces anything, and an AppImage or .pyz keeps the previous
+  file and returns to it if the new one does not start. An AppImage uses a
+  delta download when `appimageupdatetool` is installed. A Nix install is
+  pointed at its flake instead of at a download.
 
 ### Fixed
 
