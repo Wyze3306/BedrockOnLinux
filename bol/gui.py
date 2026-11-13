@@ -62,7 +62,8 @@ from .profiles import (
     rename_profile, require_profile_shortcuts_supported,
     require_shortcuts_supported, write_play_shortcut, write_profile_shortcut,
 )
-from .update import check_for_update, self_update
+from . import feed, netpolicy, rollback
+from .update import check_for_update, describe_install, self_update
 from .util import load_settings, save_settings, format_display_version, mc_releases, gh_releases
 
 try:
@@ -1519,9 +1520,17 @@ class MainWindow(QMainWindow):
 
         self._changelog_loaded = False
 
-        QTimer.singleShot(50, self.refresh_versions)
-        QTimer.singleShot(200, self.check_for_update_async)
-        QTimer.singleShot(300, self._load_edition_logos)
+        # Nothing connects by itself until the player has seen what the
+        # launcher contacts and said how updates are checked (bol.netpolicy).
+        self._network_started = False
+        if netpolicy.decided(self.settings):
+            self._start_network()
+        else:
+            QTimer.singleShot(0, self._show_network_notice)
+        # Three seconds on screen is a launcher that starts: the one an
+        # update replaced is no longer needed (bol.rollback).
+        QTimer.singleShot(3000, rollback.confirm)
+        QTimer.singleShot(0, self._report_rollback)
 
         if self.settings.get("show_changelog_on_startup", False):
             QTimer.singleShot(0, self.toggle_changelog)
@@ -1933,9 +1942,8 @@ class MainWindow(QMainWindow):
         # The banner gives way first; the shelf keeps the height its cards
         # need.
         col.addWidget(self.featured, 2)
-        if self.settings.get("home_featured", True):
-            QTimer.singleShot(400, self.featured.load)
-        else:
+        # Loaded by _start_network, once the first-run notice is answered.
+        if not self.settings.get("home_featured", True):
             self.featured.hide()
         return page
 
@@ -3372,6 +3380,8 @@ class MainWindow(QMainWindow):
             self._scrollable(self._build_versions_tab()), "Versions")
         tabs.addTab(self._scrollable(self._build_advanced_tab()), "Advanced")
         tabs.addTab(self._scrollable(self._build_tools_tab()), "Tools")
+        self._network_tab = tabs.addTab(
+            self._scrollable(self._build_network_tab()), "Network")
         # Adding up what every build weighs means walking tens of thousands
         # of files, so it happens when someone opens the tab that shows the
         # figure -- not on the way to a window that may never show it.
@@ -3383,6 +3393,8 @@ class MainWindow(QMainWindow):
         if index == getattr(self, "_versions_tab", -1):
             self.refresh_builds()
             self.refresh_backups()
+        if index == getattr(self, "_network_tab", -1):
+            self._refresh_network_status()
 
     def _scrollable(self, inner: QWidget) -> QScrollArea:
         area = QScrollArea()
@@ -4773,10 +4785,285 @@ class MainWindow(QMainWindow):
             parts.append("<hr>")
         return self._wrap_changelog_html("".join(parts))
 
+    # ------------------------------------------------------------ network
+    def _start_network(self):
+        """Everything the window fetches by itself, once it is allowed to."""
+        if self._network_started:
+            return
+        self._network_started = True
+        QTimer.singleShot(50, self.refresh_versions)
+        QTimer.singleShot(200, self.check_for_update_async)
+        QTimer.singleShot(300, self._load_edition_logos)
+        if self.settings.get("home_featured", True) \
+                and _alive(getattr(self, "featured", None)):
+            QTimer.singleShot(400, self.featured.load)
+
+    def _banner(self, text, color=None):
+        """A strip under the title bar; returns (frame, its button row)."""
+        bar = QFrame(); bar.setObjectName("CardFlat")
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(14, 10, 14, 10)
+        lab = QLabel(text)
+        lab.setWordWrap(True)
+        lab.setTextFormat(Qt.PlainText)
+        if color:
+            lab.setStyleSheet(f"color:{color}; font-weight:700;")
+        v.addWidget(lab)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        v.addLayout(row)
+        self.centralWidget().layout().insertWidget(1, bar)
+        return bar, row
+
+    def _show_network_notice(self):
+        """The first-run notice: what is contacted, before anything is.
+
+        A strip, not a dialog: it names the choice without taking the
+        window, and PLAY stays where it is. Until it is answered the
+        launcher fetches nothing by itself.
+        """
+        if not _alive(self) or self.centralWidget() is None \
+                or _alive(getattr(self, "_network_notice", None)):
+            return
+        fetched = ("So far only the Qt interface was downloaded (from "
+                   "files.pythonhosted.org). "
+                   if os.environ.get("BOL_BOOTSTRAP_FETCHED")
+                   else "Nothing has been contacted yet. ")
+        bar, row = self._banner(
+            f"Before {PRETTY} goes online. " + fetched
+            + "It can check GitHub for launcher updates and for a small "
+            "signed data file of fixes (new Minecraft builds, incident "
+            "notices). Installing Minecraft and signing in talk to Microsoft "
+            "and GitHub when you use them. " + netpolicy.NO_TELEMETRY
+            + " How should updates be checked?")
+        self._network_notice = bar
+        row.addWidget(btn("What is contacted…", self._show_network_details,
+                          kind="flat", h=30))
+        row.addWidget(btn("Off", lambda: self._choose_network_mode("off"),
+                          kind="flat", w=64, h=30,
+                          tip=netpolicy.MODE_HELP["off"]))
+        row.addWidget(btn("Only when I ask",
+                          lambda: self._choose_network_mode("ask"),
+                          kind="flat", h=30, tip=netpolicy.MODE_HELP["ask"]))
+        row.addWidget(btn("Automatic",
+                          lambda: self._choose_network_mode("auto"),
+                          kind="primary", w=112, h=30,
+                          tip=netpolicy.MODE_HELP["auto"]))
+
+    def _choose_network_mode(self, mode):
+        self._save_setting(netpolicy.SETTING, mode)
+        feed.forget()
+        bar = getattr(self, "_network_notice", None)
+        if _alive(bar):
+            bar.setParent(None)
+        self._network_notice = None
+        combo = getattr(self, "network_mode_combo", None)
+        if _alive(combo):
+            index = combo.findData(mode)
+            if index >= 0 and index != combo.currentIndex():
+                combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(False)
+        self._refresh_network_status()
+        if self._network_started:
+            if mode == "auto":
+                self.check_for_update_async()
+        else:
+            self._start_network()
+
+    def _show_network_details(self):
+        """Open Settings on the Network tab, where the full list is."""
+        if self.stack.currentWidget() is not self.settings_page:
+            self.stack.setCurrentWidget(self.settings_page)
+        self.settings_tabs.setCurrentIndex(self._network_tab)
+
+    def _build_network_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        updates = card_section(
+            v, "Updates and data fixes",
+            "The launcher can look for its own updates and for a small "
+            "signed data file: fixes for new Minecraft builds, replacement "
+            "components and incident notices, without a new release.")
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Check for updates:"))
+        self.network_mode_combo = SettingComboBox()
+        for key in netpolicy.MODES:
+            self.network_mode_combo.addItem(netpolicy.MODE_LABELS[key], key)
+            self.network_mode_combo.setItemData(
+                self.network_mode_combo.count() - 1,
+                netpolicy.MODE_HELP[key], Qt.ToolTipRole)
+        current = netpolicy.mode(self.settings)
+        if current is None:
+            self.network_mode_combo.setPlaceholderText("Not chosen yet")
+            self.network_mode_combo.setCurrentIndex(-1)
+        else:
+            self.network_mode_combo.setCurrentIndex(
+                self.network_mode_combo.findData(current))
+        self.network_mode_combo.currentIndexChanged.connect(
+            lambda i: i >= 0 and self._choose_network_mode(
+                self.network_mode_combo.itemData(i)))
+        row.addWidget(self.network_mode_combo)
+        row.addStretch(1)
+        updates.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Release channel:"))
+        self.update_channel_combo = SettingComboBox()
+        self.update_channel_combo.addItem("Stable", "stable")
+        self.update_channel_combo.addItem("Pre-release", "prerelease")
+        self.update_channel_combo.setCurrentIndex(
+            1 if netpolicy.channel(self.settings) == "prerelease" else 0)
+        self.update_channel_combo.setToolTip(
+            "Pre-release also offers versions published for testing before "
+            "they become the stable release.")
+        self.update_channel_combo.currentIndexChanged.connect(
+            lambda i: self._save_setting(
+                netpolicy.CHANNEL_SETTING,
+                self.update_channel_combo.itemData(i)))
+        row.addWidget(self.update_channel_combo)
+        row.addStretch(1)
+        updates.addLayout(row)
+
+        updates.addWidget(tool_row(
+            "Check now", lambda: self.check_for_update_async(manual=True),
+            tip="Look for a launcher update and refresh the data file once, "
+                "whatever the setting above."))
+        self.network_status = QLabel()
+        self.network_status.setWordWrap(True)
+        self.network_status.setObjectName("Muted")
+        updates.addWidget(self.network_status)
+        # Filled when the tab is opened: naming the install kind asks the
+        # package database, which is not worth doing for every window.
+
+        hosts = card_section(
+            v, "What the launcher connects to",
+            "The complete list. Only the first group happens by itself, and "
+            "only if you allow it above.")
+        listing = QLabel(netpolicy.disclosure_html())
+        listing.setTextFormat(Qt.RichText)
+        listing.setWordWrap(True)
+        listing.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        hosts.addWidget(listing)
+        v.addStretch(1)
+        return w
+
+    def _refresh_network_status(self):
+        label = getattr(self, "network_status", None)
+        if not _alive(label):
+            return
+        lines = ["This install: " + describe_install()]
+        try:
+            state = feed.status()
+        except Exception:
+            state = {"in_service": False, "serial": None}
+        if not state["in_service"]:
+            lines.append("Data file: not in service in this build.")
+        elif netpolicy.mode(self.settings) == "off":
+            lines.append("Data file: ignored (updates are off).")
+        elif state["serial"]:
+            lines.append(f"Data file: {state['serial']}, signature valid.")
+        else:
+            lines.append("Data file: none fetched yet.")
+        label.setText("\n".join(lines))
+
+    def _report_rollback(self):
+        note = rollback.last_rollback()
+        if note and _alive(self) and self.centralWidget() is not None:
+            bar, row = self._banner(
+                f"The update to v{note.get('from')} did not start on this "
+                f"system, so v{note.get('to')} was put back. Please report "
+                "it.", self.theme.red)
+            row.addWidget(btn("OK", lambda: bar.setParent(None),
+                              kind="flat", w=64, h=30))
+
+    def _show_notices(self):
+        """Incident notices from the signed data file, once each."""
+        if not _alive(self) or self.centralWidget() is None:
+            return
+        try:
+            notices = feed.notices(
+                minecraft=self.settings.get("mc_version"),
+                settings=self.settings)
+        except Exception:
+            return
+        dismissed = set(self.settings.get("dismissed_notices") or [])
+        shown = self.__dict__.setdefault("_notices_shown", set())
+        for notice in notices:
+            key = notice["id"]
+            if key in dismissed or key in shown:
+                continue
+            shown.add(key)
+            text = notice["title"]
+            if notice.get("text"):
+                text += "\n" + notice["text"]
+            color = {"critical": self.theme.red,
+                     "warning": self.theme.blue}.get(notice.get("level"))
+            bar, row = self._banner(text, color)
+            url = notice.get("url")
+            if url:
+                row.addWidget(btn(
+                    "Open", lambda _=False, u=url: subprocess.Popen(
+                        ["xdg-open", u], stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL),
+                    kind="flat", w=64, h=30))
+            row.addWidget(btn(
+                "Dismiss", lambda _=False, b=bar, k=key:
+                self._dismiss_notice(b, k), kind="flat", w=80, h=30))
+
+    def _dismiss_notice(self, bar, key):
+        bar.setParent(None)
+        self.settings = load_settings()
+        kept = [k for k in (self.settings.get("dismissed_notices") or [])
+                if k != key][-49:]
+        self.settings["dismissed_notices"] = kept + [key]
+        save_settings(self.settings)
+
     # ------------------------------------------------------------ self-update
-    def check_for_update_async(self):
-        w = Worker(check_for_update)
-        w.done.connect(lambda rel: rel and _alive(self) and self._show_update_banner(rel))
+    def check_for_update_async(self, manual=False):
+        """Look for a launcher update and fresh data, when that is allowed.
+
+        "auto" does it at startup. "ask" offers a button instead, and "off"
+        does nothing; `manual` is that button, or Check now in Settings, and
+        is its own permission for one check.
+        """
+        mode = netpolicy.mode(self.settings)
+        if not manual and mode != "auto":
+            self._show_notices()
+            if mode == "ask" and not _alive(getattr(self, "_ask_bar", None)):
+                bar, row = self._banner(
+                    "Check for launcher updates and data fixes?")
+                self._ask_bar = bar
+                row.addWidget(btn("Not now", lambda: bar.setParent(None),
+                                  kind="flat", w=80, h=30))
+                row.addWidget(btn(
+                    "Check now",
+                    lambda: (bar.setParent(None),
+                             self.check_for_update_async(manual=True)),
+                    kind="primary", w=112, h=30))
+            return
+
+        def work():
+            data = feed.refresh() if manual else feed.refresh_if_due()
+            return data, check_for_update()
+
+        def done(result):
+            if not _alive(self):
+                return
+            (data_state, _detail), rel = result
+            self._refresh_network_status()
+            self._show_notices()
+            if rel:
+                self._show_update_banner(rel)
+            elif manual:
+                self.set_status(
+                    f"{PRETTY} {VERSION} is up to date."
+                    + (" Data fixes updated." if data_state == "updated"
+                       else ""))
+
+        w = Worker(work)
+        w.done.connect(done)
         self._start_worker("update-check", w)
 
     def _show_update_banner(self, rel):

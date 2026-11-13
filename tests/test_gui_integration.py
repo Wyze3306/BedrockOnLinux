@@ -185,8 +185,8 @@ class TestMainWindowInitialization:
 
     def test_injector_dll_load_mode_combo(self, main_window):
         """The DLL config uses a dropdown selecting file vs URL download."""
-        combo = next((cb for cb in main_window.findChildren(QComboBox)), None)
-        assert combo is not None
+        combo = main_window.dll_mode_combo
+        assert isinstance(combo, QComboBox)
         assert combo.count() == 2
         assert combo.itemText(0) == "File"
         assert combo.itemText(1) == "Download"
@@ -656,10 +656,10 @@ class TestSettingsTab:
     """Test settings interface."""
 
     def test_general_tab_created(self, main_window):
-        """Settings carries all four tabs, in order."""
+        """Settings carries all five tabs, in order."""
         tabs = main_window.settings_page.findChild(QTabWidget)
         assert [tabs.tabText(i) for i in range(tabs.count())] == [
-            "General", "Versions", "Advanced", "Tools"]
+            "General", "Versions", "Advanced", "Tools", "Network"]
 
     def test_theme_toggle_in_settings(self, main_window):
         """The General tab carries the light-theme switch, and flipping it

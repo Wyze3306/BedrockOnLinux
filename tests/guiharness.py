@@ -39,6 +39,9 @@ def qt_app():
 
 @contextmanager
 def headless_window(store_signed_in=False, **settings):
+    # A player who has answered the first-run network notice, like every
+    # window after the first. Pass network_updates=None for a first run.
+    settings.setdefault("network_updates", "off")
     saved_sink = log._LOG_SINK
     patches = [
         mock.patch.object(gui, "NativeAuth"),
