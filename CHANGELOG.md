@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- **Several games at once, one per profile.** Profiles no longer take turns:
+  each can run its own Minecraft while the others play. The Profiles page
+  lists every running game, whichever window, shortcut or terminal started
+  it, with Hide, Show and Close, and `bedrock-on-linux instances` does the
+  same from a terminal. See [docs/INSTANCES.md](docs/INSTANCES.md).
+- **Hidden games.** "Play hidden" on a profile, or `play --hidden`, starts
+  Minecraft with its window kept off the screen, for a tool that drives the
+  game rather than a player. It can be shown at any time.
+
+### Changed
+
+- **The Profiles page was rebuilt.** One card per profile with its Xbox
+  account, build and folder, Play and Play hidden in view, and Folder,
+  Rename and Delete in a menu.
+
+### Fixed
+
+- Buttons on the Profiles page and in the profile menu were cut off ("ew
+  Window", "ename") wherever the desktop's font was wider than the fixed
+  widths they were given. Nothing there has a fixed width any more.
+
 ## 3.0.0 — 2026-11-12 (pre-release)
 
 A pre-release of the next major version. Add-ons, maps and texture packs

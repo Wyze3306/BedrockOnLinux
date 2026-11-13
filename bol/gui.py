@@ -48,6 +48,7 @@ from .inject import run_injector
 from . import icons
 from .gui_content import ContentPage
 from .gui_mods import ModsPage
+from .gui_profiles import ProfilesPage
 from .launch import direct_launch_readiness, launch, single_window_session
 from . import saves
 from .navigation import ControllerNav
@@ -349,6 +350,49 @@ class Theme:
         QLabel#Sub {{ color: {self.sub}; }}
         QLabel#Muted {{ color: {self.muted}; font-size: 11px; }}
         QLabel#Hero {{ font-size: 26px; font-weight: 700; }}
+        QFrame#ProfileCard {{
+            background: {self.card};
+            border: 1px solid {self.border};
+            border-radius: 14px;
+        }}
+        QFrame#ProfileCard[active="true"] {{ border: 1px solid {self.accent}; }}
+        QFrame#InstanceRow {{
+            background: {self.card};
+            border: 1px solid {self.border};
+            border-left: 3px solid {self.green};
+            border-radius: 12px;
+        }}
+        QFrame#EmptyHint {{
+            background: transparent;
+            border: 1px dashed {self.card3};
+            border-radius: 14px;
+        }}
+        QLabel#HintTitle {{ font-weight: 700; }}
+        QLabel#ProfileName {{ font-size: 15px; font-weight: 700; }}
+        QLabel#SectionTitle {{
+            color: {self.sub}; font-size: 11px; font-weight: 700;
+        }}
+        QLabel#Warn {{ color: {self.red}; padding: 0px 4px 4px 4px; }}
+        QLabel#Badge {{
+            color: {self.sub};
+            background: {self.card2};
+            border-radius: 9px;
+            padding: 2px 9px;
+            font-size: 11px;
+            font-weight: 700;
+        }}
+        QLabel#Badge[tone="accent"] {{
+            color: {self.accent}; background: {self.accent_dim};
+        }}
+        QLabel#Badge[tone="live"] {{
+            color: {self.green}; background: {self.green_dim};
+        }}
+        QPushButton#MoreBtn {{ padding: 6px 9px; }}
+        QPushButton#DangerGhost {{
+            background: {self.card2}; color: {self.red}; font-weight: 600;
+        }}
+        QPushButton#DangerGhost:hover {{ background: {self.red}; color: white; }}
+        QPushButton#DangerGhost:disabled {{ color: {self.muted}; background: {self.card2}; }}
         QLabel#Chip {{
             color: {self.accent};
             background: {self.accent_dim};
@@ -1140,8 +1184,10 @@ class ProfileMenu(Popup):
             b = btn(name, lambda: self.switch.emit(path), kind="ghost", h=30)
             b.setStyleSheet("text-align:left;" + ("font-weight:700;color:%s;" % "#37b06b" if active else ""))
             h.addWidget(b, 1)
-            wb = btn("New Win", lambda: self.new_window.emit(path), kind="ghost", w=64, h=30,
+            wb = btn("New window", lambda: self.new_window.emit(path),
+                     kind="ghost", h=30,
                      tip=f"Open {name} in a new window")
+            wb.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
             h.addWidget(wb)
             self._v.addWidget(row)
 
@@ -1307,10 +1353,11 @@ class LaunchWorker(QThread):
     # in a log nobody has open when the game closes.
     session_notice = Signal(str)
 
-    def __init__(self, ver, editor=False):
+    def __init__(self, ver, editor=False, hidden=False):
         super().__init__()
         self._ver = ver
         self._editor = editor
+        self._hidden = hidden
 
     def run(self):
         try:
@@ -1326,8 +1373,11 @@ class LaunchWorker(QThread):
 
             notices = []
             try:
+                # Passed only when asked for: a visible launch is the call
+                # it has always been.
+                options = {"hidden": True} if self._hidden else {}
                 launch(on_started=on_started, notices=notices,
-                       editor=self._editor)
+                       editor=self._editor, **options)
             finally:
                 self.come_back.emit()
             for notice in notices:
@@ -2427,9 +2477,9 @@ class MainWindow(QMainWindow):
         if self.ui_state.get("launch_active"):
             self.warn_box("Minecraft is running",
                 "Close Minecraft first and wait for the game to exit before "
-                "switching profiles in this window.\n\nThe \"New Win\" button "
-                "opens another profile in a second launcher window, but only "
-                "one profile can play at a time.")
+                "switching profiles in this window.\n\nAnother profile can "
+                "play at the same time: start it from the Profiles page, or "
+                "open it in a second launcher window with \"New window\".")
             return True
         if self.ui_state.get("busy"):
             self.warn_box("Operation in progress",
@@ -3065,7 +3115,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(1500, lambda: self._copy_btn.setText("Copy code"))
 
     # ------------------------------------------------------------ play / kill
-    def do_play(self, *, editor=False):
+    def do_play(self, *, editor=False, hidden=False):
         if self.ui_state["busy"]:
             return
         ver = self.selected_version()
@@ -3090,7 +3140,7 @@ class MainWindow(QMainWindow):
         self.set_status("Preparing…")
         self._show_bar_busy()
 
-        w = LaunchWorker(ver, editor=editor)
+        w = LaunchWorker(ver, editor=editor, hidden=hidden)
         w.progress.connect(self.set_progress)
         w.done.connect(self._play_finished)
         w.failed.connect(self._play_failed)
@@ -4481,31 +4531,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ profiles page
     def _build_profiles_page(self) -> QWidget:
-        page = QFrame(); page.setObjectName("Page")
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(10)
-
-        desc = QLabel("Each profile maintains an isolated Xbox sign-in, Wine "
-                       "prefix, worlds, and settings.")
-        desc.setObjectName("Sub")
-        desc.setWordWrap(True)
-        outer.addWidget(desc)
-
-        area = QScrollArea(); area.setWidgetResizable(True)
-        area.setFrameShape(QFrame.NoFrame)
-        self.profiles_list_widget = QWidget()
-        self.profiles_list_layout = QVBoxLayout(self.profiles_list_widget)
-        self.profiles_list_layout.setSpacing(8)
-        area.setWidget(self.profiles_list_widget)
-        outer.addWidget(area, 1)
-
-        footer = QHBoxLayout()
-        footer.addWidget(btn("+ New Profile", self._prompt_create_profile_and_refresh, kind="primary", h=32))
-        footer.addStretch(1)
-        outer.addLayout(footer)
-
-        return page
+        return ProfilesPage(self)
 
     def toggle_mods(self):
         if self.mods_page is not None and \
@@ -4543,52 +4569,7 @@ class MainWindow(QMainWindow):
             self._nav_follow_page(self.profiles_page)
 
     def refresh_profiles(self):
-        layout = self.profiles_list_layout
-        while layout.count():
-            item = layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        active_info = current_profile_info()
-        active_path = active_info.get("path")
-
-        def add_row(name, path, subtitle, is_active):
-            row = QFrame(); row.setObjectName("CardFlat")
-            h = QHBoxLayout(row)
-            h.setContentsMargins(14, 10, 14, 10)
-            h.setSpacing(6)
-            left = QVBoxLayout()
-            nlab = QLabel(name); nlab.setStyleSheet("font-weight:700;")
-            left.addWidget(nlab)
-            slab = QLabel(subtitle); slab.setObjectName("Muted")
-            left.addWidget(slab)
-            h.addLayout(left, 1)
-
-            h.addWidget(btn("New Window", lambda: open_profile_window(path),
-                            kind="ghost-small", w=84, h=26,
-                            tip="Open this profile in another window"))
-            if path is not None:
-                h.addWidget(btn("Folder", lambda: subprocess.Popen(["xdg-open", str(path)],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
-                                kind="ghost-small", w=52, h=26))
-                h.addWidget(btn("Rename", lambda: self._rename_profile_row(name, is_active),
-                                kind="ghost-small", w=58, h=26))
-                h.addWidget(btn("Delete", lambda: self._delete_profile_row(name, is_active),
-                                kind="danger-small", w=58, h=26))
-            if is_active:
-                lab = QLabel("Active"); lab.setStyleSheet(f"color:{self.theme.green}; font-weight:700; font-size:11px;")
-                h.addWidget(lab)
-            else:
-                h.addWidget(btn("Switch", lambda: self._switch_profile_row(path),
-                                kind="ghost-small", w=58, h=26))
-            layout.addWidget(row)
-
-        add_row("Default", None, "Main installation root", active_path is None)
-        for p in list_profiles():
-            path = p.get("path")
-            is_active = active_path is not None and Path(active_path).resolve() == Path(path).resolve()
-            add_row(p.get("name", ""), path, f"profiles/{p.get('slug', '')}", is_active)
-        layout.addStretch(1)
+        self.profiles_page.refresh()
 
     def _switch_profile_row(self, path):
         if self._switch_profile_target(path):
