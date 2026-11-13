@@ -316,18 +316,42 @@ def cli_available():
     return XODUS_BIN.is_file() and os.access(XODUS_BIN, os.X_OK)
 
 
+def effective_rev():
+    """The downloader revision in force: the data feed's, else the pinned."""
+    from . import feed
+    return feed.resolve("xodus", XODUS_REV, XODUS_ARCHIVE_SHA256)[0]
+
+
 def ensure_cli():
     """Fetch + unpack the pinned xodus-cli into XODUS_DIR on first use.
 
     Mirrors fixups.ensure_openssl_xcurl_set(), except that a failure here is
     fatal: without xodus-cli there is no way to install the game at all.
+
+    The signed data feed (bol.feed) may name a newer build than the one this
+    launcher was released with. It is tried first and never trusted further
+    than its SHA-256; when it cannot be installed the embedded pin is, so a
+    feed can add a fix but cannot take the downloader away.
     """
+    from . import feed
+    rev, sha256, url = feed.resolve("xodus", XODUS_REV, XODUS_ARCHIVE_SHA256)
+    if rev != XODUS_REV:
+        try:
+            return _ensure_cli(rev, sha256, url, attempts=2)
+        except BolError as exc:
+            warn(f"The updated Minecraft downloader ({rev}) could not be "
+                 f"installed ({exc}); using the one this launcher shipped "
+                 "with.")
+    return _ensure_cli(XODUS_REV, XODUS_ARCHIVE_SHA256, None)
+
+
+def _ensure_cli(rev, pinned_sha256, direct_url, attempts=5):
     marker = XODUS_DIR / ".rev"
     if cli_available() and marker.exists() and \
-            marker.read_text().strip() == XODUS_REV:
+            marker.read_text().strip() == rev:
         return XODUS_BIN
 
-    asset = f"xodus-cli-{XODUS_REV}.tar.gz"
+    asset = f"xodus-cli-{rev}.tar.gz"
     # Unreleased candidates carry the reviewed asset beside the launcher, like
     # the engine archive, so local testing needs nothing published.
     anchors = []
@@ -342,7 +366,12 @@ def ensure_cli():
                 if (anchor / asset).is_file()), None)
     local_archive = tar is not None
 
-    if not local_archive:
+    if not local_archive and direct_url:
+        tar = CACHE / asset
+        if not tar.is_file():
+            info("Downloading the Minecraft downloader (one-time) …")
+            download(direct_url, tar, "Xodus downloader", attempts=attempts)
+    elif not local_archive:
         try:
             # Every release, as for the OpenSSL XCurl set (bol.fixups).
             rels = gh_releases(WINEGDK_PREBUILT_REPO, fetch_all=True)
@@ -364,7 +393,7 @@ def ensure_cli():
             info("Downloading the Minecraft downloader (one-time) …")
             download(url, tar, "Xodus downloader")
 
-    expected = XODUS_ARCHIVE_SHA256.strip().lower()
+    expected = pinned_sha256.strip().lower()
     if not expected:
         raise XodusError(
             "XODUS_ARCHIVE_SHA256 is unset, so the Xodus downloader cannot be "
@@ -402,11 +431,11 @@ def ensure_cli():
                     tmp.replace(target)
                 finally:
                     tmp.unlink(missing_ok=True)
-        marker.write_text(XODUS_REV + "\n", encoding="utf-8")
+        marker.write_text(rev + "\n", encoding="utf-8")
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
-    ok(f"Minecraft downloader ready (xodus {XODUS_REV})")
+    ok(f"Minecraft downloader ready (xodus {rev})")
     return XODUS_BIN
 
 

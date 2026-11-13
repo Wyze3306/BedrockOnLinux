@@ -1,4 +1,27 @@
-"""bol.update — self-update of the launcher."""
+"""bol.update — self-update of the launcher.
+
+One path for every way the launcher is installed. update_kind() names the
+install; PLANS says what an update is for it:
+
+  kind      asset      how
+  appimage  .AppImage  swap the file (delta through appimageupdatetool)
+  file      .pyz       swap the file
+  deb       .deb       hand the checked package to apt/dpkg through pkexec
+  rpm       .rpm       hand the checked package to dnf/zypper/rpm
+  flatpak, nix, git, system    not ours to replace: say who updates it
+
+Whatever the kind, the same three things hold:
+
+* the release comes from the signed data feed when it names one (bol.feed),
+  else from GitHub's API, and bol.netpolicy decides whether anything is
+  asked at all;
+* nothing is installed unless its SHA-256 matches -- the feed's signed
+  digest, else the release's own checksum list -- and a release with
+  neither is refused;
+* the new launcher is run once (``--version``) before it replaces anything,
+  and a swapped file keeps its predecessor so bol.rollback can put it back
+  if the new one never comes up.
+"""
 # SPDX-License-Identifier: MIT
 
 import glob
@@ -8,16 +31,35 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
+from collections import namedtuple
 from pathlib import Path
 
-from .config import CACHE, SELF_REPO, VERSION
+from . import rollback
+from .config import CACHE, PRETTY, SELF_REPO, VERSION
 from .log import BolError
-from .util import asset_url, download, gh_latest
+from .util import asset_url, download, gh_latest, gh_releases
 from .xdg_migration import is_flatpak
 
 # The name the release's .deb and .rpm install the launcher under.
 PACKAGE = "bedrock-on-linux"
+
+# How each install kind updates. `how` is "swap" (replace the running file),
+# "package" (the system's package manager installs it) or "handoff" (someone
+# else owns the install).
+Plan = namedtuple("Plan", "how suffix")
+PLANS = {
+    "appimage": Plan("swap", ".appimage"),
+    "file": Plan("swap", ".pyz"),
+    "deb": Plan("package", ".deb"),
+    "rpm": Plan("package", ".rpm"),
+    "flatpak": Plan("handoff", ".flatpak"),
+    "nix": Plan("handoff", None),
+    "git": Plan("handoff", None),
+    "system": Plan("handoff", None),
+}
+
 
 def _ver_tuple(s):
     """Parse 'v1.2.3' / '1.2.3' into a comparable tuple; non-numeric parts → 0."""
@@ -28,21 +70,59 @@ def _ver_tuple(s):
     return tuple(out) or (0,)
 
 
-def check_for_update():
-    """Return a dict describing a NEWER release of the launcher itself, or
-    None (already current, or any network/parse error — a background update
-    check must never get in the way of using the app)."""
-    try:
-        rel = gh_latest(SELF_REPO)
-    except Exception:
-        return None
+def _from_github(rel):
     tag = rel.get("tag_name") or ""
-    if not tag or _ver_tuple(tag) <= _ver_tuple(VERSION):
-        return None
     return {"version": tag.lstrip("vV"), "tag": tag,
             "url": rel.get("html_url", ""),
             "notes": (rel.get("body") or "").strip(),
+            "source": "github",
             "assets": rel.get("assets", [])}
+
+
+def _github_release(channel):
+    """The newest release GitHub lists for `channel`, or None."""
+    if channel == "prerelease":
+        # Versioned pre-releases only: the rolling "nightly" tag is not one.
+        releases = [r for r in gh_releases(SELF_REPO, 30) or []
+                    if not r.get("draft")
+                    and re.fullmatch(r"v\d+(\.\d+)+", r.get("tag_name") or "")]
+        if not releases:
+            return None
+        return _from_github(max(
+            releases, key=lambda r: _ver_tuple(r["tag_name"])))
+    rel = gh_latest(SELF_REPO)
+    return _from_github(rel) if rel and rel.get("tag_name") else None
+
+
+def check_for_update(channel=None):
+    """Return a dict describing a NEWER release of the launcher itself, or
+    None (already current, or any network/parse error — a background update
+    check must never get in the way of using the app).
+
+    The signed data feed answers when it names a newer release, with a
+    digest for every asset. Otherwise GitHub is asked, and its answer still
+    takes the feed's digests when the feed knows that version.
+    """
+    from . import feed, netpolicy
+    try:
+        channel = channel or netpolicy.channel()
+    except Exception:
+        channel = "stable"
+    signed = None
+    try:
+        signed = feed.launcher_release(channel)
+    except Exception:
+        signed = None
+    if signed and _ver_tuple(signed["version"]) > _ver_tuple(VERSION):
+        return signed
+    try:
+        rel = _github_release(channel)
+    except Exception:
+        return None
+    if not rel or not rel["tag"] \
+            or _ver_tuple(rel["tag"]) <= _ver_tuple(VERSION):
+        return None
+    return rel
 
 
 def _package_dir():
@@ -100,14 +180,19 @@ def _flatpak_update_message(rel, installation):
 
 def update_kind():
     """How the launcher is installed — decides how (and whether) it can
-    replace itself: 'appimage' | 'git' | 'deb' | 'rpm' | 'system' | 'file'."""
+    replace itself: one of the keys of PLANS."""
     if os.environ.get("APPIMAGE"):
         return "appimage"
+    if is_flatpak():
+        return "flatpak"
     p = _self_path()
     package = _package_dir()
+    if str(package).startswith("/nix/store/") \
+            or str(p).startswith("/nix/store/"):
+        return "nix"
     # A dev checkout — leave updates to git. `python3 -m bol` runs
     # bol/__main__.py, so argv[0] is inside the package, not beside .git.
-    if (p.parent / ".git").is_dir() or (package.parent / ".git").is_dir():
+    if (p.parent / ".git").exists() or (package.parent / ".git").exists():
         return "git"
     # pip, or a distribution's build of the wheel (#306): argv[0] is the
     # console script, writable in a venv or ~/.local/bin, and swapping a .pyz
@@ -153,8 +238,33 @@ def package_format(runner=None):
     return None
 
 
+def _asset(rel, suffix):
+    """(url, name, signed sha256 or None) of the asset ending in `suffix`."""
+    for asset in rel.get("assets", []):
+        if asset["name"].lower().endswith(suffix):
+            return (asset["browser_download_url"], asset["name"],
+                    asset.get("sha256"))
+    return None, None, None
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _expected_sha256(rel, name, progress=None):
-    """The SHA-256 the release's checksum list gives `name`, or None."""
+    """The SHA-256 `name` must have, or None when nothing states one.
+
+    The signed data feed's digest when the release came from it; else the
+    one in the release's checksum list, which every release since 2.2.8 has.
+    """
+    for asset in rel.get("assets", []):
+        if asset["name"] == name and re.fullmatch(
+                r"[0-9a-f]{64}", str(asset.get("sha256") or "")):
+            return asset["sha256"]
     url, sums_name, _ = asset_url(rel, lambda n: n.endswith("-SHA256SUMS"))
     if not url:
         return None
@@ -173,32 +283,34 @@ def _expected_sha256(rel, name, progress=None):
     return None
 
 
-def _fetch_checked(rel, url, name, target, progress=None):
+def _fetch_checked(rel, url, name, target, progress=None, delta=None):
     """Download release asset `name` to `target`; an error message, or None.
 
-    Checked against the release's SHA-256 list when it has one, which every
-    release since 2.2.8 does. The file is downloaded under a name carrying
-    the version, so an interrupted download is only ever resumed with the
-    bytes of the same release: resumed with another's, the result was half
-    of each, and nothing checked an AppImage before it replaced the running
-    one.
+    Nothing unchecked is ever left at `target`: a release that states no
+    SHA-256 for the asset is refused, and so are bytes that do not match.
+    The file is downloaded under a name carrying the version, so an
+    interrupted download is only ever resumed with the bytes of the same
+    release. `delta` may produce `target` from the installed file instead of
+    downloading it whole; what it produces is checked like a download, and
+    discarded for a full one when it does not match.
     """
-    listed = asset_url(rel, lambda n: n.endswith("-SHA256SUMS"))[0]
-    expected = _expected_sha256(rel, name, progress) if listed else None
-    if listed and not expected:
+    expected = _expected_sha256(rel, name, progress)
+    if not expected:
         return (f"Release v{rel['version']} lists no checksum for {name}, so "
                 f"it was not installed — download it from {rel['url']}")
     target.unlink(missing_ok=True)
+    if delta is not None:
+        try:
+            if delta(target) and _sha256(target) == expected:
+                return None
+        except Exception:
+            pass
+        target.unlink(missing_ok=True)
     download(url, target, label=name, progress=progress)
-    if expected:
-        digest = hashlib.sha256()
-        with open(target, "rb") as stream:
-            for chunk in iter(lambda: stream.read(1 << 20), b""):
-                digest.update(chunk)
-        if digest.hexdigest() != expected:
-            target.unlink(missing_ok=True)
-            return (f"The downloaded {name} does not match the release's "
-                    "checksum, so it was not installed.")
+    if _sha256(target) != expected:
+        target.unlink(missing_ok=True)
+        return (f"The downloaded {name} does not match the release's "
+                "checksum, so it was not installed.")
     return None
 
 
@@ -217,6 +329,104 @@ def _staging(dest, rel):
         if leftover != staged.with_name(staged.name + ".part"):
             leftover.unlink(missing_ok=True)
     return staged
+
+
+def _appimage_delta(dest, name):
+    """A delta download of AppImage `name` from the installed `dest`.
+
+    appimageupdatetool reads the update information the AppImage carries
+    and fetches only the blocks that changed (the .zsync beside every
+    release, #191). It is used when the host has it; the result is one more
+    candidate for the SHA-256 check, never trusted for having come from it.
+    Returns a callable for _fetch_checked, or None without the tool.
+    """
+    tool = shutil.which("appimageupdatetool")
+    if not tool:
+        return None
+
+    def run(target):
+        with tempfile.TemporaryDirectory(
+                prefix=".bol-delta-", dir=str(dest.parent)) as work:
+            result = subprocess.run(
+                [tool, str(dest)], cwd=work, capture_output=True, text=True,
+                errors="replace", timeout=900)
+            produced = Path(work) / name
+            if result.returncode or not produced.is_file():
+                return False
+            os.replace(produced, target)
+            return True
+    return run
+
+
+def _probe(kind, path, version, runner=None):
+    """Start the staged launcher once; an error message, or None.
+
+    `--version` imports the launcher and prints what it is, without a
+    window, a prompt or a connection. A file that cannot do that here -- a
+    truncated image, an interpreter it does not support, a FUSE it cannot
+    mount -- is not swapped in.
+    """
+    runner = runner or subprocess.run
+    argv = [str(path), "--version"] if kind == "appimage" \
+        else [sys.executable, str(path), "--version"]
+    env = dict(os.environ, **{rollback.PROBE_ENV: "1"})
+    try:
+        result = runner(argv, capture_output=True, text=True,
+                        errors="replace", timeout=120, env=env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"it could not be started ({exc})"
+    said = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode:
+        last = said.splitlines()[-1].strip() if said else "no output"
+        return f"it exited with {result.returncode} ({last})"
+    if version not in said:
+        return f"it does not report version {version}"
+    return None
+
+
+def _keep_previous(dest):
+    """Keep the file about to be replaced, for bol.rollback."""
+    backup = rollback.backup_path(dest)
+    backup.unlink(missing_ok=True)
+    try:
+        os.link(dest, backup)           # no copy: the swap leaves it behind
+    except OSError:
+        shutil.copy2(dest, backup)
+    return backup
+
+
+def _swap_update(rel, kind, progress=None):
+    """Replace the running AppImage or .pyz with the release's."""
+    plan = PLANS[kind]
+    dest = Path(os.environ["APPIMAGE"]) if kind == "appimage" \
+        else _self_path()
+    url, name, _ = _asset(rel, plan.suffix)
+    if not url:
+        return ("error", f"No {plan.suffix.lstrip('.')} in release "
+                         f"v{rel['version']} to update from — download it "
+                         f"from {rel['url']}")
+    staged = _staging(dest, rel)
+    delta = _appimage_delta(dest, name) if kind == "appimage" else None
+    problem = _fetch_checked(rel, url, name, staged, progress, delta)
+    if problem:
+        return ("error", problem)
+    if kind == "file" and not zipfile.is_zipfile(staged):
+        staged.unlink(missing_ok=True)      # a .pyz is a shebang + zip
+        return ("error", "The downloaded update looked wrong — kept the "
+                         "current version.")
+    os.chmod(staged, 0o755 if kind == "appimage" else dest.stat().st_mode)
+    problem = _probe(kind, staged, rel["version"])
+    if problem:
+        staged.unlink(missing_ok=True)
+        return ("error", f"v{rel['version']} was downloaded and checked, but "
+                         f"{problem} on this system — kept v{VERSION}.")
+    try:
+        _keep_previous(dest)
+    except OSError:
+        pass                # no predecessor kept: still a checked update
+    staged.replace(dest)
+    rollback.arm(dest, VERSION, rel["version"])
+    return ("ok", f"Updated to v{rel['version']} — restart to use it.")
 
 
 def _installer(kind, package):
@@ -242,23 +452,42 @@ def _manual_command(kind, package):
     return f"sudo dnf install {package}"
 
 
+def _installed_starts(version):
+    """Whether the launcher the package manager just installed starts.
+
+    None when it does, else what went wrong. The package manager keeps no
+    previous version to swap back, so this cannot undo the install; it can
+    say so at once, with the way back, instead of at the next start.
+    """
+    command = shutil.which(PACKAGE)
+    if not command:
+        return None                     # nothing to ask: do not guess
+    env = dict(os.environ, **{rollback.PROBE_ENV: "1"})
+    try:
+        result = subprocess.run([command, "--version"], capture_output=True,
+                                text=True, errors="replace", timeout=120,
+                                env=env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"it could not be started ({exc})"
+    said = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode or version not in said:
+        last = said.splitlines()[-1].strip() if said else "no output"
+        return f"it does not start (exit {result.returncode}: {last})"
+    return None
+
+
 def _package_update(rel, kind, progress=None):
     """Download the release's `kind` package, check it, and install it.
 
     The password prompt is the system's (pkexec), as for any package; the
-    file it installs is the one the release's checksum list names.
+    file it installs is the one whose SHA-256 the release states. apt and
+    dnf install what they are given, as root: never an unchecked file.
     """
-    suffix = "." + kind
-    url, name, _ = asset_url(rel, lambda n: n.lower().endswith(suffix))
+    suffix = PLANS[kind].suffix
+    url, name, _ = _asset(rel, suffix)
     if not url:
         return ("error", f"No {suffix} in release v{rel['version']} to update "
                          f"from — download it from {rel['url']}")
-    if not asset_url(rel, lambda n: n.endswith("-SHA256SUMS"))[0]:
-        # apt and dnf install what they are given, as root: never an
-        # unchecked file.
-        return ("error", f"Release v{rel['version']} has no checksum list, "
-                         f"so {name} was not installed — download it from "
-                         f"{rel['url']}")
     package = CACHE / "updates" / name
     package.parent.mkdir(parents=True, exist_ok=True)
     problem = _fetch_checked(rel, url, name, package, progress)
@@ -288,7 +517,31 @@ def _package_update(rel, kind, progress=None):
                          + (f": {said[-1].strip()}" if said else "")
                          + f"). The package is in {package}.")
     package.unlink(missing_ok=True)
+    broken = _installed_starts(rel["version"])
+    if broken:
+        previous = (f"https://github.com/{SELF_REPO}/releases/tag/"
+                    f"v{VERSION}")
+        return ("error", f"v{rel['version']} was installed, but {broken}. "
+                         f"This window still runs v{VERSION}: reinstall its "
+                         f"{suffix} from {previous} to go back, and please "
+                         "report it.")
     return ("ok", f"Updated to v{rel['version']} — restart to use it.")
+
+
+def _handoff(rel, kind):
+    """Who updates an install that is not the launcher's to replace."""
+    if kind == "git":
+        return ("git", "This is a git checkout — run `git pull` to update.")
+    if kind == "flatpak" or (kind == "system" and is_flatpak()):
+        return ("system", _flatpak_update_message(rel, flatpak_installation()))
+    if kind == "nix":
+        return ("system",
+                f"Installed with Nix — v{rel['version']} arrives through "
+                "your flake or channel: `nix flake update` where the input "
+                "is declared, then rebuild.")
+    return ("system",
+            f"Installed from a package — update with your package "
+            f"manager, or download v{rel['version']} from {rel['url']}")
 
 
 def self_update(rel, progress=None):
@@ -296,52 +549,30 @@ def self_update(rel, progress=None):
     state is 'ok' | 'git' | 'system' | 'error'. Never raises — callers just
     show the message."""
     kind = update_kind()
+    plan = PLANS.get(kind, PLANS["system"])
     try:
-        if kind == "git":
-            return ("git", "This is a git checkout — run `git pull` to update.")
-        if kind in ("deb", "rpm"):
+        if plan.how == "swap":
+            return _swap_update(rel, kind, progress)
+        if plan.how == "package":
             return _package_update(rel, kind, progress)
-        if kind == "system":
-            if is_flatpak():
-                return ("system", _flatpak_update_message(
-                    rel, flatpak_installation()))
-            return ("system",
-                    f"Installed from a package — update with your package "
-                    f"manager, or download v{rel['version']} from {rel['url']}")
-        if kind == "appimage":
-            dest = Path(os.environ["APPIMAGE"])
-            url, name, _ = asset_url(rel,
-                                     lambda n: n.lower().endswith(".appimage"))
-            if not url:
-                return ("error", "No AppImage in the release to update from.")
-            tmp = _staging(dest, rel)
-            problem = _fetch_checked(rel, url, name, tmp, progress)
-            if problem:
-                return ("error", problem)
-            os.chmod(tmp, 0o755)
-            tmp.replace(dest)
-            return ("ok", f"Updated to v{rel['version']} — restart to use it.")
-        # 'file': a portable single-file zipapp (.pyz) — swap it for the
-        # release's .pyz asset (the bol/ package is bundled inside it).
-        target = _self_path()
-        url, name, _ = asset_url(rel, lambda n: n.lower().endswith(".pyz"))
-        if not url:
-            return ("error",
-                    f"No .pyz in release v{rel['version']} to update from — "
-                    f"download it from {rel['url']}")
-        tmp = _staging(target, rel)
-        problem = _fetch_checked(rel, url, name, tmp, progress)
-        if problem:
-            return ("error", problem)
-        if not zipfile.is_zipfile(tmp):       # a .pyz is a shebang + zip
-            tmp.unlink(missing_ok=True)
-            return ("error",
-                    "The downloaded update looked wrong — kept the current "
-                    "version.")
-        os.chmod(tmp, target.stat().st_mode)
-        tmp.replace(target)
-        return ("ok", f"Updated to v{rel['version']} — restart to use it.")
+        return _handoff(rel, kind)
     except BolError as e:
         return ("error", str(e))
     except Exception as e:
         return ("error", f"Update failed: {e}")
+
+
+def describe_install():
+    """One line for Settings and `network`: how this install updates."""
+    kind = update_kind()
+    return {
+        "appimage": "AppImage — replaces itself, keeps the previous one",
+        "file": "Portable .pyz — replaces itself, keeps the previous one",
+        "deb": ".deb — installed through apt, with your password",
+        "rpm": ".rpm — installed through your package manager, with your "
+               "password",
+        "flatpak": "Flatpak — updated with flatpak",
+        "nix": "Nix — updated through your flake or channel",
+        "git": "git checkout — updated with git pull",
+        "system": "distribution package — updated by your package manager",
+    }.get(kind, kind) + f" ({PRETTY} {VERSION})"

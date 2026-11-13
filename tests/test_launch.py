@@ -139,6 +139,9 @@ class ReadyLaunchHarness:
             mock.patch.object(launch, "_prefix_stably_idle_after_wrapper",
                               return_value=prefix_idle),
             mock.patch.object(launch, "arm_gpu_launch", side_effect=arm),
+            # Nor the machine's own list of running instances.
+            mock.patch.object(launch, "_open_instance",
+                              side_effect=self._open_instance),
             mock.patch.object(
                 launch, "mark_gpu_wrapper_returned",
                 side_effect=mark or (lambda _token: True)),
@@ -169,6 +172,11 @@ class ReadyLaunchHarness:
             return launch._launch_once(lock_fds=lock_fds,
                                        on_started=on_started,
                                        notices=notices, editor=editor)
+
+    def _open_instance(self, *args, **kwargs):
+        self.instance_calls = getattr(self, "instance_calls", [])
+        self.instance_calls.append((args, kwargs))
+        return launch._InstanceSession()
 
     def _configure_locales(self, env):
         self.locales_env = dict(env)
@@ -1407,7 +1415,10 @@ class LaunchStartedHookTests(ReadyLaunchHarness, unittest.TestCase):
             lock.return_value.__enter__.return_value = (71, 72)
             self.assertEqual(launch.launch(on_started=hook), 0)
         once.assert_called_once_with((71, 72), on_started=hook,
-                                     notices=None, editor=False)
+                                     notices=None, editor=False,
+                                     hidden=False)
+        # A game starts beside the ones other profiles are running.
+        lock.assert_called_once_with(join=True)
 
 
 class AutoInjectionLaunchTests(ReadyLaunchHarness, unittest.TestCase):

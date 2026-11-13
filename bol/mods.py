@@ -1845,6 +1845,28 @@ def loader_log(game_dir):
         return ""
 
 
+def join_launch(game_dir, env):
+    """Start beside another profile that is running this very build.
+
+    The loader is part of the build's folder, which that game has open:
+    nothing is installed or removed here. When it is in place, this session
+    loads it too, with the same mods. Returns whether mods load.
+    """
+    try:
+        target = Path(game_dir) / LOADER_NAME
+        if not target.is_file() or not _is_our_loader(target):
+            return False
+    except OSError:
+        return False
+    current = env.get("WINEDLLOVERRIDES", "")
+    if LOADER_OVERRIDE not in current:
+        env["WINEDLLOVERRIDES"] = (
+            f"{current};{LOADER_OVERRIDE}" if current else LOADER_OVERRIDE)
+    info("LeviLamina loads for this instance too, with the mods the "
+         "running one started with.")
+    return True
+
+
 def prepare_launch(game_dir, env):
     """Put the loader in front of the game when this build has LeviLamina
     and mods are on; take it away otherwise. Returns whether mods load."""

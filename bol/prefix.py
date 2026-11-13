@@ -166,13 +166,105 @@ def shared_assets_lock(operation, exclusive):
         os.close(fd)
 
 
+# How long a launch waits for the shared files while another profile's launch
+# prepares them. Preparing takes a few seconds; an installation or an update
+# holds them for minutes, and is not waited for.
+SHARED_FILES_WAIT_S = 90.0
+
+
+class SessionLocks(tuple):
+    """The (shared-assets, prefix) lock descriptors of one game session.
+
+    A tuple, because that is what the game wrapper inherits. ``sole`` says
+    whether the shared game and engine files are this session's alone -- no
+    other profile is playing -- and so whether it may still write to them.
+    """
+
+    def __new__(cls, fds, sole=True):
+        locks = super().__new__(cls, fds)
+        locks.sole = sole
+        return locks
+
+    def share(self):
+        """Let other profiles start beside this one, from now on.
+
+        Called once everything this session writes to the shared files is
+        written. An installation or an update still needs them exclusively
+        and keeps being refused while any game runs.
+        """
+        if self.sole and self:
+            fcntl.flock(self[0], fcntl.LOCK_SH)
+
+
 @contextmanager
-def launch_lock():
-    """Serialize PLAY with setup/repair and without stale crash locks."""
-    with shared_assets_lock(
-            "start Minecraft", exclusive=True) as shared_fd, \
-            prefix_operation_lock("start Minecraft") as prefix_fd:
-        yield shared_fd, prefix_fd
+def _joinable_shared_assets_lock(operation, wait=SHARED_FILES_WAIT_S):
+    """The shared-assets lock for a game: alone if it can be, else beside
+    the games already running. Yields (descriptor, sole)."""
+    sleep, clock = time.sleep, time.monotonic
+    try:
+        shared_root = GAMES.resolve(strict=False).parent
+        shared_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise BolError(
+            f"Cannot locate the shared game-data root for {operation}: {exc}"
+        ) from exc
+    path = shared_root / ".shared-assets.lock"
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.chmod(path, 0o600)
+        deadline = clock() + max(0.0, wait)
+        announced = False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                sole = True
+                break
+            except BlockingIOError:
+                pass
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                sole = False
+                break
+            except BlockingIOError as exc:
+                if clock() >= deadline:
+                    raise BolError(
+                        f"Cannot {operation}: shared Minecraft files are in "
+                        "use by another BedrockOnLinux profile or are being "
+                        "updated."
+                    ) from exc
+            if not announced:
+                announced = True
+                info("Another profile is preparing the shared game files; "
+                     "waiting for it …")
+            sleep(0.25)
+        yield fd, sole
+    finally:
+        # As in shared_assets_lock: never LOCK_UN, the wrapper may hold it.
+        os.close(fd)
+
+
+@contextmanager
+def launch_lock(join=False):
+    """Serialize PLAY with setup/repair and without stale crash locks.
+
+    By default nothing else may hold the shared game and engine files, which
+    is what the doctor's acknowledgement needs. With ``join``, a game may
+    start beside the games other profiles are running: the prefix lock is
+    still this profile's alone, and the shared files are held together with
+    those sessions (see :class:`SessionLocks`).
+    """
+    if not join:
+        with shared_assets_lock(
+                "start Minecraft", exclusive=True) as shared_fd, \
+                prefix_operation_lock("start Minecraft") as prefix_fd:
+            yield SessionLocks((shared_fd, prefix_fd))
+        return
+    # The profile's own lock first: a second PLAY in the same profile is
+    # refused at once instead of after waiting for the shared files.
+    with prefix_operation_lock("start Minecraft") as prefix_fd, \
+            _joinable_shared_assets_lock("start Minecraft") as shared:
+        shared_fd, sole = shared
+        yield SessionLocks((shared_fd, prefix_fd), sole)
 
 
 def _remove_empty_steam_dir(steam):

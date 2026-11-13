@@ -184,6 +184,14 @@ def _open_gui():
     # Only the toolkit itself is worth stopping for, and only when it really
     # is absent: bol.gui bootstraps the rest (python-xlib) once it is
     # imported, and works without it.
+    if not deps.have("PySide6"):
+        # The toolkit is about to be downloaded, before any window exists to
+        # say so: a terminal gets the list of hosts first, and the window's
+        # own first-run notice is told what was already fetched.
+        from . import netpolicy
+        if not netpolicy.decided():
+            netpolicy.choose_in_terminal()
+            os.environ["BOL_BOOTSTRAP_FETCHED"] = "1"
     if not deps.have("PySide6") and "PySide6" in deps.ensure_gui_deps():
         die("The launcher window needs the Qt toolkit (PySide6), which is "
             "not installed here and could not be installed automatically. "
@@ -240,6 +248,65 @@ def _report_launch_failure(message):
     desktop_notify(f"Minecraft did not start.\n{message}")
 
 
+def _list_instances():
+    """Print the games that are running, across every profile."""
+    from . import instances
+    running = instances.list_instances()
+    if not running:
+        info("No Minecraft instance is running.")
+        return
+    rows = [("ID", "PROFILE", "GAME", "WINDOW", "UP", "PID")]
+    for item in running:
+        build = " ".join(part for part in (item.title, item.version) if part)
+        rows.append((item.id, item.profile, build,
+                     "hidden" if item.hidden else "visible",
+                     instances.format_uptime(item.uptime()), str(item.pid)))
+    widths = [max(len(row[column]) for row in rows)
+              for column in range(len(rows[0]))]
+    for row in rows:
+        print("  ".join(cell.ljust(width)
+                        for cell, width in zip(row, widths)).rstrip())
+
+
+def _instance_targets(reference, everything):
+    from . import instances
+    if everything:
+        return instances.list_instances()
+    if not reference:
+        die("Name the instance (its ID or its profile, see "
+            f"'{APP} instances'), or pass --all.")
+    return [instances.find(reference)]
+
+
+def _cmd_instances(a, parser):
+    from . import instances
+    if a.instances_cmd in (None, "list"):
+        _list_instances()
+    elif a.instances_cmd in ("show", "hide"):
+        hide = a.instances_cmd == "hide"
+        targets = _instance_targets(a.instance, a.all)
+        if not targets:
+            info("No Minecraft instance is running.")
+        for item in targets:
+            changed = instances.set_hidden(item, hide)
+            ok(f"{item.id}: {'hidden' if hide else 'shown'}"
+               + ("" if changed else
+                  " (no window yet; it will follow as soon as the game "
+                  "opens one)" if hide else
+                  " (it had no hidden window)"))
+    elif a.instances_cmd == "close":
+        targets = _instance_targets(a.instance, a.all)
+        if not targets:
+            info("No Minecraft instance is running.")
+        for item in targets:
+            info(f"Closing {item.id} ({item.profile}) …")
+            result = instances.close_instance(item, force=a.force)
+            ok(f"{item.id}: closed." if result == "closed" else
+               f"{item.id}: stopped.")
+    else:
+        parser.print_help()
+
+
 def _plays_xbox_live():
     """Whether PLAY starts a game that signs in through Xbox Live."""
     from .games import uses_xbox_live
@@ -247,14 +314,105 @@ def _plays_xbox_live():
     return uses_xbox_live(load_settings().get("game_dir"))
 
 
+def _before_network_command(cmd):
+    """The first-run notice, then what the player's choice allows.
+
+    Before `setup` or `play` connect to anything, a terminal is shown the
+    full list of hosts once and asked how updates should be checked. In
+    "auto" the signed data file is refreshed if it is due -- a few seconds
+    at most, and a failure changes nothing -- and incident notices are
+    printed. Nothing here can stop the command.
+    """
+    try:
+        from . import feed, netpolicy
+        from .util import load_settings
+        netpolicy.choose_in_terminal()
+        feed.refresh_if_due(timeout=4)
+        for notice in feed.notices(
+                minecraft=load_settings().get("mc_version")):
+            line = notice["title"]
+            if notice.get("text"):
+                line += " — " + notice["text"]
+            if notice.get("url"):
+                line += f" ({notice['url']})"
+            (warn if notice.get("level") != "info" else info)(line)
+    except Exception:
+        pass
+
+
+def _cmd_network(a):
+    from . import feed, netpolicy
+    from .update import describe_install
+    if a.mode:
+        netpolicy.set_mode(a.mode)
+        ok(f"Update checks: {netpolicy.MODE_LABELS[a.mode]}.")
+        return
+    print(netpolicy.disclosure_text())
+    print()
+    current = netpolicy.mode()
+    print("Update checks: " + (netpolicy.MODE_LABELS[current] if current
+                               else "not chosen yet (nothing is checked)"))
+    for key in netpolicy.MODES:
+        print(f"  {APP} network {key:<5} {netpolicy.MODE_HELP[key]}")
+    print("Release channel: " + netpolicy.channel())
+    print("This install: " + describe_install())
+    state = feed.status()
+    if not state["in_service"]:
+        print("Data file: not in service in this build")
+    elif state["serial"]:
+        print(f"Data file: {state['serial']}")
+    else:
+        print("Data file: none fetched yet")
+
+
+def _cmd_update(a):
+    """Check now. Asking for it is the consent for this one check; the
+    first time, the list of hosts is shown before anything is contacted."""
+    from . import feed, netpolicy
+    if a.channel:
+        netpolicy.set_channel(a.channel)
+    if not netpolicy.decided():
+        if netpolicy.choose_in_terminal() is None and IS_TTY:
+            info("Update skipped.")
+            return
+    state, detail = feed.refresh()
+    if state == "updated":
+        ok(f"Data fixes updated ({detail}).")
+    elif state == "error":
+        warn(f"Data fixes could not be refreshed ({detail}); keeping what "
+             "is installed.")
+    if a.data_only:
+        return
+    rel = check_for_update()
+    if not rel:
+        ok(f"{PRETTY} {VERSION} is up to date.")
+        return
+    info(f"Update available: v{rel['version']} (you have {VERSION}).")
+    go = (update_kind() in ("git", "system", "flatpak", "nix") or not IS_TTY
+          or input(f"Install v{rel['version']} now? [y/N] ")
+          .strip().lower() == "y")
+    if go:
+        state, msg = self_update(rel)
+        (ok if state == "ok" else warn)(msg)
+    else:
+        info("Update skipped.")
+
+
 def main():
     p = argparse.ArgumentParser(prog=APP, description=f"{PRETTY} {VERSION}")
+    # Also what an update runs once before it replaces anything (bol.update).
+    p.add_argument("--version", action="version",
+                   version=f"{PRETTY} {VERSION}")
     sub = p.add_subparsers(dest="cmd")
 
     sub.add_parser("gui", help="open the launcher (default)")
     play = sub.add_parser("play", help="launch Minecraft")
     play.add_argument("--editor", action="store_true",
                       help="open Bedrock Editor instead of the game")
+    play.add_argument("--hidden", action="store_true",
+                      help="keep the game's window off the screen until it "
+                           "is shown ('instances show'); for a game driven "
+                           "by a tool rather than played")
     play.add_argument("--update", action="store_true",
                       help="install the newest Minecraft build first (always "
                            "done when Settings ▸ General has it switched on)")
@@ -326,6 +484,29 @@ def main():
     )
     profiles_create.add_argument("name", metavar="NAME")
     profiles_sub.add_parser("list", help="list isolated profiles")
+    ins = sub.add_parser(
+        "instances",
+        help="list, hide, show or close the Minecraft instances that are "
+             "running, across every profile",
+    )
+    instances_sub = ins.add_subparsers(dest="instances_cmd")
+    instances_sub.add_parser("list", help="list running instances (default)")
+    for name, text in (
+            ("hide", "take an instance's window off the screen; the game "
+                     "keeps running"),
+            ("show", "put a hidden instance's window back on the screen"),
+            ("close", "close an instance: its window is asked to close, and "
+                      "the game is stopped if it does not")):
+        one = instances_sub.add_parser(name, help=text)
+        one.add_argument("instance", nargs="?", metavar="INSTANCE",
+                         help="an ID from 'instances', the start of one, or "
+                              "a profile name")
+        one.add_argument("--all", action="store_true",
+                         help="every running instance")
+        if name == "close":
+            one.add_argument("--force", action="store_true",
+                             help="stop the game's processes without asking "
+                                  "its window to close first")
     sc = sub.add_parser(
         "shortcut",
         help="create a desktop/Steam shortcut that launches Minecraft "
@@ -336,7 +517,20 @@ def main():
         metavar="NAME",
         help="launch an isolated profile instead of the default installation",
     )
-    sub.add_parser("update", help="check for and install launcher updates")
+    up = sub.add_parser(
+        "update", help="check for and install launcher updates and data "
+                       "fixes")
+    up.add_argument("--channel", choices=("stable", "prerelease"),
+                    help="follow this release channel from now on")
+    up.add_argument("--data-only", action="store_true",
+                    help="refresh the signed data file only")
+    np = sub.add_parser(
+        "network",
+        help="show every host the launcher contacts, and choose whether it "
+             "checks for updates")
+    np.add_argument("mode", nargs="?", choices=("auto", "ask", "off"),
+                    help="auto: check at startup; ask: only on request; "
+                         "off: never")
 
     sub.add_parser("changelog", help="display the launcher's release changelog history")
 
@@ -355,6 +549,13 @@ def main():
         # Migration must precede every write to the new XDG root.
         from .util import _ensure_xdg_storage
         _ensure_xdg_storage()
+        if a.cmd and a.cmd != "gui":
+            # A command was understood: the launcher an update installed
+            # starts, so its predecessor is no longer needed (bol.rollback).
+            from . import rollback
+            rollback.confirm()
+        if a.cmd in ("setup", "play"):
+            _before_network_command(a.cmd)
         if a.cmd == "setup":
             mc = None
             if a.mc:
@@ -381,7 +582,9 @@ def main():
             # session finish its teardown before the launcher goes.
             supervision.install()
             update_game_before_play(always=a.update)
-            launch(editor=a.editor)
+            # Passed only when asked for: a visible launch is the call it
+            # has always been.
+            launch(editor=a.editor, **({"hidden": True} if a.hidden else {}))
         elif a.cmd == "shortcut":
             require_shortcuts_supported()
             profile = create_profile(a.profile) if a.profile else None
@@ -461,21 +664,12 @@ def main():
                     )
             else:
                 pp.print_help()
+        elif a.cmd == "instances":
+            _cmd_instances(a, ins)
         elif a.cmd == "update":
-            rel = check_for_update()
-            if not rel:
-                ok(f"{PRETTY} {VERSION} is up to date.")
-            else:
-                info(f"Update available: v{rel['version']} "
-                     f"(you have {VERSION}).")
-                go = (update_kind() in ("git", "system") or not IS_TTY
-                      or input(f"Install v{rel['version']} now? [y/N] ")
-                      .strip().lower() == "y")
-                if go:
-                    state, msg = self_update(rel)
-                    (ok if state == "ok" else warn)(msg)
-                else:
-                    info("Update skipped.")
+            _cmd_update(a)
+        elif a.cmd == "network":
+            _cmd_network(a)
         elif a.cmd == "import":
             cmd_import(a.files)
         elif a.cmd == "repair":

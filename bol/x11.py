@@ -647,3 +647,273 @@ def place_child_windows(window, x, y, display=None, windows=None):
             return place_child_windows(window, x, y, windows=opened)
     except Exception:
         return None
+
+
+# --- per-instance window control ------------------------------------------
+#
+# Several profiles can run Minecraft at once, and each of those games can be
+# kept off the screen: its window is withdrawn (ICCCM 4.1.4), which takes it
+# off the desktop, the taskbar and the window switcher while the game keeps
+# running and drawing. Every window withdrawn here is stamped, so that
+# showing an instance again maps the windows this hid and never the ones
+# Wine keeps unmapped for its own reasons.
+
+HIDDEN_PROPERTY = "_BOL_HIDDEN"
+_ANY_PROPERTY_TYPE = 0          # X.h, AnyPropertyType
+_CLIENT_MESSAGE = 33            # X.h
+_NO_EVENT_MASK = 0
+
+
+class _XClientMessage(ctypes.Structure):
+    """XClientMessageEvent with 32-bit data, padded to an XEvent's size."""
+
+    _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                ("format", ctypes.c_int), ("data", ctypes.c_long * 5),
+                ("pad", ctypes.c_long * 24)]
+
+
+class _XlibWindowControl(_XlibWindows):
+    """The X operations hiding, showing and closing a game window need."""
+
+    def __init__(self, lib, display):
+        super().__init__(lib, display)
+        lib.XGetWindowProperty.restype = ctypes.c_int
+        lib.XGetWindowProperty.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long,
+            ctypes.c_long, ctypes.c_int, ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+            ctypes.POINTER(ctypes.c_void_p)]
+        lib.XDeleteProperty.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong]
+        lib.XWithdrawWindow.restype = ctypes.c_int
+        lib.XWithdrawWindow.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int]
+        lib.XMapWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        lib.XSendEvent.restype = ctypes.c_int
+        lib.XSendEvent.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long,
+            ctypes.c_void_p]
+
+    def _atom(self, name):
+        atom = self._atoms.get(name)
+        if atom is None:
+            atom = int(self._lib.XInternAtom(
+                self._display, name.encode(), False))
+            self._atoms[name] = atom
+        return atom
+
+    def cardinal(self, window, name):
+        """The first 32-bit value of property `name` on `window`, or None."""
+        atom = self._atom(name)
+        if not atom:
+            return None
+        actual_type = ctypes.c_ulong()
+        actual_format = ctypes.c_int()
+        count = ctypes.c_ulong()
+        remaining = ctypes.c_ulong()
+        data = ctypes.c_void_p()
+        status = self._lib.XGetWindowProperty(
+            self._display, ctypes.c_ulong(window), ctypes.c_ulong(atom),
+            0, 1, False, ctypes.c_ulong(_ANY_PROPERTY_TYPE),
+            ctypes.byref(actual_type), ctypes.byref(actual_format),
+            ctypes.byref(count), ctypes.byref(remaining), ctypes.byref(data))
+        if status != 0 or not data:
+            return None
+        try:
+            if actual_format.value != 32 or count.value < 1:
+                return None
+            # Xlib hands 32-bit items back as C longs.
+            return int(ctypes.cast(
+                data, ctypes.POINTER(ctypes.c_ulong))[0]) & 0xFFFFFFFF
+        finally:
+            self._lib.XFree(data)
+
+    def pid(self, window):
+        return self.cardinal(window, "_NET_WM_PID")
+
+    def is_override_redirect(self, window):
+        attributes = _XWindowAttributes()
+        if not self._lib.XGetWindowAttributes(
+                self._display, ctypes.c_ulong(window),
+                ctypes.byref(attributes)):
+            return True
+        return bool(attributes.override_redirect)
+
+    def is_mapped(self, window):
+        attributes = _XWindowAttributes()
+        if not self._lib.XGetWindowAttributes(
+                self._display, ctypes.c_ulong(window),
+                ctypes.byref(attributes)):
+            return False
+        return attributes.map_state != 0
+
+    def delete_property(self, window, name):
+        atom = self._atom(name)
+        if atom:
+            self._lib.XDeleteProperty(
+                self._display, ctypes.c_ulong(window), ctypes.c_ulong(atom))
+
+    def withdraw(self, window):
+        return bool(self._lib.XWithdrawWindow(
+            self._display, ctypes.c_ulong(window),
+            self._lib.XDefaultScreen(self._display)))
+
+    def map(self, window):
+        self._lib.XMapWindow(self._display, ctypes.c_ulong(window))
+
+    def ask_to_close(self, window):
+        """Send WM_DELETE_WINDOW, as a window manager's close button does."""
+        protocols = self._atom("WM_PROTOCOLS")
+        delete = self._atom("WM_DELETE_WINDOW")
+        if not protocols or not delete:
+            return False
+        event = _XClientMessage()
+        event.type = _CLIENT_MESSAGE
+        event.send_event = 1
+        event.window = window
+        event.message_type = protocols
+        event.format = 32
+        event.data[0] = delete
+        event.data[1] = 0           # CurrentTime
+        return bool(self._lib.XSendEvent(
+            self._display, ctypes.c_ulong(window), False, _NO_EVENT_MASK,
+            ctypes.byref(event)))
+
+
+@contextmanager
+def _x_window_control(display):
+    """Like _x_windows, with the window-control operations; or None."""
+    lib = _load_xlib()
+    handle = None
+    if lib is not None and display:
+        handle = lib.XOpenDisplay(str(display).encode())
+    if not handle:
+        yield None
+        return
+    handle = ctypes.c_void_p(handle)
+    previous = lib.XSetErrorHandler(_IGNORE_X_ERROR)
+    try:
+        try:
+            control = _XlibWindowControl(lib, handle)
+        except AttributeError:
+            control = None
+        yield control
+    finally:
+        try:
+            lib.XSetErrorHandler(previous)
+        finally:
+            lib.XCloseDisplay(handle)
+
+
+def _class_toplevels(windows, wanted, depth=_WINDOW_SEARCH_DEPTH,
+                     budget=_WINDOW_SEARCH_BUDGET):
+    """Every `wanted` toplevel, mapped or not, looking inside WM frames."""
+    found = []
+    pending = [(windows.root(), 0)]
+    while pending and budget > 0:
+        window, level = pending.pop(0)
+        budget -= 1
+        names = ()
+        if level:
+            names = tuple(str(name).lower()
+                          for name in windows.wm_classes(window))
+            if wanted in names:
+                if not windows.is_override_redirect(window):
+                    found.append(window)
+                continue
+        if not names and level < depth:
+            pending.extend(
+                (child, level + 1) for child in windows.children(window))
+    return found
+
+
+def _instance_windows(windows, wm_class, pids):
+    """The `wm_class` toplevels owned by one of `pids` (any, when None)."""
+    wanted = str(wm_class or "").strip().lower()
+    if not wanted:
+        return []
+    found = _class_toplevels(windows, wanted)
+    if pids is None:
+        return found
+    owned = {int(pid) for pid in pids}
+    return [window for window in found if windows.pid(window) in owned]
+
+
+def _with_window_control(display, windows, action):
+    """Run `action(windows)` on an open display; 0 when there is none."""
+    if windows is not None:
+        return action(windows)
+    target = str(display if display is not None
+                 else os.environ.get("DISPLAY", "")).strip()
+    if not target:
+        return 0
+    try:
+        with _x_window_control(target) as opened:
+            if opened is None:
+                return 0
+            return action(opened)
+    except Exception:
+        return 0
+
+
+def count_instance_windows(wm_class, pids=None, display=None, windows=None):
+    """How many `wm_class` toplevels belong to `pids`, mapped or not."""
+    return _with_window_control(
+        display, windows,
+        lambda opened: len(_instance_windows(opened, wm_class, pids)))
+
+
+def hide_instance_windows(wm_class, pids=None, display=None, windows=None):
+    """Withdraw every on-screen window of one game; how many were.
+
+    Zero, never an error, when the display or libX11 is not there.
+    """
+    def action(opened):
+        hidden = 0
+        for window in _instance_windows(opened, wm_class, pids):
+            if not opened.is_presentable(window):
+                continue
+            opened.set_cardinal(window, HIDDEN_PROPERTY, 1)
+            if opened.withdraw(window):
+                hidden += 1
+        opened.flush()
+        return hidden
+
+    return _with_window_control(display, windows, action)
+
+
+def show_instance_windows(wm_class, pids=None, display=None, windows=None):
+    """Map back the windows hide_instance_windows withdrew; how many."""
+    def action(opened):
+        shown = 0
+        for window in _instance_windows(opened, wm_class, pids):
+            if not opened.cardinal(window, HIDDEN_PROPERTY):
+                continue
+            opened.delete_property(window, HIDDEN_PROPERTY)
+            if not opened.is_mapped(window):
+                opened.map(window)
+            shown += 1
+        opened.flush()
+        return shown
+
+    return _with_window_control(display, windows, action)
+
+
+def close_instance_windows(wm_class, pids=None, display=None, windows=None):
+    """Ask one game's windows to close, hidden ones included; how many."""
+    def action(opened):
+        asked = 0
+        for window in _instance_windows(opened, wm_class, pids):
+            mapped = opened.is_presentable(window)
+            if not mapped and not opened.cardinal(window, HIDDEN_PROPERTY):
+                # One of the windows Wine keeps unmapped for itself.
+                continue
+            if opened.ask_to_close(window):
+                asked += 1
+        opened.flush()
+        return asked
+
+    return _with_window_control(display, windows, action)
