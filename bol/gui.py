@@ -42,7 +42,7 @@ from .content import game_content_dir, import_content
 from .doctor import acknowledge_gpu_crash, gpu_crash_acknowledgement_status
 from .games import (installed_builds, installed_versions, list_editions,
                     list_versions, remove_build)
-from .gamesetup import do_setup
+from .gamesetup import setup_or_join
 from . import betterrtx, gpus
 from .inject import run_injector
 from . import icons
@@ -1583,8 +1583,8 @@ class LaunchWorker(QThread):
 
     def run(self):
         try:
-            do_setup(mc_edition=self._ver["edition"], mc_version=self._ver["tag"],
-                      progress=lambda g, t: self.progress.emit(g, t))
+            setup_or_join(self._ver["edition"], self._ver["tag"],
+                          progress=lambda g, t: self.progress.emit(g, t))
             action = window_action_for_launch(load_settings(), single_window_session())
 
             def on_started():

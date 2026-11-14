@@ -166,6 +166,27 @@ def shared_assets_lock(operation, exclusive):
         os.close(fd)
 
 
+def shared_assets_busy():
+    """Whether a game or an installation holds the shared files right now.
+
+    A probe, not a lock: it takes the exclusive lock and lets go of it at
+    once. A launch that skips setup on its answer still goes through
+    :func:`launch_lock`, which settles any race with the real locks.
+    """
+    try:
+        path = GAMES.resolve(strict=False).parent / ".shared-assets.lock"
+        fd = os.open(path, os.O_RDWR)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
 # How long a launch waits for the shared files while another profile's launch
 # prepares them. Preparing takes a few seconds; an installation or an update
 # holds them for minutes, and is not waited for.

@@ -42,7 +42,7 @@ class EditorButtonTests(unittest.TestCase):
     def test_the_launch_thread_carries_the_flag(self):
         worker = gui.LaunchWorker({"edition": "release", "tag": "1"},
                                   editor=True)
-        with mock.patch.object(gui, "do_setup"), \
+        with mock.patch.object(gui, "setup_or_join"), \
                 mock.patch.object(gui, "single_window_session",
                                   return_value=False), \
                 mock.patch.object(gui, "load_settings", return_value={}), \

@@ -97,6 +97,14 @@
 
 ### Fixed
 
+- **PLAY in the window starts beside games already running.** With two
+  profiles playing, PLAY refused a third game: "shared Minecraft files are
+  in use by another BedrockOnLinux profile". It ran the full setup, which
+  needs those files alone, even for a build already on disk. A build that is
+  installed now starts beside the others, as a profile started from the
+  Profiles page does; one that still has to be downloaded says that the
+  other games must be closed first.
+
 - **The first-run network question is a real dialog.** It opened as a
   column wedged between the navigation rail and the page, with the text
   squeezed into it; update and notice banners landed in the same place. The

@@ -287,7 +287,7 @@ class DownloadSignInIsOfferedWhereItIsMissedTests(unittest.TestCase):
         seen = {"failed": [], "offer": []}
         worker.failed.connect(seen["failed"].append)
         worker.needs_store_signin.connect(seen["offer"].append)
-        with mock.patch.object(gui, "do_setup",
+        with mock.patch.object(gui, "setup_or_join",
                                side_effect=xodus.NotSignedIn("no account")):
             worker.run()
         self.assertEqual(seen["failed"], [])
@@ -298,7 +298,7 @@ class DownloadSignInIsOfferedWhereItIsMissedTests(unittest.TestCase):
         seen = {"failed": [], "offer": []}
         worker.failed.connect(seen["failed"].append)
         worker.needs_store_signin.connect(seen["offer"].append)
-        with mock.patch.object(gui, "do_setup",
+        with mock.patch.object(gui, "setup_or_join",
                                side_effect=RuntimeError("disk full")):
             worker.run()
         self.assertEqual(seen["failed"], ["disk full"])

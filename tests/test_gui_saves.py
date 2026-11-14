@@ -87,7 +87,7 @@ class SessionNoticeTests(unittest.TestCase):
             notices.append("signed out")
             return 0
 
-        with mock.patch.object(gui, "do_setup"), \
+        with mock.patch.object(gui, "setup_or_join"), \
                 mock.patch.object(gui, "launch", side_effect=play):
             worker.run()
         self.assertEqual(seen, [("notice", "signed out"), ("done", "closed")])

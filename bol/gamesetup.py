@@ -28,6 +28,7 @@ from .games import (
     prune_legacy_game_archives,
     use_game_dir,
     uses_xbox_live,
+    version_dir,
 )
 from .log import BolError, desktop_notify, info, ok, warn
 from .prefix import (
@@ -49,6 +50,37 @@ def do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
             prefix_operation_lock("install or update BedrockOnLinux"):
         return _do_setup(game_dir, mc_edition, mc_version, proton_tag,
                          force, progress)
+
+
+def setup_or_join(edition, version, progress=None, busy=None):
+    """Prepare the build PLAY asked for, with other games possibly running.
+
+    With no other game, this is :func:`do_setup`. While other profiles play,
+    the shared game and engine files cannot be written, and do not need to
+    be when the build asked for is already complete on disk: it is selected
+    for this profile and the launch joins the running games, as a profile
+    started from the Profiles page or a shortcut does. A build that still
+    has to be downloaded waits until the other games are closed, and says
+    so.
+    """
+    from .prefix import shared_assets_busy
+    if not (busy or shared_assets_busy)():
+        return do_setup(mc_edition=edition, mc_version=version,
+                        progress=progress)
+    edition_id = (edition or {}).get("id")
+    folder = version_dir(edition_id, version) if edition_id and version \
+        else None
+    if folder is not None and _game_root(
+            folder, edition_exe(edition)) is not None:
+        info("Other games are running: starting the installed "
+             f"{version} beside them.")
+        return use_game_dir(folder)
+    name = (edition or {}).get("name") or "Minecraft"
+    raise BolError(
+        f"{name} {version or ''} is not installed yet, and installing it "
+        "needs the shared game files that the games already running are "
+        "using. Pick a version that is already installed to play it beside "
+        "them, or close the other games first.".replace("  ", " "))
 
 
 # Off unless asked for: a server that has not updated yet refuses a newer
