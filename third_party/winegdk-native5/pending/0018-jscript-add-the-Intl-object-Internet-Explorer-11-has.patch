@@ -1,0 +1,744 @@
+From: BedrockOnLinux contributors
+Subject: [PATCH] jscript: add the Intl object Internet Explorer 11 has
+
+Pages built for Internet Explorer 11 use Intl without testing for it.
+The Microsoft account sign-in page, which Minecraft Education opens in
+its embedded browser, is a React app whose react-intl provider reads
+Intl.NumberFormat and friends while it renders: with no Intl at all the
+first render threw, React then failed to report the error because
+ErrorEvent is missing too, and the sign-in window stayed an empty card
+(issue #351).
+
+Add Intl with NumberFormat, DateTimeFormat and Collator, which is what
+IE11 shipped: format, formatToParts, resolvedOptions, compare and
+supportedLocalesOf, formatted by the Windows locale functions, and
+Intl.getCanonicalLocales. Methods called unbound, as pages pass compare
+to sort, use the script's locale. String.prototype.localeCompare, a
+FIXME until now, compares the same way.
+---
+ dlls/jscript/Makefile.in |   1 +
+ dlls/jscript/global.c    |  10 +-
+ dlls/jscript/intl.c      | 633 +++++++++++++++++++++++++++++++++++++++
+ dlls/jscript/jscript.h   |   9 +-
+ dlls/jscript/string.c    |   7 +-
+ 5 files changed, 655 insertions(+), 5 deletions(-)
+ create mode 100644 dlls/jscript/intl.c
+
+diff --git a/dlls/jscript/Makefile.in b/dlls/jscript/Makefile.in
+index ef1a809951c..4ca96d11606 100644
+--- a/dlls/jscript/Makefile.in
++++ b/dlls/jscript/Makefile.in
+@@ -19,6 +19,7 @@ SOURCES = \
+ 	error.c \
+ 	function.c \
+ 	global.c \
++	intl.c \
+ 	jscript.c \
+ 	jscript.rc \
+ 	jscript_classes.idl \
+diff --git a/dlls/jscript/global.c b/dlls/jscript/global.c
+index bb2fd26335b..b2f79ce6f9e 100644
+--- a/dlls/jscript/global.c
++++ b/dlls/jscript/global.c
+@@ -1149,5 +1149,13 @@ HRESULT init_global(script_ctx_t *ctx)
+     if(FAILED(hres))
+         return hres;
+ 
+-    return init_set_constructor(ctx);
++    hres = init_set_constructor(ctx);
++    if(FAILED(hres))
++        return hres;
++
++    /* Internet Explorer 11 has the ECMA-402 Intl object, which pages
++     * built for it use without testing for it. */
++    if(ctx->version >= SCRIPTLANGUAGEVERSION_ES5)
++        return init_intl(ctx);
++    return S_OK;
+ }
+diff --git a/dlls/jscript/intl.c b/dlls/jscript/intl.c
+new file mode 100644
+index 00000000000..77023c436f3
+--- /dev/null
++++ b/dlls/jscript/intl.c
+@@ -0,0 +1,633 @@
++/*
++ * The ECMA-402 Intl object, at the level Internet Explorer 11 shipped it:
++ * NumberFormat, DateTimeFormat and Collator, formatted by the Windows
++ * locale functions.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include <math.h>
++
++#include "jscript.h"
++
++#include "wine/debug.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(jscript);
++
++enum intl_kind {
++    INTL_NUMBER,
++    INTL_DATE,
++    INTL_COLLATOR,
++};
++
++/* Which parts a DateTimeFormat shows: the date, the time, or both. */
++#define INTL_DATE_PART 1
++#define INTL_TIME_PART 2
++
++typedef struct {
++    jsdisp_t dispex;
++    enum intl_kind kind;
++    WCHAR locale[LOCALE_NAME_MAX_LENGTH];
++    unsigned parts;
++} IntlInstance;
++
++static const builtin_info_t NumberFormat_info;
++static const builtin_info_t DateTimeFormat_info;
++static const builtin_info_t Collator_info;
++
++static IntlInstance *intl_this(jsval_t vthis, enum intl_kind kind)
++{
++    jsdisp_t *jsdisp;
++    IntlInstance *intl;
++
++    if(!is_object_instance(vthis) || !(jsdisp = to_jsdisp(get_object(vthis))))
++        return NULL;
++    if(jsdisp->builtin_info != &NumberFormat_info && jsdisp->builtin_info != &DateTimeFormat_info
++       && jsdisp->builtin_info != &Collator_info)
++        return NULL;
++    intl = CONTAINING_RECORD(jsdisp, IntlInstance, dispex);
++    return intl->kind == kind ? intl : NULL;
++}
++
++static jsval_t jsval_copy_string(jsval_t v)
++{
++    return jsval_string(jsstr_addref(get_string(v)));
++}
++
++/* The locale a method formats for: its object's, else the script's own,
++ * as when a page passes format or compare around unbound. */
++static void intl_locale(script_ctx_t *ctx, IntlInstance *intl, WCHAR *buf)
++{
++    if(intl) {
++        lstrcpyW(buf, intl->locale);
++        return;
++    }
++    if(!LCIDToLocaleName(ctx->lcid, buf, LOCALE_NAME_MAX_LENGTH, 0))
++        lstrcpyW(buf, L"en-US");
++}
++
++/* The first locale of a `locales` argument (a string or an array of them)
++ * that Windows knows, else the script's own. */
++static HRESULT pick_locale(script_ctx_t *ctx, jsval_t locales, WCHAR *buf)
++{
++    const WCHAR *str;
++    jsstr_t *jsstr;
++    jsval_t first;
++    HRESULT hres;
++
++    intl_locale(ctx, NULL, buf);
++    first = locales;
++    if(is_object_instance(locales)) {
++        jsdisp_t *array = to_jsdisp(get_object(locales));
++        if(!array || !is_class(array, JSCLASS_ARRAY))
++            return S_OK;
++        hres = jsdisp_get_idx(array, 0, &first);
++        if(FAILED(hres) || hres == DISP_E_UNKNOWNNAME)
++            return S_OK;
++    }else if(!is_string(locales)) {
++        return S_OK;
++    }else {
++        first = jsval_copy_string(locales);
++    }
++
++    hres = to_flat_string(ctx, first, &jsstr, &str);
++    jsval_release(first);
++    if(FAILED(hres))
++        return hres;
++    if(*str && jsstr_length(jsstr) < LOCALE_NAME_MAX_LENGTH && IsValidLocaleName(str))
++        lstrcpyW(buf, str);
++    jsstr_release(jsstr);
++    return S_OK;
++}
++
++static HRESULT put_string(jsdisp_t *obj, const WCHAR *name, const WCHAR *value)
++{
++    jsstr_t *str = jsstr_alloc(value);
++    HRESULT hres;
++
++    if(!str)
++        return E_OUTOFMEMORY;
++    hres = jsdisp_propput_name(obj, name, jsval_string(str));
++    jsstr_release(str);
++    return hres;
++}
++
++/* An array of one part, {type, value}, for formatToParts. */
++static HRESULT one_part(script_ctx_t *ctx, const WCHAR *type, jsstr_t *value, jsval_t *r)
++{
++    jsdisp_t *array, *part;
++    HRESULT hres;
++
++    hres = create_array(ctx, 0, &array);
++    if(FAILED(hres))
++        return hres;
++    hres = create_object(ctx, NULL, &part);
++    if(SUCCEEDED(hres)) {
++        hres = put_string(part, L"type", type);
++        if(SUCCEEDED(hres))
++            hres = jsdisp_propput_name(part, L"value", jsval_string(value));
++        if(SUCCEEDED(hres))
++            hres = jsdisp_propput_idx(array, 0, jsval_obj(part));
++        jsdisp_release(part);
++    }
++    if(FAILED(hres)) {
++        jsdisp_release(array);
++        return hres;
++    }
++    *r = jsval_obj(array);
++    return S_OK;
++}
++
++static HRESULT format_number(script_ctx_t *ctx, IntlInstance *intl, unsigned argc, jsval_t *argv,
++        jsstr_t **ret)
++{
++    WCHAR locale[LOCALE_NAME_MAX_LENGTH];
++    LCID saved = ctx->lcid, lcid;
++    double n = NAN;
++    HRESULT hres;
++
++    if(argc) {
++        hres = to_number(ctx, argv[0], &n);
++        if(FAILED(hres))
++            return hres;
++    }
++    intl_locale(ctx, intl, locale);
++    lcid = LocaleNameToLCID(locale, 0);
++    if(lcid)
++        ctx->lcid = lcid;
++    hres = localize_number(ctx, n, TRUE, ret);
++    ctx->lcid = saved;
++    return hres;
++}
++
++static HRESULT NumberFormat_format(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
++        jsval_t *r)
++{
++    jsstr_t *str;
++    HRESULT hres;
++
++    hres = format_number(ctx, intl_this(vthis, INTL_NUMBER), argc, argv, &str);
++    if(FAILED(hres))
++        return hres;
++    if(r)
++        *r = jsval_string(str);
++    else
++        jsstr_release(str);
++    return S_OK;
++}
++
++static HRESULT NumberFormat_formatToParts(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc,
++        jsval_t *argv, jsval_t *r)
++{
++    jsstr_t *str;
++    HRESULT hres;
++
++    hres = format_number(ctx, intl_this(vthis, INTL_NUMBER), argc, argv, &str);
++    if(FAILED(hres))
++        return hres;
++    hres = r ? one_part(ctx, L"literal", str, r) : S_OK;
++    jsstr_release(str);
++    return hres;
++}
++
++static HRESULT resolved_options(script_ctx_t *ctx, IntlInstance *intl, jsval_t *r)
++{
++    WCHAR locale[LOCALE_NAME_MAX_LENGTH];
++    jsdisp_t *obj;
++    HRESULT hres;
++
++    hres = create_object(ctx, NULL, &obj);
++    if(FAILED(hres))
++        return hres;
++    intl_locale(ctx, intl, locale);
++    hres = put_string(obj, L"locale", locale);
++    if(SUCCEEDED(hres) && intl && intl->kind != INTL_COLLATOR)
++        hres = put_string(obj, L"numberingSystem", L"latn");
++    if(SUCCEEDED(hres) && intl && intl->kind == INTL_NUMBER) {
++        hres = put_string(obj, L"style", L"decimal");
++        if(SUCCEEDED(hres))
++            hres = jsdisp_propput_name(obj, L"useGrouping", jsval_bool(TRUE));
++        if(SUCCEEDED(hres))
++            hres = jsdisp_propput_name(obj, L"minimumIntegerDigits", jsval_number(1));
++        if(SUCCEEDED(hres))
++            hres = jsdisp_propput_name(obj, L"minimumFractionDigits", jsval_number(0));
++        if(SUCCEEDED(hres))
++            hres = jsdisp_propput_name(obj, L"maximumFractionDigits", jsval_number(3));
++    }
++    if(SUCCEEDED(hres) && intl && intl->kind == INTL_DATE) {
++        hres = put_string(obj, L"calendar", L"gregory");
++        if(SUCCEEDED(hres))
++            hres = put_string(obj, L"timeZone", L"UTC");
++    }
++    if(SUCCEEDED(hres) && intl && intl->kind == INTL_COLLATOR) {
++        hres = put_string(obj, L"usage", L"sort");
++        if(SUCCEEDED(hres))
++            hres = put_string(obj, L"sensitivity", L"variant");
++    }
++    if(FAILED(hres)) {
++        jsdisp_release(obj);
++        return hres;
++    }
++    *r = jsval_obj(obj);
++    return S_OK;
++}
++
++static HRESULT Intl_resolvedOptions(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
++        jsval_t *r)
++{
++    IntlInstance *intl = NULL;
++
++    if(is_object_instance(vthis)) {
++        if(!(intl = intl_this(vthis, INTL_NUMBER)) && !(intl = intl_this(vthis, INTL_DATE)))
++            intl = intl_this(vthis, INTL_COLLATOR);
++    }
++    return r ? resolved_options(ctx, intl, r) : S_OK;
++}
++
++/* Milliseconds since 1970 UTC as the local SYSTEMTIME. */
++static BOOL time_to_systemtime(double t, SYSTEMTIME *st)
++{
++    ULARGE_INTEGER ft;
++    SYSTEMTIME utc;
++
++    /* FILETIME starts in 1601, 11644473600 seconds before 1970. */
++    if(isnan(t) || t < -11644473600000.0 || t > 8.64e15)
++        return FALSE;
++    ft.QuadPart = (ULONGLONG)((LONGLONG)t * 10000 + 116444736000000000ll);
++    if(!FileTimeToSystemTime((FILETIME*)&ft, &utc))
++        return FALSE;
++    return SystemTimeToTzSpecificLocalTime(NULL, &utc, st);
++}
++
++static HRESULT format_date(script_ctx_t *ctx, IntlInstance *intl, unsigned argc, jsval_t *argv, jsstr_t **ret)
++{
++    WCHAR locale[LOCALE_NAME_MAX_LENGTH], buf[256];
++    unsigned parts = intl ? intl->parts : INTL_DATE_PART;
++    SYSTEMTIME st;
++    double t;
++    int len = 0;
++    HRESULT hres;
++
++    if(!argc || is_undefined(argv[0])) {
++        FILETIME now;
++        GetSystemTimeAsFileTime(&now);
++        t = (double)((((ULONGLONG)now.dwHighDateTime << 32 | now.dwLowDateTime) - 116444736000000000ull)
++                     / 10000);
++    }else {
++        hres = to_number(ctx, argv[0], &t);
++        if(FAILED(hres))
++            return hres;
++    }
++    if(!time_to_systemtime(t, &st))
++        return throw_error(ctx, JS_E_INVALIDARG, L"Invalid date");
++
++    intl_locale(ctx, intl, locale);
++    if(parts & INTL_DATE_PART) {
++        len = GetDateFormatEx(locale, DATE_SHORTDATE, &st, NULL, buf, ARRAY_SIZE(buf), NULL);
++        if(len)
++            len--;
++    }
++    if(parts & INTL_TIME_PART) {
++        if(len && len < ARRAY_SIZE(buf) - 1)
++            buf[len++] = ' ';
++        if(len < ARRAY_SIZE(buf)) {
++            int time_len = GetTimeFormatEx(locale, 0, &st, NULL, buf + len, ARRAY_SIZE(buf) - len);
++            if(time_len)
++                len += time_len - 1;
++        }
++    }
++    if(!(*ret = jsstr_alloc_len(buf, len)))
++        return E_OUTOFMEMORY;
++    return S_OK;
++}
++
++static HRESULT DateTimeFormat_format(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
++        jsval_t *r)
++{
++    jsstr_t *str;
++    HRESULT hres;
++
++    hres = format_date(ctx, intl_this(vthis, INTL_DATE), argc, argv, &str);
++    if(FAILED(hres))
++        return hres;
++    if(r)
++        *r = jsval_string(str);
++    else
++        jsstr_release(str);
++    return S_OK;
++}
++
++static HRESULT DateTimeFormat_formatToParts(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc,
++        jsval_t *argv, jsval_t *r)
++{
++    jsstr_t *str;
++    HRESULT hres;
++
++    hres = format_date(ctx, intl_this(vthis, INTL_DATE), argc, argv, &str);
++    if(FAILED(hres))
++        return hres;
++    hres = r ? one_part(ctx, L"literal", str, r) : S_OK;
++    jsstr_release(str);
++    return hres;
++}
++
++HRESULT intl_compare_strings(script_ctx_t *ctx, const WCHAR *locale, jsval_t a, jsval_t b, jsval_t *r)
++{
++    WCHAR buf[LOCALE_NAME_MAX_LENGTH];
++    const WCHAR *sa, *sb;
++    jsstr_t *ja, *jb;
++    HRESULT hres;
++    int res;
++
++    hres = to_flat_string(ctx, a, &ja, &sa);
++    if(FAILED(hres))
++        return hres;
++    hres = to_flat_string(ctx, b, &jb, &sb);
++    if(FAILED(hres)) {
++        jsstr_release(ja);
++        return hres;
++    }
++    if(!locale) {
++        intl_locale(ctx, NULL, buf);
++        locale = buf;
++    }
++    res = CompareStringEx(locale, 0, sa, jsstr_length(ja), sb, jsstr_length(jb), NULL, NULL, 0);
++    jsstr_release(ja);
++    jsstr_release(jb);
++    if(!res)
++        return E_FAIL;
++    if(r)
++        *r = jsval_number(res - CSTR_EQUAL);
++    return S_OK;
++}
++
++static HRESULT Collator_compare(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
++        jsval_t *r)
++{
++    IntlInstance *intl = intl_this(vthis, INTL_COLLATOR);
++
++    return intl_compare_strings(ctx, intl ? intl->locale : NULL, argc > 0 ? argv[0] : jsval_undefined(),
++                                argc > 1 ? argv[1] : jsval_undefined(), r);
++}
++
++/* supportedLocalesOf and getCanonicalLocales: the locales asked for that
++ * Windows knows, as an array. */
++static HRESULT Intl_supportedLocales(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
++        jsval_t *r)
++{
++    jsdisp_t *ret, *list = NULL;
++    DWORD length = 1, i, n = 0;
++    HRESULT hres;
++
++    hres = create_array(ctx, 0, &ret);
++    if(FAILED(hres))
++        return hres;
++    if(argc && is_object_instance(argv[0]) && (list = to_jsdisp(get_object(argv[0])))
++       && is_class(list, JSCLASS_ARRAY))
++        length = array_get_length(list);
++    else
++        list = NULL;
++
++    for(i = 0; i < length && SUCCEEDED(hres); i++) {
++        const WCHAR *str;
++        jsstr_t *jsstr;
++        jsval_t v;
++
++        if(list) {
++            hres = jsdisp_get_idx(list, i, &v);
++            if(FAILED(hres) || hres == DISP_E_UNKNOWNNAME) {
++                hres = S_OK;
++                continue;
++            }
++        }else if(argc && is_string(argv[0])) {
++            v = jsval_copy_string(argv[0]);
++        }else {
++            break;
++        }
++        hres = to_flat_string(ctx, v, &jsstr, &str);
++        jsval_release(v);
++        if(FAILED(hres))
++            break;
++        if(*str && IsValidLocaleName(str))
++            hres = jsdisp_propput_idx(ret, n++, jsval_string(jsstr));
++        jsstr_release(jsstr);
++    }
++    if(FAILED(hres)) {
++        jsdisp_release(ret);
++        return hres;
++    }
++    if(r)
++        *r = jsval_obj(ret);
++    else
++        jsdisp_release(ret);
++    return S_OK;
++}
++
++static HRESULT Intl_value(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
++        jsval_t *r)
++{
++    return throw_error(ctx, JS_E_WRONG_THIS, NULL);
++}
++
++/* Whether a DateTimeFormat's options name any of the given fields. */
++static BOOL has_option(script_ctx_t *ctx, jsval_t options, const WCHAR *const *names)
++{
++    jsdisp_t *obj;
++    jsval_t v;
++
++    if(!is_object_instance(options) || !(obj = to_jsdisp(get_object(options))))
++        return FALSE;
++    for(; *names; names++) {
++        if(SUCCEEDED(jsdisp_propget_name(obj, *names, &v))) {
++            BOOL set = !is_undefined(v);
++            jsval_release(v);
++            if(set)
++                return TRUE;
++        }
++    }
++    return FALSE;
++}
++
++static HRESULT create_intl(script_ctx_t *ctx, enum intl_kind kind, unsigned argc, jsval_t *argv, jsval_t *r)
++{
++    static const WCHAR *const date_fields[] = {L"weekday", L"era", L"year", L"month", L"day", L"dateStyle", NULL};
++    static const WCHAR *const time_fields[] = {L"hour", L"minute", L"second", L"timeStyle", NULL};
++    static const builtin_info_t *const infos[] = {&NumberFormat_info, &DateTimeFormat_info, &Collator_info};
++    jsdisp_t *prototype = kind == INTL_NUMBER ? ctx->intl_numberformat_prototype
++            : kind == INTL_DATE ? ctx->intl_datetimeformat_prototype : ctx->intl_collator_prototype;
++    IntlInstance *intl;
++    HRESULT hres;
++
++    TRACE("%d\n", kind);
++
++    if(!r)
++        return S_OK;
++    if(!(intl = calloc(1, sizeof(*intl))))
++        return E_OUTOFMEMORY;
++    intl->kind = kind;
++    hres = pick_locale(ctx, argc > 0 ? argv[0] : jsval_undefined(), intl->locale);
++    if(FAILED(hres)) {
++        free(intl);
++        return hres;
++    }
++    if(kind == INTL_DATE) {
++        jsval_t options = argc > 1 ? argv[1] : jsval_undefined();
++        if(has_option(ctx, options, date_fields))
++            intl->parts |= INTL_DATE_PART;
++        if(has_option(ctx, options, time_fields))
++            intl->parts |= INTL_TIME_PART;
++        if(!intl->parts)
++            intl->parts = INTL_DATE_PART;
++    }
++    hres = init_dispex(&intl->dispex, ctx, infos[kind], prototype);
++    if(FAILED(hres)) {
++        free(intl);
++        return hres;
++    }
++    *r = jsval_obj(&intl->dispex);
++    return S_OK;
++}
++
++/* Called as a function or as a constructor alike, as ECMA-402 allows. */
++static HRESULT NumberFormat_constructor(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc,
++        jsval_t *argv, jsval_t *r)
++{
++    return create_intl(ctx, INTL_NUMBER, argc, argv, r);
++}
++
++static HRESULT DateTimeFormat_constructor(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc,
++        jsval_t *argv, jsval_t *r)
++{
++    return create_intl(ctx, INTL_DATE, argc, argv, r);
++}
++
++static HRESULT Collator_constructor(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc,
++        jsval_t *argv, jsval_t *r)
++{
++    return create_intl(ctx, INTL_COLLATOR, argc, argv, r);
++}
++
++static const builtin_prop_t NumberFormat_prototype_props[] = {
++    {L"format",           NumberFormat_format,         PROPF_METHOD|1},
++    {L"formatToParts",    NumberFormat_formatToParts,  PROPF_METHOD|1},
++    {L"resolvedOptions",  Intl_resolvedOptions,        PROPF_METHOD},
++};
++
++static const builtin_prop_t DateTimeFormat_prototype_props[] = {
++    {L"format",           DateTimeFormat_format,       PROPF_METHOD|1},
++    {L"formatToParts",    DateTimeFormat_formatToParts, PROPF_METHOD|1},
++    {L"resolvedOptions",  Intl_resolvedOptions,        PROPF_METHOD},
++};
++
++static const builtin_prop_t Collator_prototype_props[] = {
++    {L"compare",          Collator_compare,            PROPF_METHOD|2},
++    {L"resolvedOptions",  Intl_resolvedOptions,        PROPF_METHOD},
++};
++
++static const builtin_info_t NumberFormat_prototype_info = {
++    .class     = JSCLASS_OBJECT,
++    .call      = Intl_value,
++    .props_cnt = ARRAY_SIZE(NumberFormat_prototype_props),
++    .props     = NumberFormat_prototype_props,
++};
++
++static const builtin_info_t DateTimeFormat_prototype_info = {
++    .class     = JSCLASS_OBJECT,
++    .call      = Intl_value,
++    .props_cnt = ARRAY_SIZE(DateTimeFormat_prototype_props),
++    .props     = DateTimeFormat_prototype_props,
++};
++
++static const builtin_info_t Collator_prototype_info = {
++    .class     = JSCLASS_OBJECT,
++    .call      = Intl_value,
++    .props_cnt = ARRAY_SIZE(Collator_prototype_props),
++    .props     = Collator_prototype_props,
++};
++
++static const builtin_info_t NumberFormat_info = {
++    .class      = JSCLASS_OBJECT,
++    .call       = Intl_value,
++};
++
++static const builtin_info_t DateTimeFormat_info = {
++    .class      = JSCLASS_OBJECT,
++    .call       = Intl_value,
++};
++
++static const builtin_info_t Collator_info = {
++    .class      = JSCLASS_OBJECT,
++    .call       = Intl_value,
++};
++
++static const builtin_prop_t Intl_props[] = {
++    {L"getCanonicalLocales", Intl_supportedLocales, PROPF_METHOD|1},
++};
++
++static const builtin_info_t Intl_info = {
++    .class     = JSCLASS_OBJECT,
++    .call      = Intl_value,
++    .props_cnt = ARRAY_SIZE(Intl_props),
++    .props     = Intl_props,
++};
++
++static HRESULT add_constructor(script_ctx_t *ctx, jsdisp_t *intl, const builtin_info_t *prototype_info,
++        builtin_invoke_t invoke, const WCHAR *name, jsdisp_t **prototype)
++{
++    jsdisp_t *constr, *supported;
++    HRESULT hres;
++
++    hres = create_dispex(ctx, prototype_info, ctx->object_prototype, prototype);
++    if(FAILED(hres))
++        return hres;
++    hres = create_builtin_constructor(ctx, invoke, name, NULL, PROPF_CONSTR, *prototype, &constr);
++    if(FAILED(hres))
++        return hres;
++    hres = create_builtin_function(ctx, Intl_supportedLocales, L"supportedLocalesOf", NULL, PROPF_METHOD|1,
++                                   NULL, &supported);
++    if(SUCCEEDED(hres)) {
++        hres = jsdisp_define_data_property(constr, L"supportedLocalesOf", PROPF_CONFIGURABLE | PROPF_WRITABLE,
++                                           jsval_obj(supported));
++        jsdisp_release(supported);
++    }
++    if(SUCCEEDED(hres))
++        hres = jsdisp_define_data_property(intl, name, PROPF_CONFIGURABLE | PROPF_WRITABLE, jsval_obj(constr));
++    jsdisp_release(constr);
++    return hres;
++}
++
++HRESULT init_intl(script_ctx_t *ctx)
++{
++    jsdisp_t *intl;
++    HRESULT hres;
++
++    hres = create_dispex(ctx, &Intl_info, ctx->object_prototype, &intl);
++    if(FAILED(hres))
++        return hres;
++
++    hres = add_constructor(ctx, intl, &NumberFormat_prototype_info, NumberFormat_constructor,
++                           L"NumberFormat", &ctx->intl_numberformat_prototype);
++    if(SUCCEEDED(hres))
++        hres = add_constructor(ctx, intl, &DateTimeFormat_prototype_info, DateTimeFormat_constructor,
++                               L"DateTimeFormat", &ctx->intl_datetimeformat_prototype);
++    if(SUCCEEDED(hres))
++        hres = add_constructor(ctx, intl, &Collator_prototype_info, Collator_constructor,
++                               L"Collator", &ctx->intl_collator_prototype);
++    if(SUCCEEDED(hres))
++        hres = jsdisp_define_data_property(ctx->global, L"Intl", PROPF_CONFIGURABLE | PROPF_WRITABLE,
++                                           jsval_obj(intl));
++    jsdisp_release(intl);
++    return hres;
++}
+diff --git a/dlls/jscript/jscript.h b/dlls/jscript/jscript.h
+index f484b059bff..81ea124bbfe 100644
+--- a/dlls/jscript/jscript.h
++++ b/dlls/jscript/jscript.h
+@@ -441,11 +441,14 @@ struct _script_ctx_t {
+             jsdisp_t *map_prototype;
+             jsdisp_t *set_prototype;
+             jsdisp_t *weakmap_prototype;
++            jsdisp_t *intl_numberformat_prototype;
++            jsdisp_t *intl_datetimeformat_prototype;
++            jsdisp_t *intl_collator_prototype;
+         };
+-        jsdisp_t *global_objects[25 + NUM_TYPEDARRAY_TYPES];
++        jsdisp_t *global_objects[28 + NUM_TYPEDARRAY_TYPES];
+     };
+ };
+-C_ASSERT(RTL_SIZEOF_THROUGH_FIELD(script_ctx_t, weakmap_prototype) == RTL_SIZEOF_THROUGH_FIELD(script_ctx_t, global_objects));
++C_ASSERT(RTL_SIZEOF_THROUGH_FIELD(script_ctx_t, intl_collator_prototype) == RTL_SIZEOF_THROUGH_FIELD(script_ctx_t, global_objects));
+ 
+ struct weakmap_entry {
+     struct rb_entry entry;
+@@ -467,6 +470,8 @@ HRESULT init_global(script_ctx_t*);
+ HRESULT init_function_constr(script_ctx_t*,jsdisp_t*);
+ HRESULT create_object_prototype(script_ctx_t*,jsdisp_t**);
+ HRESULT init_set_constructor(script_ctx_t*);
++HRESULT init_intl(script_ctx_t*);
++HRESULT intl_compare_strings(script_ctx_t*,const WCHAR*,jsval_t,jsval_t,jsval_t*);
+ HRESULT init_arraybuf_constructors(script_ctx_t*);
+ 
+ HRESULT create_activex_constr(script_ctx_t*,jsdisp_t**);
+diff --git a/dlls/jscript/string.c b/dlls/jscript/string.c
+index 607dd7c0b65..877807bfaad 100644
+--- a/dlls/jscript/string.c
++++ b/dlls/jscript/string.c
+@@ -1490,8 +1490,11 @@ static HRESULT String_trim(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigne
+ static HRESULT String_localeCompare(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
+         jsval_t *r)
+ {
+-    FIXME("\n");
+-    return E_NOTIMPL;
++    TRACE("\n");
++
++    if(is_undefined(vthis) || is_null(vthis))
++        return throw_error(ctx, JS_E_OBJECT_EXPECTED, NULL);
++    return intl_compare_strings(ctx, NULL, vthis, argc ? argv[0] : jsval_undefined(), r);
+ }
+ 
+ static void String_destructor(jsdisp_t *dispex)

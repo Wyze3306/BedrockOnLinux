@@ -245,3 +245,13 @@ session's events, the collector refused none, the account's
 `BlockBrokenTotal` and `DistanceTravelled` stats grew by what they carried,
 and crafting a wooden hoe unlocked "Time to Farm!" and "MOAR Tools". The
 packager refuses an `xgameruntime.dll` built without the class.
+
+`pending/0018` adds the ECMA-402 `Intl` object to jscript, at the level
+Internet Explorer 11 shipped it (`NumberFormat`, `DateTimeFormat`, `Collator`),
+and implements `String.prototype.localeCompare`. Minecraft Education signs in
+through the IE WebBrowser control, which is Wine's mshtml with jscript; the
+Microsoft account page it opens is a React app that reads `Intl` while it
+renders, and with none the sign-in window stayed an empty card (issue #351).
+It touches no file `SOURCE-SHA256SUMS` pins. It is not applied yet: wiring it
+into the builders changes the engine's inputs, so it ships with the next engine
+revision.
