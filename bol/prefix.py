@@ -573,8 +573,43 @@ def _run_wineboot(pfx: Path, log_path: Path, native_cryptbase):
     return failure
 
 
+# Why the last boot_prefix() returned False, in a sentence; "" otherwise.
+LAST_BOOT_PROBLEM = ""
+
+
+def _log_tail(path, lines=6, width=200):
+    """The last meaningful lines of a log, for an error dialog."""
+    try:
+        with open(path, "rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 16384))
+            text = stream.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    kept = [line.strip()[:width] for line in text.splitlines()
+            if line.strip() and not line.startswith("BedrockOnLinux: wineboot")]
+    return kept[-lines:]
+
+
+def boot_failure_message(what):
+    """The error for a prefix that could not be created: what stopped, why,
+    the end of the log, and what to send."""
+    log_path = LOGS / "native-login.log"
+    parts = [f"Could not initialise the Wine prefix, so {what}."]
+    if LAST_BOOT_PROBLEM:
+        parts.append(LAST_BOOT_PROBLEM)
+    tail = _log_tail(log_path)
+    if tail:
+        parts.append("Last lines of the log:\n" + "\n".join(tail))
+    parts.append(f"Full log: {log_path}. Use 'Report a problem' to send it "
+                 "with your system details, then try PLAY again.")
+    return "\n\n".join(parts)
+
+
 def boot_prefix(prefix=None):
     """Ensure Wine created system32 and its persistent registry hives."""
+    global LAST_BOOT_PROBLEM
+    LAST_BOOT_PROBLEM = ""
     pfx = Path(prefix or active_prefix())
     _prepare_managed_prefix_layout(pfx)
     if prefix_ready(pfx):
@@ -642,9 +677,12 @@ def boot_prefix(prefix=None):
             cause = (" Wine aborted every prefix service on the unresolved "
                      "advapi32.SystemFunction036 (RtlGenRandom → cryptbase) "
                      "forward, so the prefix could never finish.")
+        LAST_BOOT_PROBLEM = f"wineboot {failure}.{cause}"
         warn(f"Wine prefix initialisation failed: wineboot {failure}.{cause} "
              f"Details: {log_path}")
         return False
+    LAST_BOOT_PROBLEM = ("wineboot finished, but the prefix has no valid "
+                         "system.reg, user.reg and system32.")
     warn("Wine prefix initialisation finished without valid system.reg, "
          f"user.reg, and system32 state. Details: {log_path}")
     return False

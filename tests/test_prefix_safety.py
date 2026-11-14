@@ -2096,3 +2096,21 @@ class DefaultServersTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BootFailureMessageTests(unittest.TestCase):
+    def test_names_the_cause_the_log_tail_and_what_to_send(self):
+        with tempfile.TemporaryDirectory() as td:
+            logs = Path(td)
+            (logs / "native-login.log").write_text(
+                "noise\nerr:module:import_dll Library foo.dll not found\n"
+                "\nBedrockOnLinux: wineboot timed out after 180 seconds.\n")
+            with mock.patch.object(prefix, "LOGS", logs), \
+                    mock.patch.object(prefix, "LAST_BOOT_PROBLEM",
+                                      "wineboot timed out after 180 seconds."):
+                said = prefix.boot_failure_message("Minecraft was not started")
+        self.assertIn("so Minecraft was not started.", said)
+        self.assertIn("timed out after 180 seconds", said)
+        self.assertIn("foo.dll not found", said)
+        self.assertEqual(said.count("timed out"), 1)
+        self.assertIn("Report a problem", said)

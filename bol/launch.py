@@ -75,6 +75,7 @@ from .perfcheck import (
 )
 from .prefix import (
     active_prefix,
+    boot_failure_message,
     boot_prefix,
     game_frame_limit,
     launch_lock,
@@ -1153,7 +1154,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     refresh = _start_msa_refresh(tok)
     try:
         if not boot_prefix():
-            die("Could not initialise the managed Wine prefix safely.")
+            die(boot_failure_message("Minecraft was not started"))
         wine_apply_winegdk_prereqs()
         _install_cryptbase_in_prefix()
         try:

@@ -33,6 +33,7 @@ from .games import (
 from .log import BolError, desktop_notify, info, ok, warn
 from .prefix import (
     active_prefix,
+    boot_failure_message,
     boot_prefix,
     ensure_umu,
     prefix_operation_lock,
@@ -173,11 +174,8 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
     elif xbox_live:
         install_ca_bundle(gd)
     if not boot_prefix():
-        raise BolError(
-            "Could not initialise the Wine prefix, so setup stopped before "
-            "installing GameInput. Check "
-            f"{LOGS / 'native-login.log'} and re-run 'Install / Update'."
-        )
+        raise BolError(boot_failure_message(
+            "setup stopped before installing GameInput"))
     install_gameinput(active_prefix(), gd)
     if not xbox_live:
         ok("Setup complete — click PLAY, then sign in to Minecraft Education "

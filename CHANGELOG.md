@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 3.0.0 — 2026-11-14 (pre-release)
+
+A pre-release of the next major version. Add-ons, maps and texture packs
+install in one click from MCPEDL and CurseForge, LeviLamina mods have their
+own page, and the launcher has a new layout. Minecraft runs on Debian 12,
+Ubuntu 22.04 and Fedora 39 and on Apple silicon under Asahi Linux, starts
+sooner after PLAY, and unlocks achievements. The engine (native24, built on
+native23) spends less CPU between frames and keeps its speed on kernels
+without ntsync, and the camera follows the mouse sooner on Wayland desktops.
+Several profiles can play at once, a game can run hidden for tools that
+drive it, and "Report a problem" files a GitHub issue with the logs, with
+nothing personal in it. Stable 2.3.x installs are not
+offered this version: download it from this release to try it.
+
 ### Added
 
 - **Several games at once, one per profile.** Profiles no longer take turns:
@@ -49,6 +63,41 @@
   available, and is the fallback when the relay cannot be reached. See
   [docs/report-relay.md](docs/report-relay.md).
 - `bedrock-on-linux --version`.
+- **Add-ons, maps, texture packs and skins from MCPEDL and CurseForge.** A
+  new Add-ons & Maps page searches both (they are one catalogue now: every
+  CurseForge Bedrock project is mirrored on MCPEDL under the same name),
+  sorts by this week's or this month's popularity, downloads, updates or
+  date, and installs a project's file in one click, straight into the
+  folders the game reads. A pasted MCPEDL or CurseForge link opens that
+  project. Files come over HTTPS from MCPEDL's and CurseForge's servers
+  only; projects whose author hosts files elsewhere get a button to open
+  that link in the browser instead. The Library tab lists every pack and
+  world the game will find, whoever put it there, and removes them into a
+  trash kept for 30 days rather than deleting them.
+- **A new layout.** Every page is now one click away in a menu on the left
+  (Play, Add-ons & Maps, Mods, Profiles, Settings, What's New), with the
+  page shown lit up and named above it; the profile and the accounts sit at
+  its foot. It folds down to its icons, and folds by itself in a narrow
+  window. Pages sit flat on the window with one level of cards, and every
+  button looks like one. The game or edition is one pill next to PLAY,
+  with a badge per edition, opening a menu of them all. The home page has shortcuts to content, mods, importing a file
+  and the game folder, and shows this week's popular add-ons, maps and
+  texture packs (Settings > General turns that off).
+- **LeviLamina mods.** A Mods page browses the levimc.org catalogue and
+  installs, updates, imports and turns off mods per Minecraft build.
+
+- **Apple silicon under Asahi Linux.** Asahi's kernel uses 16 KiB memory
+  pages, and Wine and FEX-Emu need 4 KiB ones. With muvm installed, the
+  launcher now starts itself inside a muvm microVM, where muvm registers
+  FEX-Emu, and everything it runs from there gets 4 KiB pages, the host's
+  GPU, controllers and display, as Steam does on Asahi. Before, setup looked
+  for FEX-Emu on the host, found none (muvm registers it only inside the
+  microVM) and told the player to install what they already had. Inside
+  muvm the graphics check no longer counts RandR providers: the display it
+  reaches there is the host's, whose providers say nothing about the
+  microVM's GPU, and a count of zero refuses PLAY. Without muvm,
+  setup now says to install it. `BOL_NO_MUVM=1` keeps the launcher on the
+  host (#250).
 
 ### Changed
 
@@ -97,6 +146,11 @@
 
 ### Fixed
 
+- **"Could not initialise the Wine prefix" says why.** The dialog only
+  pointed at a log file. It now gives what wineboot did (timed out, exited
+  with a status, left no registry) and the last lines of the log, and asks
+  for a report, which carries the whole log.
+
 - **PLAY in the window starts beside games already running.** With two
   profiles playing, PLAY refused a third game: "shared Minecraft files are
   in use by another BedrockOnLinux profile". It ran the full setup, which
@@ -120,58 +174,6 @@
 - Buttons on the Profiles page and in the profile menu were cut off ("ew
   Window", "ename") wherever the desktop's font was wider than the fixed
   widths they were given. Nothing there has a fixed width any more.
-
-## 3.0.0 — 2026-11-12 (pre-release)
-
-A pre-release of the next major version. Add-ons, maps and texture packs
-install in one click from MCPEDL and CurseForge, LeviLamina mods have their
-own page, and the launcher has a new layout. Minecraft runs on Debian 12,
-Ubuntu 22.04 and Fedora 39 and on Apple silicon under Asahi Linux, starts
-sooner after PLAY, and unlocks achievements. Engine native23 spends less CPU
-between frames and keeps its speed on kernels without ntsync, and the camera
-follows the mouse sooner on Wayland desktops. Stable 2.3.x installs are not
-offered this version: download it from this release to try it.
-
-### Added
-
-- **Add-ons, maps, texture packs and skins from MCPEDL and CurseForge.** A
-  new Add-ons & Maps page searches both (they are one catalogue now: every
-  CurseForge Bedrock project is mirrored on MCPEDL under the same name),
-  sorts by this week's or this month's popularity, downloads, updates or
-  date, and installs a project's file in one click, straight into the
-  folders the game reads. A pasted MCPEDL or CurseForge link opens that
-  project. Files come over HTTPS from MCPEDL's and CurseForge's servers
-  only; projects whose author hosts files elsewhere get a button to open
-  that link in the browser instead. The Library tab lists every pack and
-  world the game will find, whoever put it there, and removes them into a
-  trash kept for 30 days rather than deleting them.
-- **A new layout.** Every page is now one click away in a menu on the left
-  (Play, Add-ons & Maps, Mods, Profiles, Settings, What's New), with the
-  page shown lit up and named above it; the profile and the accounts sit at
-  its foot. It folds down to its icons, and folds by itself in a narrow
-  window. Pages sit flat on the window with one level of cards, and every
-  button looks like one. The game or edition is one pill next to PLAY,
-  with a badge per edition, opening a menu of them all. The home page has shortcuts to content, mods, importing a file
-  and the game folder, and shows this week's popular add-ons, maps and
-  texture packs (Settings > General turns that off).
-- **LeviLamina mods.** A Mods page browses the levimc.org catalogue and
-  installs, updates, imports and turns off mods per Minecraft build.
-
-- **Apple silicon under Asahi Linux.** Asahi's kernel uses 16 KiB memory
-  pages, and Wine and FEX-Emu need 4 KiB ones. With muvm installed, the
-  launcher now starts itself inside a muvm microVM, where muvm registers
-  FEX-Emu, and everything it runs from there gets 4 KiB pages, the host's
-  GPU, controllers and display, as Steam does on Asahi. Before, setup looked
-  for FEX-Emu on the host, found none (muvm registers it only inside the
-  microVM) and told the player to install what they already had. Inside
-  muvm the graphics check no longer counts RandR providers: the display it
-  reaches there is the host's, whose providers say nothing about the
-  microVM's GPU, and a count of zero refuses PLAY. Without muvm,
-  setup now says to install it. `BOL_NO_MUVM=1` keeps the launcher on the
-  host (#250).
-
-### Fixed
-
 - **Importing a .mcaddon installs its packs.** Most add-ons are a zip of
   .mcpack files rather than of the packs' folders, and the import stopped
   at "No manifest.json". Packs inside an add-on are unpacked too, a world
