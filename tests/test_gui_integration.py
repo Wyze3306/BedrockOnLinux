@@ -185,8 +185,8 @@ class TestMainWindowInitialization:
 
     def test_injector_dll_load_mode_combo(self, main_window):
         """The DLL config uses a dropdown selecting file vs URL download."""
-        combo = next((cb for cb in main_window.findChildren(QComboBox)), None)
-        assert combo is not None
+        combo = main_window.dll_mode_combo
+        assert isinstance(combo, QComboBox)
         assert combo.count() == 2
         assert combo.itemText(0) == "File"
         assert combo.itemText(1) == "Download"
@@ -319,6 +319,39 @@ class TestVersionPicker:
             picker.search.setText("beta")
             assert _visible_rows(picker) == ["1.2.3  ·  BETA"]
 
+    def test_installed_builds_are_marked_and_keep_their_label(self, qapp):
+        """#376: the mark is drawn beside the label, never part of it --
+        the label is what a pick is found again by."""
+        from bol.gui import _InstalledMark
+        with mock.patch("bol.gui.QApplication.instance", return_value=qapp):
+            picker = VersionPicker(None)
+            picker.set_labels(["1.0.0", "1.1.0", "2.0.0"], "1.0.0",
+                              installed={"1.1.0"})
+            marks = {picker.list.item(i).text():
+                     bool(picker.list.item(i).data(_InstalledMark.ROLE))
+                     for i in range(picker.list.count())}
+            assert marks == {"1.0.0": False, "1.1.0": True, "2.0.0": False}
+            picker.resize(260, 320)
+            picker.grab()  # the delegate paints without a main window
+
+    def test_the_window_marks_what_is_on_disk_now(self, qapp):
+        """A build downloaded after the catalogue was loaded is marked."""
+        with headless_window() as win:
+            edition = {"id": "release"}
+            win.ui_state["versions"] = [
+                {"tag": "1.26.60.5", "beta": False, "edition": edition,
+                 "installed": False},
+                {"tag": "1.26.50.1", "beta": False, "edition": edition,
+                 "installed": True},
+            ]
+            win.ui_state["labels"] = ["26.60", "26.50"]
+            with mock.patch("bol.gui.installed_versions",
+                            return_value={"1.26.60.5"}):
+                assert win._installed_labels() == {"26.60"}
+            with mock.patch("bol.gui.installed_versions",
+                            side_effect=OSError("unreadable")):
+                assert win._installed_labels() == {"26.50"}
+
     def test_clearing_the_filter_brings_every_row_back(self, qapp):
         with mock.patch("bol.gui.QApplication.instance", return_value=qapp):
             picker = VersionPicker(None)
@@ -377,6 +410,70 @@ class TestRememberedVersion:
             main_window._on_versions_loaded(self._versions())
             main_window.set_version("26.44")
         assert saved["mc_version"] == "1.26.44.3"
+
+
+class TestOtherTitlesInThePicker:
+    """Minecraft Dungeons and Legends beside Stable and Preview."""
+
+    RELEASE = {"id": "release", "name": "Minecraft for Windows", "beta": False}
+
+    def _versions(self):
+        from bol import xodus
+        return [
+            {"tag": "1.26.63.1", "beta": False, "edition": self.RELEASE,
+             "installed": True},
+            {"tag": "current", "beta": False,
+             "edition": xodus.edition("dungeons"), "installed": True,
+             "build": "1.17.0.0"},
+            {"tag": "current", "beta": False,
+             "edition": xodus.edition("legends"), "installed": False,
+             "build": None},
+        ]
+
+    def test_each_edition_has_a_toggle(self, main_window):
+        buttons = main_window.edition_buttons
+        assert list(buttons)[:2] == ["release", "preview"]
+        assert buttons["dungeons"].accessibleName() == "Dungeons"
+        assert buttons["legends"].accessibleName() == "Legends"
+        assert main_window.stable_btn is buttons["release"]
+        assert main_window.preview_btn is buttons["preview"]
+
+    def test_labels_name_the_title_and_its_build(self):
+        from bol.gui import _version_label
+        versions = self._versions()
+        assert _version_label(versions[1]) == "Dungeons  ·  1.17.0.0"
+        assert _version_label(versions[2]) == "Legends  ·  latest"
+        assert _version_label(versions[0]) == "26.63"
+
+    def test_edition_of_an_entry_in_every_shape(self):
+        from bol.gui import _version_edition_id
+        assert _version_edition_id({"edition": {"id": "dungeons"}}) == \
+            "dungeons"
+        assert _version_edition_id({"edition": "release"}) == "release"
+        assert _version_edition_id({"beta": True}) == "preview"
+        assert _version_edition_id(None) == "release"
+
+    def test_choosing_dungeons_shows_and_saves_dungeons(self, main_window):
+        saved = {}
+        with mock.patch("bol.gui.load_settings", lambda: dict(saved)), \
+                mock.patch("bol.gui.save_settings", saved.update):
+            main_window._on_versions_loaded(self._versions())
+            main_window.edition_buttons["dungeons"].click()
+            picked = main_window.selected_version()
+        assert picked["edition"]["id"] == "dungeons"
+        assert main_window.edition_buttons["dungeons"].isChecked()
+        assert saved["mc_version"] == "current"
+        assert saved["ui_edition"] == "dungeons"
+        assert saved["show_betas"] is False
+
+    def test_the_saved_title_is_offered_again(self, main_window):
+        with mock.patch("bol.gui.load_settings",
+                        lambda: {"mc_version": "current",
+                                 "ui_edition": "legends"}):
+            main_window._on_versions_loaded(self._versions())
+            picked = main_window.selected_version()
+        assert picked["edition"]["id"] == "legends"
+        assert main_window.edition_buttons["legends"].isChecked()
 
 
 # ======================================================================
@@ -592,10 +689,10 @@ class TestSettingsTab:
     """Test settings interface."""
 
     def test_general_tab_created(self, main_window):
-        """Settings carries all four tabs, in order."""
+        """Settings carries all five tabs, in order."""
         tabs = main_window.settings_page.findChild(QTabWidget)
         assert [tabs.tabText(i) for i in range(tabs.count())] == [
-            "General", "Versions", "Advanced", "Tools"]
+            "General", "Versions", "Advanced", "Tools", "Network"]
 
     def test_theme_toggle_in_settings(self, main_window):
         """The General tab carries the light-theme switch, and flipping it

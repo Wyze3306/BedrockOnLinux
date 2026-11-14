@@ -1,10 +1,12 @@
-"""Minimizing Minecraft inside Wine's virtual desktop (#189).
+"""Minecraft inside Wine's virtual desktop (#189, #202).
 
 The desktop "Keep the mouse inside the window" runs the game in is as large
 as the screen. Minimized from the title bar Wine draws for it, the game
 shrank inside the desktop and the desktop stayed on screen; these tests hold
 the launcher to minimizing the desktop then, and to giving the game back
-when the desktop is back.
+when the desktop is back. Switched to fullscreen, the game's picture stayed
+below the title bar Wine no longer drew; they also hold the launcher to
+moving the picture to the client area the bridge reports.
 """
 # SPDX-License-Identifier: MIT
 
@@ -117,6 +119,98 @@ class FollowTests(unittest.TestCase):
                                        iconified=0)
         self.assertEqual(sent, "")
         looked.assert_not_called()
+
+
+class ClientAreaTests(unittest.TestCase):
+    """The bridge reports where the game's client area starts in its X
+    window; the launcher puts the picture there (#202)."""
+
+    GAME = 0x1200001
+
+    def setUp(self):
+        import tempfile
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.tmp = holder.name
+
+    def _follow(self, lines, placed, polls=8):
+        done = threading.Event()
+        self.addCleanup(done.set)
+        bridge = _Bridge(lines, done)
+        running = iter([True] * polls + [False])
+        with mock.patch.object(virtual_desktop, "_mc_running",
+                               side_effect=lambda: next(running)), \
+                mock.patch.object(virtual_desktop, "_POLL", 0.01), \
+                mock.patch.object(virtual_desktop, "LOGS", Path(self.tmp)), \
+                mock.patch.object(virtual_desktop.x11,
+                                  "place_child_windows",
+                                  side_effect=placed) as place:
+            virtual_desktop._follow(bridge, ":0")
+        log = Path(self.tmp) / "virtual-desktop.log"
+        return place, log.read_text() if log.exists() else ""
+
+    def test_a_client_line_is_read(self):
+        read = virtual_desktop._client_area
+        self.assertEqual(read("client 0x1200001 3 3"), (self.GAME, 3, 3))
+        self.assertEqual(read("client 0x1200001 4 30"), (self.GAME, 4, 30))
+        for line in ("", "iconic", "client", "client 0x1200001 3",
+                     "client nope 3 3", "client 0x1200001 3 3 3",
+                     "client 0 3 3", "client 0x1200001 -1 3",
+                     "client 0x1200001 3 99999"):
+            self.assertIsNone(read(line), line)
+
+    def test_fullscreen_moves_the_picture_to_the_client_area(self):
+        place, log = self._follow(["client 0x1200001 3 3\n"],
+                                  placed=[1])
+        place.assert_called_once_with(self.GAME, 3, 3, ":0")
+        self.assertIn("client area at 3,3", log)
+
+    def test_a_picture_already_in_place_is_not_logged(self):
+        place, log = self._follow(["client 0x1200001 4 30\n"],
+                                  placed=[0])
+        place.assert_called_once_with(self.GAME, 4, 30, ":0")
+        self.assertEqual(log, "")
+
+    def test_the_picture_is_placed_once_the_game_has_made_it(self):
+        # The window is reported before the swap chain exists.
+        place, _ = self._follow(["client 0x1200001 3 3\n"],
+                                placed=[None, None, 1], polls=10)
+        self.assertEqual(place.call_count, 3)
+
+    def test_a_picture_that_never_comes_is_given_up(self):
+        with mock.patch.object(virtual_desktop, "_PLACE_GRACE", 0):
+            place, log = self._follow(["client 0x1200001 3 3\n"],
+                                      placed=lambda *a: None)
+        place.assert_called_once()
+        self.assertIn("no X window", log)
+
+    def test_back_to_windowed_puts_it_below_the_title_bar_again(self):
+        place, _ = self._follow(["client 0x1200001 3 3\n",
+                                 "client 0x1200001 4 30\n"],
+                                placed=[1, 1])
+        self.assertEqual(place.call_args_list,
+                         [mock.call(self.GAME, 3, 3, ":0"),
+                          mock.call(self.GAME, 4, 30, ":0")])
+
+    def test_minimizing_still_works_alongside(self):
+        done = threading.Event()
+        self.addCleanup(done.set)
+        bridge = _Bridge(["client 0x1200001 4 30\n", "iconic\n"], done)
+        running = iter([True] * 8 + [False])
+        with mock.patch.object(virtual_desktop, "_mc_running",
+                               side_effect=lambda: next(running)), \
+                mock.patch.object(virtual_desktop, "_POLL", 0.01), \
+                mock.patch.object(virtual_desktop, "LOGS", Path(self.tmp)), \
+                mock.patch.object(virtual_desktop.x11, "place_child_windows",
+                                  return_value=0), \
+                mock.patch.object(virtual_desktop.x11, "iconify_windows",
+                                  return_value=1) as iconify, \
+                mock.patch.object(virtual_desktop.x11,
+                                  "find_presentable_window",
+                                  side_effect=[False, True] + [True] * 10):
+            virtual_desktop._follow(bridge, ":0")
+        iconify.assert_called_once_with("explorer.exe", ":0")
+        self.assertEqual(bridge.stdin.getvalue(), "restore\n")
 
 
 class WatchTests(unittest.TestCase):

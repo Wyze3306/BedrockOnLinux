@@ -1,6 +1,7 @@
 """bol.auth — Microsoft / Xbox Live native login (MSA + pre-auth chain)."""
 # SPDX-License-Identifier: MIT
 
+import concurrent.futures
 import json
 import os
 import re
@@ -234,6 +235,105 @@ class _HttpResp:
         return json.loads(self._raw)
 
 
+def _xbox_signature(priv, method, path, body_bytes, now=None):
+    """The ``Signature`` header Xbox Live auth endpoints want from a device.
+
+    Wire format: ver(4) + ts(8) + raw ECDSA-P-256 r||s (64), 76 bytes, in
+    base64. The bytes signed put 0x00 separators between every field:
+      ver(4) || \\0 || ts(8) || \\0 || method || \\0 || path || \\0 || auth || \\0 || body || \\0
+    and SHA-256 of that is what gets signed (matches Wine-side
+    DeviceAuth_SignRequest in dlls/xgameruntime/.../DeviceAuth.c).
+    """
+    import base64
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import (
+        decode_dss_signature,
+    )
+    now_ft = int(((time.time() if now is None else now) + 11644473600) * 1e7)
+    ver = (1).to_bytes(4, "big")
+    ts = now_ft.to_bytes(8, "big")
+    hash_input = (ver + b"\0" + ts + b"\0"
+                  + method.encode() + b"\0"
+                  + path.encode() + b"\0"
+                  + b"" + b"\0"
+                  + body_bytes + b"\0")
+    r, s = decode_dss_signature(
+        priv.sign(hash_input, ec.ECDSA(hashes.SHA256())))
+    return base64.b64encode(ver + ts + r.to_bytes(32, "big")
+                            + s.to_bytes(32, "big")).decode()
+
+
+def mint_xsts_from_preauth(relying_party, path=None, timeout=15):
+    """One device-bound user XSTS token for ``relying_party``, or None.
+
+    Built from what ``xbl_preauth`` already cached -- the device key, the
+    device token and the user token -- so it needs no Microsoft sign-in and
+    no SISU round trip: one request to xsts.auth.xboxlive.com, signed like
+    every other one this module makes. It serves audiences only a side
+    feature needs (the event tickets of ``bol.gameevents``), which must not
+    make the pre-auth chain itself any longer or any more fragile.
+
+    Returns ``{"token", "uhs", "expiry_epoch"}``, or None when the cache
+    cannot serve the request or Xbox Live refused it. Never raises.
+    """
+    import base64
+    import calendar
+    import urllib.request
+
+    try:
+        from cryptography.hazmat.primitives import serialization
+
+        cache = Path(path) if path is not None else DATA / "winegdk-preauth"
+        payload = json.loads((cache / "device.json").read_text())
+        priv = serialization.load_pem_private_key(
+            (cache / "device-key.pem").read_bytes(), password=None)
+        device_token = payload.get("device_token")
+        user_token = payload.get("user_token")
+        if not (isinstance(device_token, str) and device_token
+                and isinstance(user_token, str) and user_token):
+            return None
+        numbers = priv.public_key().public_numbers()
+        proof_key = {
+            "alg": "ES256", "crv": "P-256", "kty": "EC", "use": "sig",
+            "x": base64.b64encode(numbers.x.to_bytes(32, "big")).decode(),
+            "y": base64.b64encode(numbers.y.to_bytes(32, "big")).decode(),
+        }
+        body = json.dumps({
+            "RelyingParty": relying_party,
+            "TokenType": "JWT",
+            "Properties": {"SandboxId": "RETAIL",
+                           "UserTokens": [user_token],
+                           "DeviceToken": device_token,
+                           "ProofKey": proof_key},
+        }, separators=(",", ":")).encode()
+        request = urllib.request.Request(
+            "https://xsts.auth.xboxlive.com/xsts/authorize", data=body,
+            method="POST", headers={
+                "User-Agent": "XAL Xbox Live Game (Windows; SDK; 1.0.0.0)",
+                "Content-Type": "application/json",
+                "x-xbl-contract-version": "1",
+                "Signature": _xbox_signature(priv, "POST", "/xsts/authorize",
+                                             body),
+            })
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            answer = json.loads(response.read())
+        token = answer["Token"]
+        uhs = answer["DisplayClaims"]["xui"][0]["uhs"]
+        if not (isinstance(token, str) and token and uhs):
+            return None
+        expiry = None
+        try:
+            expiry = int(calendar.timegm(_parse_xbox_expiry(
+                answer.get("NotAfter", "")).utctimetuple()))
+        except (TypeError, ValueError):
+            pass
+        return {"token": token, "uhs": str(uhs), "expiry_epoch": expiry}
+    except Exception:  # a side feature: every failure means "no token"
+        return None
+
+
 _XBL_PREAUTH_DIAGNOSTIC = None
 _XBL_PREAUTH_DIAGNOSTIC_LOCK = threading.Lock()
 
@@ -297,13 +397,50 @@ _XBL_AGE_ERROR_CODES = {
     2148916236,  # Adult verification is required.
     2148916237,  # Adult verification is unavailable for this account.
     2148916238,  # Child account must be added to a Microsoft family.
+    2148916229,  # Family settings block online play.
 }
 
 _XBL_ACCOUNT_ERROR_CODES = {
+    2148916227,  # The account is suspended from Xbox Live.
     2148916233,  # The Microsoft account has no Xbox profile.
-    2148916234,
+    2148916234,  # The Xbox terms of use were never accepted.
     2148916235,  # Xbox Live is unavailable for the account/region.
 }
+
+# One XErr says exactly what to fix, and every one of them arrives as the same
+# bare "HTTP 401" otherwise: the generic account advice cannot tell a missing
+# profile from a suspension or a region Xbox Live does not serve.
+_XBL_ERROR_CODE_MESSAGES = {
+    2148916227: (
+        "Xbox Live has suspended this Microsoft account, so it cannot sign "
+        "in to any Xbox service. Check the enforcement status on "
+        "xbox.com, or play offline."
+    ),
+    2148916229: (
+        "This account's family settings block online play. An adult in the "
+        "Microsoft family must allow it in the Xbox privacy and online "
+        "safety settings, then sign out and sign in again."
+    ),
+    2148916233: (
+        "This Microsoft account has no Xbox profile yet. Sign in once on "
+        "xbox.com or in the Xbox app to create the profile and pick a "
+        "gamertag, then sign out and sign in again in the launcher."
+    ),
+    2148916234: (
+        "This Microsoft account has not accepted the Xbox terms of use. Sign "
+        "in on xbox.com and accept them, then sign out and sign in again in "
+        "the launcher."
+    ),
+    2148916235: (
+        "Xbox Live is not available in this Microsoft account's country or "
+        "region. Single-player worlds and LAN play still work."
+    ),
+}
+
+
+# What a pre-auth request running beside others would have warned about and
+# recorded, held per thread until it can be replayed in order.
+_DEFERRED = threading.local()
 
 
 def _clear_xbl_preauth_diagnostic():
@@ -372,6 +509,10 @@ def xbl_preauth_error_message():
     if diagnostic is None:
         return None
     message = diagnostic["message"]
+    error_code = diagnostic.get("error_code")
+    if error_code is not None:
+        message = _XBL_ERROR_CODE_MESSAGES.get(error_code, message)
+        message += " (Xbox error 0x%08X)" % error_code
     if diagnostic.get("category") in _XBL_CLOCK_CATEGORIES:
         try:
             from .network import clock_is_unsynchronized
@@ -380,6 +521,17 @@ def xbl_preauth_error_message():
         except Exception:
             pass
     return message
+
+
+def _xerr_suffix(error_code):
+    """`` (XErr 0x8015DC09)`` for a log line, or nothing without a code.
+
+    The XErr is a numeric, non-secret classifier; without it a support log
+    only reads "HTTP 401" and every account problem looks the same.
+    """
+    if error_code is None:
+        return ""
+    return " (XErr 0x%08X)" % error_code
 
 
 def _xbl_response_error(response):
@@ -932,7 +1084,7 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
                          "network" if refresh_unreachable else "signin")
     try:
         from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives import serialization
     except ImportError:
         return _fallback("xbl_preauth: a required Python dependency is "
                          "missing; cannot refresh online tokens.",
@@ -965,26 +1117,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
     y_b64 = base64.b64encode(pub_numbers.y.to_bytes(32, "big")).decode()
     proof_key = {"alg": "ES256", "crv": "P-256", "kty": "EC",
                  "use": "sig", "x": x_b64, "y": y_b64}
-    # Build the Xbox Live signature blob — wire format is ver(4) + ts(8) +
-    # raw ECDSA-P-256 r||s (64), 76 bytes total. The bytes SIGNED are a
-    # hash input that puts 0x00 separators between every field:
-    #   ver(4) || \0 || ts(8) || \0 || method || \0 || path || \0 || auth || \0 || body || \0
-    # SHA-256 of this is what gets signed (matches Wine-side
-    # DeviceAuth_SignRequest in dlls/xgameruntime/.../DeviceAuth.c).
-    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
     def _sign_header(method, path, body_bytes):
-        now_ft = int((time.time() + 11644473600) * 1e7)
-        ver = (1).to_bytes(4, "big")
-        ts = now_ft.to_bytes(8, "big")
-        hash_input = (ver + b"\0" + ts + b"\0"
-                      + method.encode() + b"\0"
-                      + path.encode() + b"\0"
-                      + b"" + b"\0"
-                      + body_bytes + b"\0")
-        sig_der = priv.sign(hash_input, ec.ECDSA(hashes.SHA256()))
-        r2, s2 = decode_dss_signature(sig_der)
-        sig_raw = r2.to_bytes(32, "big") + s2.to_bytes(32, "big")
-        return base64.b64encode(ver + ts + sig_raw).decode()
+        return _xbox_signature(priv, method, path, body_bytes)
     def _xbl_post(url, body_dict):
         import urllib.error
         import urllib.request
@@ -1020,7 +1154,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
         return _fallback("xbl_preauth: device.auth POST failed "
                          "(network error).", "device-auth", "network")
     if r.status_code != 200:
-        return _fallback(f"xbl_preauth: device.auth HTTP {r.status_code}",
+        return _fallback(f"xbl_preauth: device.auth HTTP {r.status_code}"
+                         + _xerr_suffix(_xbl_response_error(r)[2]),
                          "device-auth", response=r)
     try:
         j = r.json()
@@ -1052,7 +1187,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
                 category, status, error_code = _xbl_response_error(ru)
                 _record_xbl_preauth_diagnostic(
                     "user-auth", category, status, error_code)
-                warn(f"xbl_preauth: user.auth HTTP {ru.status_code}")
+                warn(f"xbl_preauth: user.auth HTTP {ru.status_code}"
+                     + _xerr_suffix(error_code))
             else:
                 try:
                     uj = ru.json()
@@ -1067,6 +1203,23 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
                         "user-auth", "service")
                     warn("xbl_preauth: user.auth returned an invalid "
                          "response.")
+
+    def _held():
+        return getattr(_DEFERRED, "events", None)
+
+    def _note(*args):
+        held = _held()
+        if held is None:
+            _record_xbl_preauth_diagnostic(*args)
+        else:
+            held.append(("note", args))
+
+    def _say(*args):
+        held = _held()
+        if held is None:
+            warn(*args)
+        else:
+            held.append(("warn", args))
 
     def _xsts_user(rp, stage, device_bound=False, record=True):
         if not user_token:
@@ -1085,15 +1238,16 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
             })
         except Exception:
             if record:
-                _record_xbl_preauth_diagnostic(stage, "network")
-            warn(f"xbl_preauth: {stage} failed (network error).")
+                _note(stage, "network")
+            _say(f"xbl_preauth: {stage} failed (network error).")
             return None
         if r.status_code != 200:
             category, status, error_code = _xbl_response_error(r)
             if record:
-                _record_xbl_preauth_diagnostic(
+                _note(
                     stage, category, status, error_code)
-            warn(f"xbl_preauth: {stage} HTTP {r.status_code}")
+            _say(f"xbl_preauth: {stage} HTTP {r.status_code}"
+                 + _xerr_suffix(error_code))
             return None
         try:
             payload = r.json()
@@ -1102,8 +1256,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
             return payload
         except (TypeError, ValueError):
             if record:
-                _record_xbl_preauth_diagnostic(stage, "service")
-            warn(f"xbl_preauth: {stage} returned an invalid response.")
+                _note(stage, "service")
+            _say(f"xbl_preauth: {stage} returned an invalid response.")
             return None
 
     def _sisu(rp, stage, record=True):
@@ -1123,15 +1277,16 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
             })
         except Exception:
             if record:
-                _record_xbl_preauth_diagnostic(stage, "network")
-            warn(f"xbl_preauth: {stage} failed (network error).")
+                _note(stage, "network")
+            _say(f"xbl_preauth: {stage} failed (network error).")
             return None
         if r.status_code != 200:
             category, status, error_code = _xbl_response_error(r)
             if record:
-                _record_xbl_preauth_diagnostic(
+                _note(
                     stage, category, status, error_code)
-            warn(f"xbl_preauth: {stage} HTTP {r.status_code}")
+            _say(f"xbl_preauth: {stage} HTTP {r.status_code}"
+                 + _xerr_suffix(error_code))
             return None
         try:
             payload = r.json()
@@ -1140,12 +1295,100 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
             return payload
         except (TypeError, ValueError):
             if record:
-                _record_xbl_preauth_diagnostic(stage, "service")
-            warn(f"xbl_preauth: {stage} returned an invalid response.")
+                _note(stage, "service")
+            _say(f"xbl_preauth: {stage} returned an invalid response.")
             return None
 
-    achievements_auth = _xsts_user(
-        "http://xboxlive.com", "xsts-achievements") or {}
+    # device.auth and user.auth are behind us; what is left is six tokens that
+    # need nothing from one another, each a round trip to Xbox Live on a
+    # connection of its own. One after the other they were most of the wait
+    # between PLAY and the game on a launch with no cached chain; together
+    # they take as long as the slowest. What each one warns about and records
+    # is held back and replayed in the order below, so the log and the
+    # diagnostic read exactly as they did when the calls ran in a row.
+    # BOL_PREAUTH_SERIAL=1 goes back to one request at a time.
+    def _attempt(call, *args, **kwargs):
+        _DEFERRED.events = events = []
+        try:
+            return call(*args, **kwargs), events
+        finally:
+            _DEFERRED.events = None
+
+    def _replay(events, record=True):
+        for kind, args in events:
+            if kind == "warn":
+                warn(*args)
+            elif record:
+                _record_xbl_preauth_diagnostic(*args)
+
+    audiences = (
+        ("profile", "http://xboxlive.com"),
+        ("playfab", "https://b980a380.minecraft.playfabapi.com/"),
+        ("multiplayer", "https://multiplayer.minecraft.net/"),
+        ("realms", "https://pocket.realms.minecraft.net/"),
+        ("licensing", "http://licensing.xboxlive.com"),
+    )
+    serial = os.environ.get("BOL_PREAUTH_SERIAL", "").strip() == "1"
+    pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1 if serial else len(audiences) + 1,
+        thread_name_prefix="xbl-preauth")
+    try:
+        achievements_call = pool.submit(
+            _attempt, _xsts_user, "http://xboxlive.com", "xsts-achievements")
+        sisu_calls = {name: pool.submit(_attempt, _sisu, rp, "sisu-" + name)
+                      for name, rp in audiences}
+        achievements_auth, events = achievements_call.result()
+        _replay(events)
+        achievements_auth = achievements_auth or {}
+        # The achievements call asked XSTS for a token with this user token,
+        # so its outcome says whether the fallback below is worth any request
+        # at all: offline or a rejected user token means it is not.
+        xsts_usable = bool(achievements_auth.get("Token"))
+        minted_via = {}
+        authorized = {}
+        refused = []
+        for name, _rp in audiences:
+            # SISU is the path a real GDK title takes and the only one
+            # returning the modern-gamertag claims, so it stays first. It can
+            # also refuse a request that Xbox Live is otherwise perfectly
+            # happy to serve: #149 had every SISU call answered with HTTP 403
+            # while XSTS kept issuing tokens for the very same audiences and
+            # the very same account. Falling back to XSTS completes the chain
+            # instead of failing the whole sign-in.
+            sisu, events = sisu_calls[name].result()
+            _replay(events, record=not xsts_usable)
+            claims = (sisu or {}).get("AuthorizationToken")
+            if isinstance(claims, dict) and claims.get("Token"):
+                minted_via[name] = "SISU"
+                authorized[name] = claims
+            else:
+                authorized[name] = {}
+                if xsts_usable:
+                    refused.append(name)
+
+        def _xsts_fallback(rp, name):
+            tried = []
+            for device_bound in (True, False):
+                claims, events = _attempt(
+                    _xsts_user, rp, "xsts-" + name, device_bound=device_bound,
+                    record=not device_bound)
+                tried.extend(events)
+                if isinstance(claims, dict) and claims.get("Token"):
+                    return claims, tried
+            return {}, tried
+
+        fallbacks = {name: pool.submit(_xsts_fallback, dict(audiences)[name],
+                                       name)
+                     for name in refused}
+        for name in refused:
+            claims, events = fallbacks[name].result()
+            _replay(events)
+            if claims:
+                minted_via[name] = "XSTS"
+                authorized[name] = claims
+    finally:
+        pool.shutdown(wait=True)
+
     achievements_uhs = None
     try:
         achievements_uhs = (
@@ -1158,37 +1401,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
         "achievements_expiry": achievements_auth.get("NotAfter", ""),
     })
 
-    # The achievements call above already asked XSTS for a token with this
-    # user token, so its outcome says whether the fallback below is worth any
-    # request at all: offline or a rejected user token means it is not.
-    xsts_usable = bool(achievements_auth.get("Token"))
-    minted_via = {}
-
-    def _authorize(rp, name):
-        """Mint one relying-party token, SISU first and XSTS as the fallback.
-
-        SISU is the path a real GDK title takes and the only one returning the
-        modern-gamertag claims, so it stays first. It can also refuse a request
-        that Xbox Live is otherwise perfectly happy to serve: #149 had every
-        SISU call answered with HTTP 403 while XSTS kept issuing tokens for the
-        very same audiences and the very same account. Falling back to XSTS
-        completes the chain instead of failing the whole sign-in.
-        """
-        fallback = xsts_usable
-        sisu = _sisu(rp, "sisu-" + name, record=not fallback) or {}
-        claims = sisu.get("AuthorizationToken")
-        if isinstance(claims, dict) and claims.get("Token"):
-            minted_via[name] = "SISU"
-            return claims
-        if not fallback:
-            return {}
-        for device_bound in (True, False):
-            claims = _xsts_user(rp, "xsts-" + name, device_bound=device_bound,
-                                record=not device_bound)
-            if isinstance(claims, dict) and claims.get("Token"):
-                minted_via[name] = "XSTS"
-                return claims
-        return {}
+    def _authorize(_rp, name):
+        return authorized[name]
 
     xbl_auth = _authorize("http://xboxlive.com", "profile")
     xbl_token = xbl_auth.get("Token")

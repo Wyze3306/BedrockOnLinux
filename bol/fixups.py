@@ -31,6 +31,81 @@ from .platform import IS_MAC
 from .prefix import active_prefix
 from .util import asset_url, download, gh_releases, run
 
+# Where distributions keep the same Mozilla roots curl.se publishes: Debian
+# and Arch, Fedora, openSUSE, then the generic names.
+_SYSTEM_CA_BUNDLES = (
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/ca-bundle.pem",
+    "/var/lib/ca-certificates/ca-bundle.pem",
+    "/etc/ssl/cert.pem",
+)
+
+
+def _system_ca_bundle():
+    """A PEM bundle of root certificates already on this machine, or None."""
+    candidates = list(_SYSTEM_CA_BUNDLES)
+    try:
+        import ssl
+        candidates.insert(0, ssl.get_default_verify_paths().cafile)
+    except Exception:
+        pass
+    try:
+        import certifi
+        candidates.append(certifi.where())
+    except Exception:
+        pass
+    for path in candidates:
+        try:
+            path = Path(path) if path else None
+            # Real bundles hold over a hundred roots; a stub of a few hundred
+            # bytes would leave the game unable to reach anything.
+            if path and path.is_file() and path.stat().st_size > 50_000 \
+                    and b"BEGIN CERTIFICATE" in path.read_bytes()[:200_000]:
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def _ca_bundle():
+    """The CA bundle to give the game: curl.se's, else this machine's (#374).
+
+    curl.se is out of reach from some networks ("Connection reset by peer"
+    after every attempt), and that used to end the launch. The system's
+    bundle carries the same roots, so it stands in; it is not written to the
+    cache, so the download is tried again next time.
+    """
+    cacert = CACHE / "cacert.pem"
+    if cacert.exists():
+        return cacert
+    try:
+        download(CACERT_URL, cacert, "SSL certificates")
+        return cacert
+    except Exception as exc:
+        cacert.unlink(missing_ok=True)
+        fallback = _system_ca_bundle()
+        if fallback is None:
+            raise
+        warn(f"The certificate bundle could not be downloaded ({exc}); "
+             f"using this system's ({fallback}).")
+        return fallback
+
+
+def install_ca_bundle(game_dir: Path):
+    """The CA bundle GDK-Proton looks for beside a game, at
+    etc/ssl/certs/ca-bundle.crt. Only a file of certificates: unlike the
+    libcurl swap below it changes nothing the game ships, so every title of
+    the family gets it."""
+    game_dir = Path(game_dir)
+    cacert = _ca_bundle()
+    for base in (game_dir, game_dir.parent):
+        crt = base / "etc" / "ssl" / "certs" / "ca-bundle.crt"
+        crt.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(cacert, crt)
+
+
 def fix_curl_ssl(game_dir: Path):
     """GDK's XCurl.dll is broken under Wine — swap in MinGW libcurl — and
     GDK-Proton requires a CA bundle at etc/ssl/certs/ca-bundle.crt next to
@@ -39,13 +114,7 @@ def fix_curl_ssl(game_dir: Path):
     if IS_MAC:
         _fix_curl_ssl_mac(game_dir)
         return
-    cacert = CACHE / "cacert.pem"
-    if not cacert.exists():
-        download(CACERT_URL, cacert, "SSL certificates")
-    for base in (game_dir, game_dir.parent):
-        crt = base / "etc" / "ssl" / "certs" / "ca-bundle.crt"
-        crt.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(cacert, crt)
+    install_ca_bundle(game_dir)
     if (game_dir / "XCurl.dll.bol-orig").exists():
         return
     info("Installing libcurl + certificates …")
@@ -184,21 +253,59 @@ def _hbui_gate_patch(data):
     genuinely need XSAPI social/persona, which does not work under Wine (they
     then loop or crash). That is an engine-level problem, not a UI patch.
     """
-    for m in _HBUI_GATE.finditer(data):
-        # Bound the window at the next function declaration: the marks are
-        # common enough that an unbounded look-ahead matches the neighbour.
-        stop = data.find("}function ", m.end())
-        body = data[m.end():stop if stop != -1 else m.end() + 2000]
-        if not all(mark in body for mark in _HBUI_GATE_MARKS):
-            continue
-        selector = _HBUI_GATE_SELECTOR.match(data, m.end())
-        if not selector:
-            continue
-        if data.startswith(_HBUI_GATE_RETURN, selector.end()):
-            return data, "already"
-        return (data[:selector.end()] + _HBUI_GATE_RETURN
-                + data[selector.end():], "applied")
+    for gate, marks, selector_re in _hbui_gate_rules():
+        for m in gate.finditer(data):
+            # Bound the window at the next function declaration: the marks
+            # are common enough that an unbounded look-ahead matches the
+            # neighbour.
+            stop = data.find("}function ", m.end())
+            body = data[m.end():stop if stop != -1 else m.end() + 2000]
+            if not all(mark in body for mark in marks):
+                continue
+            selector = selector_re.match(data, m.end())
+            if not selector:
+                continue
+            if data.startswith(_HBUI_GATE_RETURN, selector.end()):
+                return data, "already"
+            return (data[:selector.end()] + _HBUI_GATE_RETURN
+                    + data[selector.end():], "applied")
     return data, "missing"
+
+
+def _hbui_feed_rules():
+    """Anchor sets the signed data feed adds for builds that rebundled.
+
+    A new Minecraft build that moves the anchors used to wait for a launcher
+    release. The feed can only say *where* the same two fixed insertions go
+    -- ``return"";`` and ``return null;`` -- never what is inserted.
+    """
+    try:
+        from . import feed
+        return feed.hbui_rules()
+    except Exception:
+        return []
+
+
+def _hbui_gate_rules():
+    """(function pattern, marks, selector pattern): ours, then the feed's."""
+    rules = [(_HBUI_GATE, _HBUI_GATE_MARKS, _HBUI_GATE_SELECTOR)]
+    for rule in _hbui_feed_rules():
+        gate = rule.get("gate")
+        if gate:
+            rules.append((re.compile(gate["function"]), tuple(gate["marks"]),
+                          re.compile(gate["selector"])))
+    return rules
+
+
+def _hbui_link_rules():
+    """(anchor pattern, already-patched pattern): ours, then the feed's."""
+    rules = [(_HBUI_LINK, _HBUI_LINK_DONE)]
+    for rule in _hbui_feed_rules():
+        link = rule.get("link")
+        if link:
+            rules.append((re.compile(link["anchor"]),
+                          re.compile(link["done"])))
+    return rules
 
 
 def _hbui_gate_from_2_3_0(data):
@@ -217,12 +324,15 @@ def _hbui_link_patch(data):
     holds the immutable sign-in source -- so React's hook order is preserved,
     unlike a naive return at the top. Returns ``(text, status)``.
     """
-    if _HBUI_LINK_DONE.search(data):
+    rules = _hbui_link_rules()
+    if any(done.search(data) for _anchor, done in rules):
         return data, "already"
-    m = _HBUI_LINK.search(data)
-    if not m:
-        return data, "missing"
-    return data[:m.end(1)] + "return null;" + data[m.end(1):], "applied"
+    for anchor, _done in rules:
+        m = anchor.search(data)
+        if m:
+            return (data[:m.end(1)] + "return null;" + data[m.end(1):],
+                    "applied")
+    return data, "missing"
 
 
 def _hbui_bundles(game_dir):
@@ -340,14 +450,35 @@ def ensure_openssl_xcurl_set():
     """Fetch + unpack the OpenSSL XCurl set (release asset, 20 MB) into
     OPENSSL_XCURL_SET on first use. Idempotent via a .rev marker; any
     network/IO failure degrades quietly — _install_openssl_xcurl() then
-    keeps the Schannel XCurl and warns."""
+    keeps the Schannel XCurl and warns.
+
+    A newer set named by the signed data feed (bol.feed) is tried first;
+    when it cannot be installed, the set this launcher pins is.
+    """
+    from . import feed
+    rev, sha256, url = feed.resolve(
+        "openssl_xcurl", OPENSSL_XCURL_REV, OPENSSL_XCURL_ARCHIVE_SHA256)
+    if rev != OPENSSL_XCURL_REV:
+        if _ensure_openssl_xcurl_set(rev, sha256, url, exact=True):
+            return True
+        warn(f"The updated online-login components ({rev}) could not be "
+             "installed; using the ones this launcher shipped with.")
+    return _ensure_openssl_xcurl_set(
+        OPENSSL_XCURL_REV, OPENSSL_XCURL_ARCHIVE_SHA256, None)
+
+
+def _ensure_openssl_xcurl_set(rev, pinned_sha256, direct_url, exact=False):
+    """Install set `rev`. With `exact`, an older set already in place does
+    not count as success."""
     marker = OPENSSL_XCURL_SET / ".rev"
     have = (OPENSSL_XCURL_SET / "libcurl-4.dll").exists() and \
            (OPENSSL_XCURL_SET / "xcurl-cashim.dll").exists()
     if have and marker.exists() and \
-            marker.read_text().strip() == OPENSSL_XCURL_REV:
+            marker.read_text().strip() == rev:
         return True
-    asset = f"openssl-xcurl-set-{OPENSSL_XCURL_REV}.tar.gz"
+    if exact:
+        have = False
+    asset = f"openssl-xcurl-set-{rev}.tar.gz"
     # Unreleased AppImage/zipapp candidates carry this reviewed asset beside
     # the launcher, just like the engine archive. Prefer that exact sibling so
     # local cross-distribution testing does not depend on publishing anything.
@@ -363,7 +494,10 @@ def ensure_openssl_xcurl_set():
                 if (anchor / asset).is_file()), None)
     local_archive = tar is not None
     url = None
-    if not local_archive:
+    if not local_archive and direct_url:
+        url = direct_url
+        tar = CACHE / asset
+    elif not local_archive:
         try:
             # Every release, not the newest thirty: the set stays in the
             # release it was uploaded to, and once thirty more had been
@@ -381,7 +515,7 @@ def ensure_openssl_xcurl_set():
             warn(f"OpenSSL XCurl set asset '{asset}' not published yet.")
             return have
         tar = CACHE / asset
-    expected_hash = OPENSSL_XCURL_ARCHIVE_SHA256.strip().lower()
+    expected_hash = pinned_sha256.strip().lower()
     retry_available = not local_archive
     while True:
         if not tar.is_file():
@@ -389,7 +523,8 @@ def ensure_openssl_xcurl_set():
                 return have
             info("Downloading the online-login components (one-time) …")
             try:
-                download(url, tar, "Online-login components")
+                download(url, tar, "Online-login components",
+                         **({"attempts": 2} if exact else {}))
             except BolError:
                 return have
 
@@ -458,7 +593,7 @@ def ensure_openssl_xcurl_set():
         marker_tmp = Path(marker_name)
         try:
             with os.fdopen(marker_fd, "w") as marker_stream:
-                marker_stream.write(OPENSSL_XCURL_REV)
+                marker_stream.write(rev)
             marker_tmp.replace(marker)
         finally:
             marker_tmp.unlink(missing_ok=True)
@@ -503,14 +638,10 @@ def _install_openssl_xcurl(game_dir: Path):
     shutil.copy2(libcurl, game_dir / "xcurl_real.dll")
     for nm in ("XCurl.dll", "Xcurl.dll"):
         shutil.copy2(shim, game_dir / nm)
-    cacert = CACHE / "cacert.pem"
-    if not cacert.exists():
-        try:
-            download(CACERT_URL, cacert, "SSL certificates")
-        except Exception as e:
-            warn(f"cacert download failed: {e}")
-    if cacert.exists():
-        shutil.copy2(cacert, game_dir / "cacert.pem")
+    try:
+        shutil.copy2(_ca_bundle(), game_dir / "cacert.pem")
+    except Exception as e:
+        warn(f"No certificate bundle for the game's sign-in: {e}")
     ok("OpenSSL XCurl (CA-injecting shim) + deps installed "
        "(PlayFab Azure Front Door bypass)")
 

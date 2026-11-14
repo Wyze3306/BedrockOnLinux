@@ -23,7 +23,7 @@ class ReadyLaunchHarness:
                                extra_settings=None, environ=None,
                                diagnosis=(), swap_guard=False,
                                signed_out=False, notices=None,
-                               editor=False):
+                               editor=False, manifest=None):
         content = root / "content"
         logs = root / "logs"
         data = root / "data"
@@ -31,6 +31,9 @@ class ReadyLaunchHarness:
         logs.mkdir(exist_ok=True)
         data.mkdir(exist_ok=True)
         (content / "Minecraft.Windows.exe").write_bytes(b"MZ")
+        if manifest is not None:
+            (content / "AppxManifest.xml").write_text(manifest,
+                                                      encoding="utf-8")
         settings = {"game_dir": str(content)}
         settings.update(extra_settings or {})
         # Discord presence opens a socket of its own: every launch test gets
@@ -125,6 +128,10 @@ class ReadyLaunchHarness:
             # Nor the real game's resource pack cache.
             mock.patch.object(launch.packcache, "prune",
                               return_value=(0, 0)),
+            # Nor the machine's own Steam Linux Runtime, which would build
+            # its locales for real.
+            mock.patch.object(launch.slr_locales, "configure",
+                              side_effect=self._configure_locales),
             mock.patch.object(launch.saves, "ran_signed_out",
                               return_value=signed_out),
             mock.patch.object(launch, "diagnose",
@@ -132,6 +139,9 @@ class ReadyLaunchHarness:
             mock.patch.object(launch, "_prefix_stably_idle_after_wrapper",
                               return_value=prefix_idle),
             mock.patch.object(launch, "arm_gpu_launch", side_effect=arm),
+            # Nor the machine's own list of running instances.
+            mock.patch.object(launch, "_open_instance",
+                              side_effect=self._open_instance),
             mock.patch.object(
                 launch, "mark_gpu_wrapper_returned",
                 side_effect=mark or (lambda _token: True)),
@@ -152,14 +162,26 @@ class ReadyLaunchHarness:
             # what the auth steps were told, not only on the launch result.
             self.launch_mocks = {
                 name: getattr(launch, name)
-                for name in ("warn", "wine_reg_set_refresh_token",
+                for name in ("warn", "info", "wine_reg_set_refresh_token",
                              "ensure_login_deps", "xbl_preauth",
                              "hide_signin_button", "apply_branding",
-                             "_prefix_stably_idle_after_wrapper")
+                             "msa_refresh", "seed_default_servers",
+                             "_prefix_stably_idle_after_wrapper",
+                             "engine_cmd")
             }
             return launch._launch_once(lock_fds=lock_fds,
                                        on_started=on_started,
                                        notices=notices, editor=editor)
+
+    def _open_instance(self, *args, **kwargs):
+        self.instance_calls = getattr(self, "instance_calls", [])
+        self.instance_calls.append((args, kwargs))
+        return launch._InstanceSession()
+
+    def _configure_locales(self, env):
+        self.locales_env = dict(env)
+        env.update(getattr(self, "locales_update", {}))
+        return None
 
     def _before_launch(self, _settings):
         self.options_calls.append("before_launch")
@@ -873,6 +895,54 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.launch_mocks["ensure_login_deps"].assert_not_called()
         self.assertNotIn("WINEGDK_PREAUTH_DEVICE", observed["env"])
 
+    def test_education_is_kept_away_from_the_xbox_account(self):
+        """Minecraft Education signs in with a school or work account of its
+        own (#351): the Xbox account, its pre-auth, its presence and the
+        Bedrock title-screen patches have nothing to do with it."""
+        observed = {}
+        manifest = ('<Package><Identity Name="Microsoft.MinecraftEducation'
+                    'Edition" Version="1.26.3300.0" /></Package>')
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(
+                self._exercise_ready_launch(
+                    Path(td), self._successful_popen(observed),
+                    lambda: "owned-token", lambda _token: True,
+                    manifest=manifest,
+                ),
+                0,
+            )
+
+        for name in ("msa_refresh", "wine_reg_set_refresh_token",
+                     "ensure_login_deps", "xbl_preauth",
+                     "hide_signin_button", "apply_branding",
+                     "seed_default_servers"):
+            with self.subTest(step=name):
+                self.launch_mocks[name].assert_not_called()
+        self.assertEqual(self.xbl_calls, [])
+        self.assertNotIn("WINEGDK_PREAUTH_DEVICE", observed["env"])
+        # Not "offline mode": nothing is missing, the game signs in itself.
+        self.assertNotIn("offline mode", "\n".join(self._warnings()))
+        said = [str(call.args[0]) for call
+                in self.launch_mocks["info"].call_args_list if call.args]
+        self.assertIn(launch.EDUCATION_SIGNIN_NOTICE, said)
+
+    def test_bedrock_still_gets_the_xbox_account_and_its_patches(self):
+        observed = {}
+        manifest = ('<Package><Identity Name="Microsoft.MinecraftUWP" '
+                    'Version="1.26.5203.0" /></Package>')
+        with tempfile.TemporaryDirectory() as td:
+            self._exercise_ready_launch(
+                Path(td), self._successful_popen(observed),
+                lambda: "owned-token", lambda _token: True,
+                manifest=manifest,
+            )
+
+        self.launch_mocks["wine_reg_set_refresh_token"].assert_called_once()
+        self.launch_mocks["xbl_preauth"].assert_called_once()
+        self.launch_mocks["hide_signin_button"].assert_called_once()
+        self.launch_mocks["apply_branding"].assert_called_once()
+        self.launch_mocks["seed_default_servers"].assert_called_once()
+
     def test_unusable_preauth_payload_is_withheld_from_the_engine(self):
         for preauth, expected in ((True, True), (False, False)):
             observed = {}
@@ -1345,7 +1415,10 @@ class LaunchStartedHookTests(ReadyLaunchHarness, unittest.TestCase):
             lock.return_value.__enter__.return_value = (71, 72)
             self.assertEqual(launch.launch(on_started=hook), 0)
         once.assert_called_once_with((71, 72), on_started=hook,
-                                     notices=None, editor=False)
+                                     notices=None, editor=False,
+                                     hidden=False)
+        # A game starts beside the ones other profiles are running.
+        lock.assert_called_once_with(join=True)
 
 
 class AutoInjectionLaunchTests(ReadyLaunchHarness, unittest.TestCase):
@@ -1894,3 +1967,33 @@ class ParallelMsaRefreshTests(unittest.TestCase):
             with self.assertRaises(Stop):
                 launch._launch_once()
         self.assertEqual(saved, ["new"])
+
+
+class ContainerLocalesLaunchTests(ReadyLaunchHarness, unittest.TestCase):
+    """The kept locales follow the environment the game really starts with."""
+
+    def test_built_from_the_final_environment(self):
+        def popen(_cmd, **kwargs):
+            self.started_env = kwargs["env"]
+            proc = mock.Mock()
+            proc.wait.return_value = 0
+            return proc
+
+        with tempfile.TemporaryDirectory() as td:
+            self._exercise_ready_launch(
+                Path(td), popen, arm=lambda: "owned-token",
+                disarm=lambda _token: True,
+                umu_env={"LANG": "fr_FR.UTF-8"},
+                # The Advanced field is where another game language comes
+                # from, and it is applied last.
+                extra_settings={"custom_env": "LANG=de_DE.UTF-8"})
+        self.assertEqual(self.locales_env["LANG"], "de_DE.UTF-8")
+        self.assertEqual(self.started_env["LANG"], "de_DE.UTF-8")
+
+    def test_the_kept_copy_reaches_the_game(self):
+        self.locales_update = {"LOCPATH": "/kept/locales",
+                               "PRESSURE_VESSEL_GENERATE_LOCALES": "0"}
+        self.test_built_from_the_final_environment()
+        self.assertEqual(self.started_env["LOCPATH"], "/kept/locales")
+        self.assertEqual(
+            self.started_env["PRESSURE_VESSEL_GENERATE_LOCALES"], "0")

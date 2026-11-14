@@ -1,0 +1,12 @@
+{
+  "file_format_version": "1.2.0",
+  "layer": {
+    "name": "VK_LAYER_BOL_inputlat",
+    "type": "GLOBAL",
+    "library_path": "./libVkLayer_inputlat.so",
+    "api_version": "1.4.309",
+    "implementation_version": "1",
+    "description": "BoL input-latency probe",
+    "functions": {"vkNegotiateLoaderLayerInterfaceVersion": "inputlat_NegotiateLoaderLayerInterfaceVersion"}
+  }
+}

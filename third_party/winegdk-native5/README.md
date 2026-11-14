@@ -182,7 +182,66 @@ kernelbase now asks for it, fills `PrivateUsage` when the caller's buffer has
 room for it and reports the `_EX` size in `cb`, as Windows does. `psapi.h`
 gains the structure.
 
+The `0014` patch brings back a fast synchronization path for kernels without
+ntsync. Upstream Wine 11 dropped esync and fsync, so its only in-process
+backend is the ntsync driver, which mainline Linux ships from 6.14: on Debian
+13's stock 6.12, Debian 12's 6.1 and the 6.8 of Ubuntu 22.04 HWE and Linux Mint
+21 and 22, every wait, `SetEvent`, mutex and semaphore operation was a
+wineserver round-trip, and the wineserver serialised Minecraft's worker
+threads behind one another. The patch is Valve's futex-based backend for
+Wine's inproc sync framework from the `proton_11.0` branch of
+ValveSoftware/wine (`b62913d8cab`, with the `054473d56e3` alignment fix),
+developed by Elizabeth Figura with later work by Paul Gofman and others. The
+wineserver still opens `/dev/ntsync` first and only falls back to fsync when
+that fails and `WINEFSYNC` is set, which Proton does unless `PROTON_NO_FSYNC`
+is given, so a kernel with ntsync behaves exactly as before; fsync itself needs
+`futex_waitv`, Linux 5.16 or later. Adapted to this tree: the system
+`<linux/ntsync.h>` stays in place of Valve's bundled copy, the per-game
+workarounds Proton's loader enables are environment switches read by
+`fsync_init()` and off by default, `<linux/futex.h>` is included on Linux
+rather than behind a new configure check, and the server protocol files that
+`tools/make_requests` generates are regenerated (protocol version 931). Both
+builders also refuse a wineserver that lacks the fallback.
+
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
-native5 delta and its follow-ups. The Bullseye builder applies the reviewed r12
-and native patches when the target commit is unavailable, always applies `0002`
-through `0013`, then verifies the complete resulting source tree.
+native5 delta and its follow-ups through `0017`. The Bullseye builder applies
+the reviewed r12 and native patches when the target commit is unavailable,
+always applies `0002` through `0017`, then verifies the complete resulting
+source tree; the container builder does the same on the target commit. Each
+patch is also pinned by its own SHA-256 in both builders and in the
+packager. `0014` to `0017` were first applied around the manifest, so that the
+`WINEGDK_SOURCE_MANIFEST_SHA256` the launcher checks against the installed
+engine stayed valid for native22; native23 adds the files they change to the
+manifest and moves that pin with it. Because the prefix release is named
+after the manifest hash, the native23 prefix is published under a new name
+and the native22 one stays as it was.
+
+The `0015` and `0016` patches take two Wine calls Minecraft makes on every
+frame off its main thread, the one that builds each frame and caps the frame
+rate. `GetProcessMemoryInfo` opened `/proc/self/status`, read it through stdio
+and ran up to six `sscanf()` per line before closing it; ntdll now keeps the
+file open for its own process, rereads it with one `pread()` from offset 0 and
+picks the six fields out with `strncmp()` and `strtoull()`, for the same
+values. `get_timezone_info()`, behind `GetTimeZoneInformation`, ran
+`gmtime()`, `mktime()` and `localtime()` on each of the game's four calls per
+frame, and glibc stats the zone file in two of them; it now compares
+`time(NULL)` with the second it last checked, as `SystemTimeOfDayInformation`
+already does, and only then asks libc. Measured on the game's main thread at
+about 600 FPS, the two calls went from 2.8% and 1.9% of its time to almost
+nothing.
+
+The `0017` patch serves the `XGameEvent` runtime class,
+`{bbfbdcc7-bfe7-409b-a5ca-edf054960b4d}`, which `QueryApiImpl` refused with
+`E_NOTIMPL`, so XSAPI dropped every in-game event Minecraft wrote, and with
+them every achievement (issue #152): Xbox Live grades Minecraft's achievements
+from these events and refuses a client-side unlock. Each event is appended as
+one JSON line to the file named by `BOL_GAME_EVENT_LOG`; `bol/gameevents.py`
+sets that variable and uploads the events to the Xbox Live event collector
+with the player's own tickets while the game runs. Without the variable the
+write is accepted and dropped. Measured on 2026-11-12 with Minecraft 1.26.60.5
+in a survival world without cheats, the game writes its events in batches,
+every few minutes and when it is paused; the launcher sent all 56 of the
+session's events, the collector refused none, the account's
+`BlockBrokenTotal` and `DistanceTravelled` stats grew by what they carried,
+and crafting a wooden hoe unlocked "Time to Farm!" and "MOAR Tools". The
+packager refuses an `xgameruntime.dll` built without the class.

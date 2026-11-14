@@ -78,6 +78,25 @@ class Reaper(unittest.TestCase):
             self.at(t)
         self.assertEqual(self.kills, [])
 
+    def test_a_running_game_is_watched_without_scanning_the_machine(self):
+        scans = []
+        procs = {10: "minecraft.windows.exe", 11: "microsoftedgeupdate.exe"}
+        reaper = leftovers.LeftoverReaper(
+            "/pfx", scan=lambda _p: scans.append(1) or list(procs),
+            image=lambda pid: procs.get(pid, ""),
+            kill=lambda pid, sig: self.kills.append((pid, sig)),
+            clock=self.clock)
+        for t in range(0, 60, 2):
+            self.clock.now = t
+            reaper.tick()
+        self.assertEqual(len(scans), 1)
+        del procs[10]
+        for t in range(60, 80, 2):
+            self.clock.now = t
+            reaper.tick()
+        self.assertGreater(len(scans), 1)
+        self.assertEqual(self.kills[0], (11, signal.SIGTERM))
+
     def test_scans_are_spaced_out(self):
         calls = []
         reaper = leftovers.LeftoverReaper(
@@ -119,3 +138,20 @@ class Image(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_wine_processes_are_found_under_protons_own_prefix_path():
+    """Proton points Wine at <prefix>/pfx/ while the launcher's wrappers keep
+    <prefix>: both belong to the prefix, or the reaper never sees the game
+    (and the session never ends once it closes)."""
+    from bol.prefix import _environ_uses_prefix
+    prefix = "/data/compatdata/pfx"
+    for value in (prefix, prefix + "/", prefix + "/pfx", prefix + "/pfx/"):
+        environ = b"A=1\0WINEPREFIX=" + value.encode() + b"\0B=2"
+        assert _environ_uses_prefix(environ, prefix), value
+    for value in ("/data/compatdata/pfx2", "/data/compatdata/pfx/pfx/x",
+                  "/data/compatdata", "/other/compatdata/pfx/pfx"):
+        environ = b"WINEPREFIX=" + value.encode()
+        assert not _environ_uses_prefix(environ, prefix), value
+    assert not _environ_uses_prefix(
+        b"STEAM_COMPAT_DATA_PATH=/data/compatdata/pfx", prefix)

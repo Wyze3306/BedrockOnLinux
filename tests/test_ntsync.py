@@ -8,6 +8,7 @@ performance reports (issues #63, #139, #143, #148, #150).
 """
 # SPDX-License-Identifier: MIT
 
+import errno
 import hashlib
 import os
 import tempfile
@@ -53,15 +54,17 @@ REQUIRED_HEADER_SYMBOLS = (
 )
 
 
-def _engine(root, *, with_ntsync, paths=("files/bin-wow64/wineserver",
-                                         "files/bin/wineserver")):
-    """A fake engine tree whose wineserver does or does not carry the marker."""
+def _engine(root, *, with_ntsync, with_fsync=False,
+            paths=("files/bin-wow64/wineserver", "files/bin/wineserver")):
+    """A fake engine tree whose wineserver does or does not carry the markers."""
     for relative in paths:
         server = Path(root) / relative
         server.parent.mkdir(parents=True, exist_ok=True)
         body = b"\x7fELF" + b"padding" * 64
         if with_ntsync:
             body += b"\x00/dev/ntsync\x00"
+        if with_fsync:
+            body += b"\x00WINEFSYNC\x00"
         server.write_bytes(body + b"trailer")
     return Path(root)
 
@@ -217,6 +220,162 @@ class ProblemReportTests(unittest.TestCase):
                 good, device=device, environ={}))
             self.assertIn("unknown", ntsync.inproc_sync_summary(
                 Path(td) / "nothing", device=device, environ={}))
+
+
+class FsyncFallbackTests(unittest.TestCase):
+    """Engine patch 0014 falls back to fsync when /dev/ntsync is missing."""
+
+    def _absent_device(self, td):
+        return Path(td) / "no-ntsync"
+
+    def test_the_fallback_marker_is_detected(self):
+        with tempfile.TemporaryDirectory() as td:
+            with_it = _engine(Path(td) / "a", with_ntsync=True, with_fsync=True)
+            without = _engine(Path(td) / "b", with_ntsync=True)
+            self.assertIs(ntsync.engine_has_fsync_fallback(with_it), True)
+            self.assertIs(ntsync.engine_has_fsync_fallback(without), False)
+            self.assertIsNone(
+                ntsync.engine_has_fsync_fallback(Path(td) / "none"))
+
+    def test_a_kernel_without_ntsync_is_fine_when_fsync_carries_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _engine(td, with_ntsync=True, with_fsync=True)
+            self.assertIsNone(ntsync.inproc_sync_problem(
+                root, device=self._absent_device(td), environ={},
+                futex_waitv=True))
+            self.assertEqual(
+                ntsync.inproc_sync_summary(
+                    root, device=self._absent_device(td), environ={},
+                    futex_waitv=True),
+                "OK (fsync fallback: no /dev/ntsync)")
+
+    def test_ntsync_off_by_hand_is_fine_when_fsync_carries_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _engine(td, with_ntsync=True, with_fsync=True)
+            device = Path(td) / "ntsync"
+            device.write_bytes(b"")
+            env = {"PROTON_NO_NTSYNC": "1"}
+            self.assertIsNone(ntsync.inproc_sync_problem(
+                root, device=device, environ=env, futex_waitv=True))
+            self.assertIn("PROTON_NO_NTSYNC", ntsync.inproc_sync_summary(
+                root, device=device, environ=env, futex_waitv=True))
+
+    def test_a_kernel_without_futex_waitv_is_named(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _engine(td, with_ntsync=True, with_fsync=True)
+            problem = ntsync.inproc_sync_problem(
+                root, device=self._absent_device(td), environ={},
+                kernel_release="5.15.0-test", futex_waitv=False)
+            self.assertIn("futex_waitv", problem)
+            self.assertIn(ntsync.FUTEX_WAITV_KERNEL, problem)
+            self.assertIn("modprobe ntsync", problem)
+            self.assertIn("5.15.0-test", problem)
+            self.assertEqual(
+                ntsync.inproc_sync_summary(
+                    root, device=self._absent_device(td), environ={},
+                    futex_waitv=False),
+                "MISSING (no /dev/ntsync)")
+
+    def test_turning_both_paths_off_names_both_variables(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _engine(td, with_ntsync=True, with_fsync=True)
+            problem = ntsync.inproc_sync_problem(
+                root, device=self._absent_device(td),
+                environ={"PROTON_NO_NTSYNC": "1", "PROTON_NO_FSYNC": "1"},
+                futex_waitv=True)
+            self.assertIn("PROTON_NO_NTSYNC", problem)
+            self.assertIn("PROTON_NO_FSYNC", problem)
+
+    def test_no_fsync_without_ntsync_is_reported(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _engine(td, with_ntsync=True, with_fsync=True)
+            problem = ntsync.inproc_sync_problem(
+                root, device=self._absent_device(td),
+                environ={"PROTON_NO_FSYNC": "1"}, futex_waitv=True)
+            self.assertIn("PROTON_NO_FSYNC", problem)
+            self.assertIn("/dev/ntsync", problem)
+
+    def test_no_fsync_is_harmless_while_ntsync_works(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _engine(td, with_ntsync=True, with_fsync=True)
+            device = Path(td) / "ntsync"
+            device.write_bytes(b"")
+            self.assertIsNone(ntsync.inproc_sync_problem(
+                root, device=device, environ={"PROTON_NO_FSYNC": "1"},
+                futex_waitv=True))
+
+    def test_an_engine_without_the_fallback_keeps_the_old_advice(self):
+        # native22 and older: nothing to fall back to, whatever the kernel.
+        with tempfile.TemporaryDirectory() as td:
+            root = _engine(td, with_ntsync=True)
+            problem = ntsync.inproc_sync_problem(
+                root, device=self._absent_device(td), environ={},
+                kernel_release="6.12.0-test", futex_waitv=True)
+            self.assertIn("modprobe ntsync", problem)
+            self.assertNotIn("futex_waitv", problem)
+            self.assertNotIn("PROTON_NO_FSYNC", problem)
+
+    def test_an_unanswerable_probe_does_not_blame_the_kernel(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _engine(td, with_ntsync=True, with_fsync=True)
+            with mock.patch.object(ntsync, "kernel_supports_futex_waitv",
+                                   return_value=None):
+                self.assertIsNone(ntsync.inproc_sync_problem(
+                    root, device=self._absent_device(td), environ={}))
+
+    def test_the_probe_reads_enosys_and_eperm_as_absent(self):
+        for err, expected in ((errno.EINVAL, True), (errno.ENOSYS, False),
+                              (errno.EPERM, False)):
+            with self.subTest(errno=errno.errorcode[err]):
+                libc = mock.Mock()
+                libc.syscall.return_value = -1
+                with mock.patch.object(ntsync.platform, "system",
+                                       return_value="Linux"), \
+                        mock.patch.object(ntsync.platform, "machine",
+                                          return_value="x86_64"), \
+                        mock.patch.object(ntsync.ctypes, "CDLL",
+                                          return_value=libc), \
+                        mock.patch.object(ntsync.ctypes, "get_errno",
+                                          return_value=err):
+                    self.assertIs(ntsync.kernel_supports_futex_waitv(),
+                                  expected)
+
+    def test_the_probe_is_not_asked_off_linux(self):
+        with mock.patch.object(ntsync.platform, "system",
+                               return_value="Darwin"):
+            self.assertIsNone(ntsync.kernel_supports_futex_waitv())
+
+    def test_an_unreadable_device_is_not_counted_as_ntsync(self):
+        # The wineserver opens it read-only and falls back when that fails.
+        with tempfile.TemporaryDirectory() as td:
+            device = Path(td) / "ntsync"
+            device.write_bytes(b"")
+            plain = _engine(Path(td) / "a", with_ntsync=True)
+            backed = _engine(Path(td) / "b", with_ntsync=True,
+                             with_fsync=True)
+            with mock.patch.object(ntsync, "ntsync_device_readable",
+                                   return_value=False):
+                problem = ntsync.inproc_sync_problem(
+                    plain, device=device, environ={}, futex_waitv=True)
+                self.assertIn("cannot open it", problem)
+                self.assertIn("MODE", problem)
+                self.assertEqual(
+                    ntsync.inproc_sync_summary(plain, device=device,
+                                               environ={}),
+                    "MISSING (/dev/ntsync not readable)")
+                self.assertIsNone(ntsync.inproc_sync_problem(
+                    backed, device=device, environ={}, futex_waitv=True))
+                self.assertEqual(
+                    ntsync.inproc_sync_summary(backed, device=device,
+                                               environ={}, futex_waitv=True),
+                    "OK (fsync fallback: /dev/ntsync not readable)")
+
+    def test_an_inherited_no_fsync_is_dropped(self):
+        self.assertIn("PROTON_NO_FSYNC", LAUNCHER_OWNED_ENV)
+        env = {"PROTON_NO_FSYNC": "1"}
+        launch._configure_runtime_compat(
+            env, {}, "x11", False, host_env={}, steam_deck=False)
+        self.assertNotIn("PROTON_NO_FSYNC", env)
 
 
 class LaunchWiringTests(unittest.TestCase):

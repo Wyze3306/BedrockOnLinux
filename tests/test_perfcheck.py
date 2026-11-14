@@ -414,7 +414,7 @@ class FrameRateLimitTests(unittest.TestCase):
     """The cap the launcher hands vkd3d-proton, and when it declines to."""
 
     def _apply(self, environ=None, refresh_hz=143.85, env=None,
-               settings=None, **options):
+               settings=None, xwayland=False, **options):
         with tempfile.TemporaryDirectory() as td:
             prefix = _prefix(td, **options) if options else None
             with mock.patch.object(launch, "info"), \
@@ -423,7 +423,8 @@ class FrameRateLimitTests(unittest.TestCase):
                     env if env is not None else {},
                     {} if settings is None else settings, prefix,
                     environ=environ or {},
-                    refresh_probe=lambda: refresh_hz)
+                    refresh_probe=lambda: refresh_hz,
+                    xwayland=xwayland)
         return applied, warned
 
     def test_an_unpaced_loop_is_capped_at_the_display(self):
@@ -567,6 +568,73 @@ class FrameRateLimitTests(unittest.TestCase):
         self.assertEqual(applied, 60)
         self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
 
+    def test_vsync_at_the_players_limit_needs_no_second_limiter(self):
+        # #202: vkd3d-proton's limiter ends each wait spinning, 22% of a core
+        # at 60 FPS. Vsync on a 60 Hz display already holds the game at 60.
+        for refresh in (60.0, 59.94, 60.05):
+            env = {}
+            applied, _ = self._apply(env=env, refresh_hz=refresh,
+                                     gfx_vsync="1", gfx_max_framerate="60")
+            # Still returned, so the game's own spinning limiter is set aside.
+            self.assertEqual(applied, 60, refresh)
+            self.assertNotIn("VKD3D_FRAME_RATE", env, refresh)
+
+    def test_vsync_on_a_fast_display_holds_a_matching_limit(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=143.85, gfx_vsync="1",
+                                 gfx_max_framerate="144")
+        self.assertEqual(applied, 144)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
+    def test_a_limit_under_the_refresh_rate_is_still_held(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=60.0, gfx_vsync="1",
+                                 gfx_max_framerate="59")
+        self.assertEqual(applied, 59)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59")
+
+    def test_vsync_off_still_needs_the_launchers_limiter(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=60.0, gfx_vsync="0",
+                                 gfx_max_framerate="60")
+        self.assertEqual(applied, 60)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+
+    def test_an_unmeasured_display_keeps_the_launchers_limiter(self):
+        env = {}
+        applied, warned = self._apply(env=env, refresh_hz=None, gfx_vsync="1",
+                                      gfx_max_framerate="60")
+        self.assertEqual(applied, 60)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+        self.assertFalse(warned.called)
+
+    def test_a_display_probe_that_raises_keeps_the_launchers_limiter(self):
+        def boom():
+            raise OSError("no display")
+        env = {}
+        with tempfile.TemporaryDirectory() as td:
+            prefix = _prefix(td, gfx_vsync="1", gfx_max_framerate="60")
+            with mock.patch.object(launch, "info"), \
+                    mock.patch.object(launch, "warn"):
+                applied = launch._configure_frame_rate_limit(
+                    env, {}, prefix, environ={}, refresh_probe=boom)
+        self.assertEqual(applied, 60)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+
+    def test_a_held_limit_that_vsync_keeps_adds_no_limiter(self):
+        env = {}
+        with tempfile.TemporaryDirectory() as td:
+            prefix = _prefix(td, gfx_vsync="1", gfx_max_framerate="0")
+            options = perfcheck.find_options_file(prefix)
+            options.with_name(options.name + ".bol-max-framerate") \
+                .write_text("60\n")
+            with mock.patch.object(launch, "info"), \
+                    mock.patch.object(launch, "warn"):
+                applied = launch._configure_frame_rate_limit(
+                    env, {}, prefix, environ={}, refresh_probe=lambda: 60.0)
+        self.assertEqual(applied, 60)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
     def test_the_players_own_limit_needs_no_display_probe(self):
         env = {}
         applied, warned = self._apply(env=env, refresh_hz=None,
@@ -656,6 +724,111 @@ class FrameRateLimitTests(unittest.TestCase):
         self.assertIn("Legacy compatibility renderer",
                       warned.call_args.args[0])
 
+    # #202: under Xwayland the present-wait completes before the frame is
+    # shown, so vsync alone lets frames queue: measured 139 ms from a mouse
+    # movement to the moved picture at 60 Hz in gamescope, against 75 ms with
+    # the game paced just under the display's rate.
+
+    def test_xwayland_paces_an_unlimited_vsync_game_under_the_display(self):
+        env = {}
+        applied, warned = self._apply(env=env, refresh_hz=60.0, xwayland=True,
+                                      gfx_vsync="1", gfx_max_framerate="0")
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
+        self.assertEqual(applied, 59.88)
+        self.assertFalse(warned.called)
+
+    def test_xwayland_paces_a_limit_vsync_already_keeps(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=59.94, xwayland=True,
+                                 gfx_vsync="1", gfx_max_framerate="60")
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.82")
+        # The player's own limit, so it is still set aside for the session.
+        self.assertEqual(applied, 60)
+
+    def test_the_pace_always_lands_under_the_display(self):
+        for refresh in (23.976, 59.94, 59.95, 60.0, 74.97, 120.0, 143.85,
+                        144.0, 165.0, 240.0, 360.0):
+            env = {}
+            self._apply(env=env, refresh_hz=refresh, xwayland=True,
+                        gfx_vsync="1", gfx_max_framerate="0")
+            rate = float(env["VKD3D_FRAME_RATE"])
+            self.assertLess(rate, refresh * 0.9985, refresh)
+            # Close enough that a repeated frame stays rare: one in 400+.
+            self.assertGreater(rate, refresh * 0.9975, refresh)
+
+    def test_a_fast_display_is_paced_with_its_decimals(self):
+        env = {}
+        self._apply(env=env, refresh_hz=143.85, xwayland=True,
+                    gfx_vsync="1", gfx_max_framerate="0")
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "143.56")
+
+    def test_plain_x11_leaves_vsync_alone(self):
+        # Not measured there: the queue is an Xwayland one.
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=60.0, xwayland=False,
+                                 gfx_vsync="1", gfx_max_framerate="0")
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
+    def test_the_switch_leaves_vsync_alone_under_xwayland(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=60.0, xwayland=True,
+                                 settings={"limit_frame_rate": False},
+                                 gfx_vsync="1", gfx_max_framerate="0")
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=60.0, xwayland=True,
+                                 settings={"limit_frame_rate": False},
+                                 gfx_vsync="1", gfx_max_framerate="60")
+        # As before the pacing: vsync holds 60, the game's spin is set aside.
+        self.assertEqual(applied, 60)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
+    def test_xwayland_keeps_a_limit_under_the_display_as_it_is(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=60.0, xwayland=True,
+                                 gfx_vsync="1", gfx_max_framerate="30")
+        self.assertEqual(applied, 30)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "30")
+
+    def test_xwayland_keeps_the_cap_of_an_unpaced_loop_as_it_is(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=143.85, xwayland=True,
+                                 gfx_vsync="0", gfx_max_framerate="0")
+        self.assertEqual(applied, 144)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "144")
+
+    def test_an_unmeasured_display_leaves_vsync_to_pace_alone(self):
+        env = {}
+        applied, warned = self._apply(env=env, refresh_hz=None, xwayland=True,
+                                      gfx_vsync="1", gfx_max_framerate="0")
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+        self.assertFalse(warned.called)
+
+    def test_an_explicit_or_inherited_rate_still_wins_under_xwayland(self):
+        env = {}
+        applied, _ = self._apply(env=env, environ={"BOL_FRAME_RATE": "90"},
+                                 refresh_hz=60.0, xwayland=True,
+                                 gfx_vsync="1", gfx_max_framerate="0")
+        self.assertEqual(applied, 90)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "90")
+        env = {}
+        applied, _ = self._apply(env=env, environ={"VKD3D_FRAME_RATE": "45"},
+                                 refresh_hz=60.0, xwayland=True,
+                                 gfx_vsync="1", gfx_max_framerate="0")
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
+    def test_the_legacy_renderer_is_not_paced_under_xwayland(self):
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=60.0, xwayland=True,
+                                 settings={"renderer": "opengl"},
+                                 gfx_vsync="1", gfx_max_framerate="0")
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
+
     def test_a_display_probe_that_raises_never_fails_a_launch(self):
         env = {}
         with tempfile.TemporaryDirectory() as td:
@@ -669,6 +842,133 @@ class FrameRateLimitTests(unittest.TestCase):
         self.assertTrue(probed.called)
         self.assertIsNone(applied)
         self.assertNotIn("VKD3D_FRAME_RATE", env)
+
+
+class XwaylandDetectionTests(unittest.TestCase):
+    """Which sessions get vsync paced under the refresh rate."""
+
+    def test_an_x11_game_on_a_wayland_desktop(self):
+        with mock.patch.object(launch, "in_gamescope_session",
+                               return_value=False):
+            self.assertTrue(launch._draws_through_xwayland(
+                "x11", "wayland-0", False, {}))
+
+    def test_the_gamescope_the_launcher_starts(self):
+        with mock.patch.object(launch, "in_gamescope_session",
+                               return_value=False):
+            self.assertTrue(launch._draws_through_xwayland(
+                "x11", None, True, {}))
+
+    def test_steam_game_mode_gives_x11_clients_no_wayland_display(self):
+        # Where the bench ran: gamescope's Xwayland, no WAYLAND_DISPLAY.
+        self.assertTrue(launch._draws_through_xwayland(
+            "x11", None, False,
+            {"GAMESCOPE_WAYLAND_DISPLAY": "gamescope-0", "DISPLAY": ":1"}))
+
+    def test_winewayland_draws_to_the_compositor_itself(self):
+        with mock.patch.object(launch, "in_gamescope_session",
+                               return_value=True):
+            self.assertFalse(launch._draws_through_xwayland(
+                "wayland", "wayland-0", True, {}))
+
+    def test_a_plain_x11_server(self):
+        with mock.patch.object(launch, "in_gamescope_session",
+                               return_value=False) as probed:
+            self.assertFalse(launch._draws_through_xwayland(
+                "x11", None, False, {"DISPLAY": ":0"}))
+        probed.assert_called_once_with({"DISPLAY": ":0"})
+
+
+class FrameRateDeliveryTests(unittest.TestCase):
+    """How a limit with decimals gets past Proton to vkd3d-proton.
+
+    Proton turns VKD3D_FRAME_RATE into DXVK's whole-number dxgi.maxFrameRate,
+    where 59.88 means no limit at all; Wine adds the prefix's HKCU\\Environment
+    to the game's environment behind Proton's back.
+    """
+
+    def _prefix(self, root, user=None):
+        from tests.test_wine_registry import SYSTEM, USER
+        prefix = Path(root) / "pfx"
+        prefix.mkdir()
+        (prefix / "system.reg").write_bytes(SYSTEM)
+        (prefix / "user.reg").write_bytes(user or USER)
+        return prefix
+
+    def _user_value(self, prefix):
+        for line in (prefix / "user.reg").read_text().splitlines():
+            if line.startswith('"VKD3D_FRAME_RATE"='):
+                return line.split("=", 1)[1].strip('"')
+        return None
+
+    def test_a_rate_with_decimals_moves_into_the_prefix(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self._prefix(td)
+            env = {"VKD3D_FRAME_RATE": "59.88", "OTHER": "1"}
+            delivered = launch._deliver_frame_rate_limit(env, prefix)
+            self.assertEqual(delivered, "59.88")
+            self.assertEqual(self._user_value(prefix), "59.88")
+            # Gone from what Proton sees, which would make it no limit.
+            self.assertEqual(env, {"OTHER": "1"})
+            # The prefix's other environment values are untouched.
+            self.assertIn('"TEMP"=', (prefix / "user.reg").read_text())
+
+    def test_a_whole_rate_stays_with_proton(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self._prefix(td)
+            env = {"VKD3D_FRAME_RATE": "60"}
+            self.assertIsNone(launch._deliver_frame_rate_limit(env, prefix))
+            self.assertEqual(env, {"VKD3D_FRAME_RATE": "60"})
+            self.assertIsNone(self._user_value(prefix))
+
+    def test_the_previous_sessions_pace_does_not_outlive_it(self):
+        # Otherwise it would outrank the whole-number limit Proton passes on.
+        for env in ({}, {"VKD3D_FRAME_RATE": "144"}):
+            with tempfile.TemporaryDirectory() as td:
+                prefix = self._prefix(td)
+                launch._deliver_frame_rate_limit(
+                    {"VKD3D_FRAME_RATE": "59.88"}, prefix)
+                self.assertEqual(self._user_value(prefix), "59.88")
+                self.assertIsNone(
+                    launch._deliver_frame_rate_limit(dict(env), prefix))
+                self.assertIsNone(self._user_value(prefix), env)
+
+    def test_a_running_prefix_costs_the_pace_not_the_launch(self):
+        from bol.log import BolError
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self._prefix(td)
+            env = {"VKD3D_FRAME_RATE": "59.88"}
+            with mock.patch("bol.prefix.require_prefix_idle",
+                            side_effect=BolError("prefix active")), \
+                    mock.patch.object(launch, "warn") as warned:
+                self.assertIsNone(launch._deliver_frame_rate_limit(env, prefix))
+            # Through Proton it would mean no limit; vsync still paces.
+            self.assertNotIn("VKD3D_FRAME_RATE", env)
+            self.assertTrue(warned.called)
+            self.assertIsNone(self._user_value(prefix))
+
+    def test_a_running_prefix_with_nothing_to_deliver_is_quiet(self):
+        from bol.log import BolError
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self._prefix(td)
+            env = {"VKD3D_FRAME_RATE": "60"}
+            with mock.patch("bol.prefix.require_prefix_idle",
+                            side_effect=BolError("prefix active")), \
+                    mock.patch.object(launch, "warn") as warned:
+                self.assertIsNone(launch._deliver_frame_rate_limit(env, prefix))
+            self.assertEqual(env, {"VKD3D_FRAME_RATE": "60"})
+            self.assertFalse(warned.called)
+
+    def test_the_launch_delivers_after_the_custom_environment(self):
+        # A rate with decimals typed into the Advanced field is applied by
+        # apply_custom_env, and must still be moved past Proton.
+        import inspect
+        source = inspect.getsource(launch)
+        custom = source.index("apply_custom_env(env, s.get(")
+        deliver = source.index("_deliver_frame_rate_limit(env)")
+        started = source.index('open(LOGS / "minecraft.log", "w")')
+        self.assertLess(custom, deliver)
+        self.assertLess(deliver, started)
 
 
 class LaunchWiringTests(unittest.TestCase):
@@ -710,14 +1010,23 @@ if __name__ == "__main__":
 class ContainerLocaleTests(unittest.TestCase):
     """A locale the host lacks is rebuilt by pressure-vessel at every launch."""
 
-    def _problem(self, environ, present, flatpak=False):
+    def _problem(self, environ, present, flatpak=False, kept="failed"):
         with tempfile.TemporaryDirectory() as td:
             info = Path(td) / ".flatpak-info"
             if flatpak:
                 info.write_text("[Application]\n")
             return perfcheck.container_locale_problem(
                 environ, available=lambda name: name in present,
-                flatpak_info=info)
+                flatpak_info=info, kept_state=kept)
+
+    def test_quiet_while_the_launcher_keeps_or_will_keep_a_copy(self):
+        # bol.slr_locales builds the locales once and hands them over at
+        # every later launch: only a copy it could not build still costs.
+        for kept in ("cached", "pending", "none-needed", None):
+            self.assertIsNone(self._problem(
+                {"LANG": "fr_FR.UTF-8"}, {"fr_FR.UTF-8"}, kept=kept), kept)
+        problem = self._problem({"LANG": "fr_FR.UTF-8"}, {"fr_FR.UTF-8"})
+        self.assertIn("slr-locales.log", problem)
 
     def test_a_missing_en_us_is_named_with_the_fix(self):
         problem = self._problem({"LANG": "fr_FR.UTF-8"}, {"fr_FR.UTF-8"})
@@ -742,7 +1051,8 @@ class ContainerLocaleTests(unittest.TestCase):
     def test_an_unknown_answer_says_nothing(self):
         self.assertIsNone(perfcheck.container_locale_problem(
             {"LANG": "fr_FR.UTF-8"}, available=lambda _name: None,
-            flatpak_info=Path("/nonexistent/.flatpak-info")))
+            flatpak_info=Path("/nonexistent/.flatpak-info"),
+            kept_state="failed"))
 
     def test_glibc_is_asked_without_changing_this_process(self):
         import locale

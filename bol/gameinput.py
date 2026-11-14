@@ -23,6 +23,23 @@ def gameinput_redist_ok(prefix: Path):
                           "/GameInputRedistService.exe").exists())
 
 
+def builtin_gameinput_override(prefix: Path):
+    """The DLL override that keeps Wine's builtin gameinput.dll out of the
+    game, or None while the native redist is not there to stand in for it.
+
+    The game never needs the builtin: it loads GameInputRedist.dll through
+    RedistDir, and the redist imports no gameinput.dll of its own. An
+    injected client does load it -- Flarial through its SDL input layer --
+    and the builtin's mouse reader opens a DirectInput mouse on whatever
+    window is in the foreground. Injected while the game has the focus, as
+    an automatic injection always is, that window is the game's, and the
+    reader takes the game's raw mouse input from it: the cursor moves and
+    nothing in the game reacts (#281, #359). From the launcher's button the
+    focus is on the launcher, which is why a manual injection kept the mouse.
+    """
+    return "gameinput=d" if gameinput_redist_ok(Path(prefix)) else None
+
+
 def _msi_embedded_cab(msi: bytes):
     """Return the embedded MSZip CAB bytes from an MSI, parsing the OLE
     compound-file container in pure Python (no msiexec, no host tools). The

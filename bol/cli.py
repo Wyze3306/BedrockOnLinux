@@ -12,9 +12,11 @@ from .content import cmd_import
 from .doctor import doctor
 from .games import (
     installed_builds,
+    is_bedrock,
     list_editions,
     list_versions,
     remove_build,
+    selected_edition,
 )
 from .gamesetup import do_setup, update_game_before_play
 from .launch import (
@@ -81,6 +83,19 @@ _BUILDS_KEEP_NOTE = (
     "Worlds, settings, screenshots and packs are kept with your profile, not "
     "in these folders, so removing a build removes only the download."
 )
+
+
+def _build_label(build):
+    """How 'versions' names one installable build.
+
+    A title only the Store serves has a single entry, "current": the build
+    the Store has today. Once it is installed, its own number says more.
+    """
+    from .xodus import STORE_BUILD
+
+    if build["version"] == STORE_BUILD:
+        return build.get("build") or "latest from the Microsoft Store"
+    return build["version"]
 
 
 def _list_installed_builds():
@@ -170,24 +185,61 @@ def _open_gui():
     # Only the toolkit itself is worth stopping for, and only when it really
     # is absent: bol.gui bootstraps the rest (python-xlib) once it is
     # imported, and works without it.
+    if not deps.have("PySide6"):
+        # The toolkit is about to be downloaded, before any window exists to
+        # say so: a terminal gets the list of hosts first, and the window's
+        # own first-run notice is told what was already fetched.
+        from . import netpolicy
+        if not netpolicy.decided():
+            netpolicy.choose_in_terminal()
+            os.environ["BOL_BOOTSTRAP_FETCHED"] = "1"
     if not deps.have("PySide6") and "PySide6" in deps.ensure_gui_deps():
         die("The launcher window needs the Qt toolkit (PySide6), which is "
             "not installed here and could not be installed automatically. "
             "Install it with pip, or use the AppImage, Flatpak, .deb or .rpm "
             f"— each of those carries it. `{APP} play` needs none of it.")
+    # The toolkit the launcher fetched itself also gets the system libraries
+    # Qt links and this host lacks (libgthread-2.0 on openSUSE, the xcb-util
+    # family on Ubuntu and Mint); a system or pip one is left as it is.
+    deps.fill_qt_library_gaps()
     # Qt picks its platform when it starts, so before bol.gui is imported.
     _prefer_x11_on_chromeos()
+    # And a plugin it cannot load is not an exception but an abort, with
+    # nothing on screen when the menu started the launcher: Ubuntu and Mint
+    # install no libxcb-cursor0, which a pip PySide6 needs.
+    library = deps.xcb_plugin_missing_library() if deps.qt_will_use_xcb() \
+        else None
+    if library:
+        _missing_gui_library(deps, library, " for Qt's X11 support")
     try:
         from .gui import gui
     except ImportError as exc:
         library = deps.missing_shared_library(exc)
         if library is None:
             raise
-        die(f"The launcher window needs the system library {library}, which "
-            f"this system does not have. Install the package your "
-            f"distribution ships it in, then open the launcher again — "
-            f"`{APP} play` and `{APP} doctor` keep working without it.")
+        _missing_gui_library(deps, library)
     gui()
+
+
+def _missing_gui_library(deps, library, purpose=""):
+    # Every one this host lacks, not only the one the loader stopped at.
+    libraries = deps.missing_qt_libraries(library)
+    hint = deps.install_hint(*libraries)
+    if len(libraries) == 1:
+        needs, them = f"the system library {library}{purpose}", "it"
+        where = "the package your distribution ships it in"
+    else:
+        needs = (f"the system libraries {', '.join(libraries[:-1])} and "
+                 f"{libraries[-1]}")
+        them, where = "them", "the packages your distribution ships them in"
+    message = (
+        f"The launcher window needs {needs}, which this system does not "
+        f"have. Install {f'{them} ({hint})' if hint else where}, then open "
+        f"the launcher again — `{APP} play` and `{APP} doctor` keep working "
+        f"without {them}.")
+    if not IS_TTY:
+        desktop_notify(message)
+    die(message)
 
 
 def _report_launch_failure(message):
@@ -197,20 +249,263 @@ def _report_launch_failure(message):
     desktop_notify(f"Minecraft did not start.\n{message}")
 
 
+def _list_instances():
+    """Print the games that are running, across every profile."""
+    from . import instances
+    running = instances.list_instances()
+    if not running:
+        info("No Minecraft instance is running.")
+        return
+    rows = [("ID", "PROFILE", "GAME", "WINDOW", "UP", "PID")]
+    for item in running:
+        build = " ".join(part for part in (item.title, item.version) if part)
+        rows.append((item.id, item.profile, build,
+                     "hidden" if item.hidden else "visible",
+                     instances.format_uptime(item.uptime()), str(item.pid)))
+    widths = [max(len(row[column]) for row in rows)
+              for column in range(len(rows[0]))]
+    for row in rows:
+        print("  ".join(cell.ljust(width)
+                        for cell, width in zip(row, widths)).rstrip())
+
+
+def _instance_targets(reference, everything):
+    from . import instances
+    if everything:
+        return instances.list_instances()
+    if not reference:
+        die("Name the instance (its ID or its profile, see "
+            f"'{APP} instances'), or pass --all.")
+    return [instances.find(reference)]
+
+
+def _cmd_instances(a, parser):
+    from . import instances
+    if a.instances_cmd in (None, "list"):
+        _list_instances()
+    elif a.instances_cmd in ("show", "hide"):
+        hide = a.instances_cmd == "hide"
+        targets = _instance_targets(a.instance, a.all)
+        if not targets:
+            info("No Minecraft instance is running.")
+        for item in targets:
+            changed = instances.set_hidden(item, hide)
+            ok(f"{item.id}: {'hidden' if hide else 'shown'}"
+               + ("" if changed else
+                  " (no window yet; it will follow as soon as the game "
+                  "opens one)" if hide else
+                  " (it had no hidden window)"))
+    elif a.instances_cmd == "close":
+        targets = _instance_targets(a.instance, a.all)
+        if not targets:
+            info("No Minecraft instance is running.")
+        for item in targets:
+            info(f"Closing {item.id} ({item.profile}) …")
+            result = instances.close_instance(item, force=a.force)
+            ok(f"{item.id}: closed." if result == "closed" else
+               f"{item.id}: stopped.")
+    else:
+        parser.print_help()
+
+
+def _plays_xbox_live():
+    """Whether PLAY starts a game that signs in through Xbox Live."""
+    from .games import uses_xbox_live
+    from .util import load_settings
+    return uses_xbox_live(load_settings().get("game_dir"))
+
+
+def _before_network_command(cmd):
+    """The first-run notice, then what the player's choice allows.
+
+    Before `setup` or `play` connect to anything, a terminal is shown the
+    full list of hosts once and asked how updates should be checked. In
+    "auto" the signed data file is refreshed if it is due -- a few seconds
+    at most, and a failure changes nothing -- and incident notices are
+    printed. Nothing here can stop the command.
+    """
+    try:
+        from . import feed, netpolicy
+        from .util import load_settings
+        netpolicy.choose_in_terminal()
+        feed.refresh_if_due(timeout=4)
+        for notice in feed.notices(
+                minecraft=load_settings().get("mc_version")):
+            line = notice["title"]
+            if notice.get("text"):
+                line += " — " + notice["text"]
+            if notice.get("url"):
+                line += f" ({notice['url']})"
+            (warn if notice.get("level") != "info" else info)(line)
+    except Exception:
+        pass
+
+
+def _cmd_network(a):
+    from . import feed, netpolicy
+    from .update import describe_install
+    if a.mode:
+        netpolicy.set_mode(a.mode)
+        ok(f"Update checks: {netpolicy.MODE_LABELS[a.mode]}.")
+        return
+    print(netpolicy.disclosure_text())
+    print()
+    current = netpolicy.mode()
+    print("Update checks: " + (netpolicy.MODE_LABELS[current] if current
+                               else "not chosen yet (nothing is checked)"))
+    for key in netpolicy.MODES:
+        print(f"  {APP} network {key:<5} {netpolicy.MODE_HELP[key]}")
+    print("Release channel: " + netpolicy.channel())
+    print("This install: " + describe_install())
+    state = feed.status()
+    if not state["in_service"]:
+        print("Data file: not in service in this build")
+    elif state["serial"]:
+        print(f"Data file: {state['serial']}")
+    else:
+        print("Data file: none fetched yet")
+
+
+def _cmd_update(a):
+    """Check now. Asking for it is the consent for this one check; the
+    first time, the list of hosts is shown before anything is contacted."""
+    from . import feed, netpolicy
+    if a.channel:
+        netpolicy.set_channel(a.channel)
+    if not netpolicy.decided():
+        if netpolicy.choose_in_terminal() is None and IS_TTY:
+            info("Update skipped.")
+            return
+    state, detail = feed.refresh()
+    if state == "updated":
+        ok(f"Data fixes updated ({detail}).")
+    elif state == "error":
+        warn(f"Data fixes could not be refreshed ({detail}); keeping what "
+             "is installed.")
+    if a.data_only:
+        return
+    rel = check_for_update()
+    if not rel:
+        ok(f"{PRETTY} {VERSION} is up to date.")
+        return
+    info(f"Update available: v{rel['version']} (you have {VERSION}).")
+    go = (update_kind() in ("git", "system", "flatpak", "nix") or not IS_TTY
+          or input(f"Install v{rel['version']} now? [y/N] ")
+          .strip().lower() == "y")
+    if go:
+        state, msg = self_update(rel)
+        (ok if state == "ok" else warn)(msg)
+    else:
+        info("Update skipped.")
+
+
+def _cmd_report(a, ask=input, out=print):
+    """Collect a problem report, show what is in it, and send it on a yes.
+
+    Nothing leaves before the confirmation: --preview and --output never
+    send, and without a terminal the command stops unless --yes was given.
+    """
+    from . import report as problem
+
+    info("Collecting system information and logs (nothing is sent yet) …")
+    report = problem.collect()
+    known = {piece.key.removeprefix("log:"): piece for piece in report.pieces}
+    for name in a.without or ():
+        piece = known.get(name)
+        if piece is None:
+            die(f"Unknown part '{name}'; this report has: "
+                + ", ".join(sorted(known)))
+        piece.included = False
+
+    title, comment = a.title, a.comment
+    if a.comment_file:
+        try:
+            comment = Path(a.comment_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            die(f"Cannot read {a.comment_file}: {exc}")
+    asking = IS_TTY and not (a.preview or a.output or a.yes)
+    if not title and asking:
+        title = ask("Title (one line, what goes wrong): ")
+    if comment is None and asking:
+        comment = ask("What happened, and what did you expect? ")
+    report.set_message(title or "", comment or "")
+
+    out("")
+    out("This report contains:")
+    for piece in report.pieces:
+        out(f"  [{'x' if piece.included else ' '}] "
+            f"{piece.key.removeprefix('log:'):<22} {piece.title} "
+            f"({len(piece.text):,} characters)")
+    removed = report.removed()
+    out("Removed before anything is shown or sent: "
+        + (removed or "nothing personal was found") + ".")
+    out("")
+    if a.preview:
+        out(report.full_text())
+        info("Preview only: nothing was sent.")
+        return
+    if a.output:
+        target = Path(a.output).expanduser()
+        try:
+            target.write_text(report.full_text(), encoding="utf-8")
+        except OSError as exc:
+            die(f"Cannot write {target}: {exc}")
+        ok(f"Report saved to {target}. Nothing was sent.")
+        return
+    if not report.title:
+        die("A report needs a title: --title \"what goes wrong\".")
+
+    relay = None if a.browser else problem.relay_url()
+    out(problem.destination() if relay else problem.destination(
+        {problem.RELAY_ENV: "off"}))
+    out(f"See all of it first with:  {APP} report --preview")
+    if not a.yes:
+        if not IS_TTY:
+            die("Nothing was sent: confirm with --yes, or run this in a "
+                "terminal.")
+        answer = ask("Send this report? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            info("Nothing was sent.")
+            return
+    if relay:
+        try:
+            ok("Report filed: " + problem.send(report, relay))
+            return
+        except problem.ReportError as exc:
+            warn(f"{exc} Falling back to the browser.")
+    path, url, opened = problem.open_in_browser(report)
+    ok(f"Full report saved to {path}")
+    if opened:
+        info("Your browser is opening GitHub's new-issue form with the "
+             "summary filled in. Attach that file there, then submit.")
+    else:
+        info("Open this address to file the issue, and attach that file:")
+        out(url)
+
+
 def main():
     p = argparse.ArgumentParser(prog=APP, description=f"{PRETTY} {VERSION}")
+    # Also what an update runs once before it replaces anything (bol.update).
+    p.add_argument("--version", action="version",
+                   version=f"{PRETTY} {VERSION}")
     sub = p.add_subparsers(dest="cmd")
 
     sub.add_parser("gui", help="open the launcher (default)")
     play = sub.add_parser("play", help="launch Minecraft")
     play.add_argument("--editor", action="store_true",
                       help="open Bedrock Editor instead of the game")
+    play.add_argument("--hidden", action="store_true",
+                      help="keep the game's window off the screen until it "
+                           "is shown ('instances show'); for a game driven "
+                           "by a tool rather than played")
     play.add_argument("--update", action="store_true",
                       help="install the newest Minecraft build first (always "
                            "done when Settings ▸ General has it switched on)")
     sp = sub.add_parser("setup", help="download & prepare Minecraft")
     sp.add_argument("--mc", metavar="EDITION",
-                    help="Minecraft edition to install: release or preview")
+                    help="edition to install: release, preview, education, "
+                         "or another Minecraft title of the Microsoft Store "
+                         "(dungeons, legends); see 'versions'")
     sp.add_argument("--version", metavar="BUILD",
                     help="Bedrock build to install (default: the newest); "
                          "see 'versions'")
@@ -278,6 +573,29 @@ def main():
     )
     profiles_create.add_argument("name", metavar="NAME")
     profiles_sub.add_parser("list", help="list isolated profiles")
+    ins = sub.add_parser(
+        "instances",
+        help="list, hide, show or close the Minecraft instances that are "
+             "running, across every profile",
+    )
+    instances_sub = ins.add_subparsers(dest="instances_cmd")
+    instances_sub.add_parser("list", help="list running instances (default)")
+    for name, text in (
+            ("hide", "take an instance's window off the screen; the game "
+                     "keeps running"),
+            ("show", "put a hidden instance's window back on the screen"),
+            ("close", "close an instance: its window is asked to close, and "
+                      "the game is stopped if it does not")):
+        one = instances_sub.add_parser(name, help=text)
+        one.add_argument("instance", nargs="?", metavar="INSTANCE",
+                         help="an ID from 'instances', the start of one, or "
+                              "a profile name")
+        one.add_argument("--all", action="store_true",
+                         help="every running instance")
+        if name == "close":
+            one.add_argument("--force", action="store_true",
+                             help="stop the game's processes without asking "
+                                  "its window to close first")
     sc = sub.add_parser(
         "shortcut",
         help="create a desktop/Steam shortcut that launches Minecraft "
@@ -288,7 +606,41 @@ def main():
         metavar="NAME",
         help="launch an isolated profile instead of the default installation",
     )
-    sub.add_parser("update", help="check for and install launcher updates")
+    up = sub.add_parser(
+        "update", help="check for and install launcher updates and data "
+                       "fixes")
+    up.add_argument("--channel", choices=("stable", "prerelease"),
+                    help="follow this release channel from now on")
+    up.add_argument("--data-only", action="store_true",
+                    help="refresh the signed data file only")
+    np = sub.add_parser(
+        "network",
+        help="show every host the launcher contacts, and choose whether it "
+             "checks for updates")
+    np.add_argument("mode", nargs="?", choices=("auto", "ask", "off"),
+                    help="auto: check at startup; ask: only on request; "
+                         "off: never")
+
+    rp = sub.add_parser(
+        "report",
+        help="report a problem: system information and logs, with personal "
+             "data removed, filed as an issue once you confirm")
+    rp.add_argument("--title", help="one line saying what goes wrong")
+    rp.add_argument("--comment", help="what happened and what you expected")
+    rp.add_argument("--comment-file", metavar="FILE",
+                    help="read the comment from a file")
+    rp.add_argument("--without", action="append", metavar="PART",
+                    help="leave a part out, by the name the list shows "
+                         "(settings, minecraft.log, …); repeatable")
+    rp.add_argument("--preview", action="store_true",
+                    help="print everything that would be sent, send nothing")
+    rp.add_argument("--output", metavar="FILE",
+                    help="save the full report to a file, send nothing")
+    rp.add_argument("--browser", action="store_true",
+                    help="open GitHub's issue form in your browser instead "
+                         "of sending through the report relay")
+    rp.add_argument("--yes", action="store_true",
+                    help="send without asking for confirmation")
 
     sub.add_parser("changelog", help="display the launcher's release changelog history")
 
@@ -307,6 +659,13 @@ def main():
         # Migration must precede every write to the new XDG root.
         from .util import _ensure_xdg_storage
         _ensure_xdg_storage()
+        if a.cmd and a.cmd != "gui":
+            # A command was understood: the launcher an update installed
+            # starts, so its predecessor is no longer needed (bol.rollback).
+            from . import rollback
+            rollback.confirm()
+        if a.cmd in ("setup", "play"):
+            _before_network_command(a.cmd)
         if a.cmd == "setup":
             mc = None
             if a.mc:
@@ -325,15 +684,19 @@ def main():
             # but it says so here rather than letting Realms, servers and
             # friends come up missing in-game with nothing having mentioned
             # a sign-in (#240).
-            if not msa_signed_in():
+            if not msa_signed_in() and _plays_xbox_live():
                 warn("Not signed in for online play: no Realms, no servers, "
-                     "no friends and no Marketplace.")
+                     "no friends and no Marketplace."
+                     if is_bedrock(selected_edition()) else
+                     "Not signed in: the game cannot reach Xbox Live.")
                 info(f"Sign in with:  {APP} login")
             # A poweroff or a stopped scope with the game running lets the
             # session finish its teardown before the launcher goes.
             supervision.install()
             update_game_before_play(always=a.update)
-            launch(editor=a.editor)
+            # Passed only when asked for: a visible launch is the call it
+            # has always been.
+            launch(editor=a.editor, **({"hidden": True} if a.hidden else {}))
         elif a.cmd == "shortcut":
             require_shortcuts_supported()
             profile = create_profile(a.profile) if a.profile else None
@@ -355,12 +718,22 @@ def main():
             else:
                 for edition in list_editions(a.beta):
                     print(f"{edition['name']}  (--mc {edition['id']})")
-                    for build in list_versions(edition["id"],
-                                                ignore_cache=a.refresh):
-                        print(f"    {build['version']:<14}"
+                    # One source out of reach costs its own edition, not the
+                    # others: Education comes from Windows Update, not Xodus.
+                    try:
+                        builds = list_versions(edition["id"],
+                                               ignore_cache=a.refresh)
+                    except Exception as exc:  # noqa: BLE001
+                        warn(f"{edition['name']}: the builds could not be "
+                             f"listed ({exc}).")
+                        continue
+                    for build in builds:
+                        print(f"    {_build_label(build):<14}"
                               f"{'installed' if build['installed'] else ''}")
                 info("Builds are downloaded from Microsoft's own CDN with "
-                     "your account, which must own Minecraft.")
+                     "your account, which must own Minecraft. Minecraft "
+                     "Education comes from Windows Update and asks for a "
+                     "school or work account when it starts.")
         elif a.cmd == "store-login":
             from . import xodus as _xodus
             if _xodus.signed_in():
@@ -403,21 +776,14 @@ def main():
                     )
             else:
                 pp.print_help()
+        elif a.cmd == "instances":
+            _cmd_instances(a, ins)
         elif a.cmd == "update":
-            rel = check_for_update()
-            if not rel:
-                ok(f"{PRETTY} {VERSION} is up to date.")
-            else:
-                info(f"Update available: v{rel['version']} "
-                     f"(you have {VERSION}).")
-                go = (update_kind() in ("git", "system") or not IS_TTY
-                      or input(f"Install v{rel['version']} now? [y/N] ")
-                      .strip().lower() == "y")
-                if go:
-                    state, msg = self_update(rel)
-                    (ok if state == "ok" else warn)(msg)
-                else:
-                    info("Update skipped.")
+            _cmd_update(a)
+        elif a.cmd == "network":
+            _cmd_network(a)
+        elif a.cmd == "report":
+            _cmd_report(a)
         elif a.cmd == "import":
             cmd_import(a.files)
         elif a.cmd == "repair":
@@ -464,5 +830,6 @@ def main():
             # terminal with a sign-in it cannot start.
             info(f"Sign in with:  {APP} store-login")
         if a.cmd == "play":
+            info(f"Report it, logs included, with:  {APP} report")
             _report_launch_failure(str(exc))
         sys.exit(1)

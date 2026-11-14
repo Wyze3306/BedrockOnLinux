@@ -52,9 +52,13 @@ REQUIRED_COMPONENTS = {
 # Wayland driver's seat version, native21 from native20 only in
 # xgameruntime's Gaming Services version check, and native22 from native21
 # only in kernelbase's GetProcessMemoryInfo, so the vkd3d payload — and
-# therefore every variant hash below — is unchanged; only the revision this
-# launcher accepts moves.
-REQUIRED_VARIANT_HASHES_BUILD_REV = "wow64-archs-native22"
+# therefore every variant hash below — was unchanged; only the revision this
+# launcher accepts moved. native23 rebuilds the payload with the
+# frame-limiter busy-wait fix (#202): d3d12core.dll changes on both
+# architectures again and d3d12.dll stays byte for byte the same. native24
+# strips Wine's own modules and leaves the payload, already built stripped,
+# as it was.
+REQUIRED_VARIANT_HASHES_BUILD_REV = "wow64-archs-native24"
 REQUIRED_ENGINE_GLIBC_MAX = "2.31"
 REQUIRED_VKD3D_BASE_COMMIT = "3b10bd7a7ec6a7347e616cf8bea59333afec2255"
 REQUIRED_VKD3D_REVERT = "76c11d2e2b90b0a46dc894508e67e2aaacc2c04d"
@@ -131,13 +135,13 @@ REQUIRED_VARIANT_HASHES = {
             "d6f4e30131e5f05f9167f93c2277652b7d2299ef43a4f623990ee4fd8a34cc4c",
         ("files/lib/wine/vkd3d-proton/x86_64-windows/"
          "d3d12core.dll.bol-ext-dgc"):
-            "09cc495a96dd4861b1fd75c3ce1e6a5efc21c8bccc1f1ac8a4b134dd63f14b2b",
+            "fb087ac16045927ffe2003ef210925b53d701add127927957fc0e8647c89b8aa",
         ("files/lib/wine/vkd3d-proton/i386-windows/"
          "d3d12.dll.bol-ext-dgc"):
             "aac73e3555cb3ca893b3ef11ab033e42a0ffa3139e3ac4ae8ded1667cd321190",
         ("files/lib/wine/vkd3d-proton/i386-windows/"
          "d3d12core.dll.bol-ext-dgc"):
-            "b0ef89b9c147b35d751154186cd5a4e249cb2cdbbbafe9f0a47757f6c3fd0fd7",
+            "ec67019917132762cda430bd0f12df2d352937bb98345b336f5a2f93bab9ddb0",
     },
     NV_DGC: {
         ("files/lib/wine/vkd3d-proton/x86_64-windows/"
@@ -145,13 +149,13 @@ REQUIRED_VARIANT_HASHES = {
             "d6f4e30131e5f05f9167f93c2277652b7d2299ef43a4f623990ee4fd8a34cc4c",
         ("files/lib/wine/vkd3d-proton/x86_64-windows/"
          "d3d12core.dll.bol-nv-dgc"):
-            "09cc495a96dd4861b1fd75c3ce1e6a5efc21c8bccc1f1ac8a4b134dd63f14b2b",
+            "fb087ac16045927ffe2003ef210925b53d701add127927957fc0e8647c89b8aa",
         ("files/lib/wine/vkd3d-proton/i386-windows/"
          "d3d12.dll.bol-nv-dgc"):
             "aac73e3555cb3ca893b3ef11ab033e42a0ffa3139e3ac4ae8ded1667cd321190",
         ("files/lib/wine/vkd3d-proton/i386-windows/"
          "d3d12core.dll.bol-nv-dgc"):
-            "b0ef89b9c147b35d751154186cd5a4e249cb2cdbbbafe9f0a47757f6c3fd0fd7",
+            "ec67019917132762cda430bd0f12df2d352937bb98345b336f5a2f93bab9ddb0",
     },
 }
 
@@ -255,7 +259,68 @@ def _validated_distribution_files(
     return validated
 
 
+# What one process has already validated: the arguments of the call, to the
+# result and to what every file it vouched for looked like on disk.
+_VALIDATED: Dict[tuple, Tuple[ValidatedEngineManifest, tuple]] = {}
+
+
+def _manifest_signature(root: Path, manifest: ValidatedEngineManifest):
+    """What the files a validation read look like on disk, without reading.
+
+    Size, modification time, inode and mode of the manifest, of every file
+    it lists and of the runtime links: a file replaced, edited in place,
+    retargeted or made non-executable changes at least one of them.
+    """
+    relatives = set(manifest.critical_files)
+    for files in manifest.variants.values():
+        relatives.update(files)
+    relatives.update(REQUIRED_EXECUTABLE_FILE_PATHS)
+    relatives.update(REQUIRED_RUNTIME_LINK_TARGETS)
+    signature = []
+    for path in [manifest.path] + [
+            root.joinpath(*PurePosixPath(relative).parts)
+            for relative in sorted(relatives)]:
+        for status in (os.lstat, os.stat):
+            found = status(path)
+            signature.append((str(path), found.st_size, found.st_mtime_ns,
+                              found.st_ino, found.st_mode))
+    return tuple(signature)
+
+
 def validate_engine_manifest(
+        engine_root: Path, build_rev: str,
+        required_variant: Optional[str] = None,
+        enforce_pins: bool = False) -> ValidatedEngineManifest:
+    """Validate the engine manifest, once per process for unchanged files.
+
+    One PLAY asks three times: setup, the launch that follows it, and the
+    activation of the vkd3d payload. Each used to hash the Wine runtime and
+    all eight vkd3d DLLs again. An answer already given stands for as long
+    as every file it covered still has the size, time, inode and mode it had
+    then; anything else, a failure included, is validated in full.
+    """
+    root = Path(engine_root)
+    key = (str(root), build_rev,
+           None if required_variant is None
+           else _normalise_variant(required_variant), bool(enforce_pins))
+    known = _VALIDATED.get(key)
+    if known is not None:
+        try:
+            if _manifest_signature(root, known[0]) == known[1]:
+                return known[0]
+        except OSError:
+            pass
+        del _VALIDATED[key]
+    manifest = _validate_engine_manifest(
+        root, build_rev, required_variant, enforce_pins)
+    try:
+        _VALIDATED[key] = (manifest, _manifest_signature(root, manifest))
+    except OSError:
+        pass
+    return manifest
+
+
+def _validate_engine_manifest(
         engine_root: Path, build_rev: str,
         required_variant: Optional[str] = None,
         enforce_pins: bool = False) -> ValidatedEngineManifest:

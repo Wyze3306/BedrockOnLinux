@@ -1,0 +1,45 @@
+[Unit]
+Description=BedrockOnLinux report relay (files problem reports as GitHub issues)
+Documentation=https://github.com/Wyze3306/BedrockOnLinux/blob/main/docs/report-relay.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -I /opt/bol-report-relay/report_relay.py
+EnvironmentFile=/etc/bol-report-relay/relay.env
+# The App's private key never enters the environment or the service's own
+# files: systemd copies it to a directory only this service can read, and
+# the relay finds it there ($CREDENTIALS_DIRECTORY/app-key.pem).
+LoadCredential=app-key.pem:/etc/bol-report-relay/app-key.pem
+Restart=on-failure
+RestartSec=5
+
+# A throwaway user, and nothing to write to: the relay keeps no state.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

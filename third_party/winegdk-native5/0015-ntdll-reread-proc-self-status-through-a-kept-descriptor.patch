@@ -1,0 +1,116 @@
+From: BedrockOnLinux contributors
+Subject: [PATCH] ntdll: reread /proc/self/status through a kept descriptor
+
+Minecraft calls GetProcessMemoryInfo once per frame to keep its memory
+budget. On Linux every call opened /proc/self/status, read it through
+stdio and ran up to six sscanf() per line on its 60-odd lines, then
+closed it: about 40 us per frame in the game, 2.8% of the main thread's
+time at 617 FPS, and the most expensive Wine call it makes per frame.
+
+Keep the file open for the current process and read it again from offset
+0 with one pread(), which makes the kernel generate fresh contents, and
+pick the six fields out with strncmp() and strtoull(). The values are the
+same; in a loop the call takes 9 us instead of 22 us on the same
+machine. Other processes still go through an open, reads and a close.
+---
+ dlls/ntdll/unix/process.c | 78 ++++++++++++++++++++++++++++++-----------
+ 1 file changed, 56 insertions(+), 22 deletions(-)
+
+diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
+index 3a47d5a..aa220ee 100644
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -1009,37 +1009,71 @@ void fill_vm_counters( VM_COUNTERS_EX *pvmi, int unix_pid )
+ 
+ #elif defined(linux)
+ 
++/* The fields used below come in the first kilobyte of the file, well before
++ * the per-CPU lists that make its size vary. */
++#define PROC_STATUS_READ_SIZE 4096
++
++static LONG proc_self_status_fd = -1;
++
++static ULONG64 status_kib( const char *line, size_t len )
++{
++    return (ULONG64)strtoull( line + len, NULL, 10 ) * 1024;
++}
++
+ void fill_vm_counters( VM_COUNTERS_EX *pvmi, int unix_pid )
+ {
+-    FILE *f;
+-    char line[256], path[26];
+-    unsigned long value;
++    char buffer[PROC_STATUS_READ_SIZE], path[26], *line, *next;
++    ssize_t size = 0, ret;
++    int fd;
+ 
+     if (unix_pid == -1)
+-        strcpy( path, "/proc/self/status" );
++    {
++        /* Games ask for their own counters every frame (GetProcessMemoryInfo),
++         * so keep the file open: rereading it from the start regenerates it,
++         * and costs one pread() instead of an open, reads and a close. */
++        if ((fd = proc_self_status_fd) == -1)
++        {
++            if ((fd = open( "/proc/self/status", O_RDONLY | O_CLOEXEC )) == -1) return;
++            if (InterlockedCompareExchange( &proc_self_status_fd, fd, -1 ) != -1)
++            {
++                close( fd );
++                fd = proc_self_status_fd;
++            }
++        }
++        while ((size = pread( fd, buffer, sizeof(buffer) - 1, 0 )) == -1 && errno == EINTR);
++        if (size <= 0) return;
++    }
+     else
+-        snprintf( path, sizeof(path), "/proc/%u/status", unix_pid);
+-    f = fopen( path, "r" );
+-    if (!f) return;
++    {
++        snprintf( path, sizeof(path), "/proc/%u/status", unix_pid );
++        if ((fd = open( path, O_RDONLY | O_CLOEXEC )) == -1) return;
++        while (size < sizeof(buffer) - 1)
++        {
++            if ((ret = read( fd, buffer + size, sizeof(buffer) - 1 - size )) > 0) size += ret;
++            else if (!ret || errno != EINTR) break;
++        }
++        close( fd );
++        if (size <= 0) return;
++    }
++    buffer[size] = 0;
+ 
+-    while (fgets(line, sizeof(line), f))
++    for (line = buffer; line && *line; line = next)
+     {
+-        if (sscanf(line, "VmPeak: %lu", &value))
+-            pvmi->PeakVirtualSize = (ULONG64)value * 1024;
+-        else if (sscanf(line, "VmSize: %lu", &value))
+-            pvmi->VirtualSize = (ULONG64)value * 1024;
+-        else if (sscanf(line, "VmHWM: %lu", &value))
+-            pvmi->PeakWorkingSetSize = (ULONG64)value * 1024;
+-        else if (sscanf(line, "VmRSS: %lu", &value))
+-            pvmi->WorkingSetSize = (ULONG64)value * 1024;
+-        else if (sscanf(line, "RssAnon: %lu", &value))
+-            pvmi->PagefileUsage += (ULONG64)value * 1024;
+-        else if (sscanf(line, "VmSwap: %lu", &value))
+-            pvmi->PagefileUsage += (ULONG64)value * 1024;
++        if ((next = strchr( line, '\n' ))) *next++ = 0;
++        if (!strncmp( line, "VmPeak:", 7 ))
++            pvmi->PeakVirtualSize = status_kib( line, 7 );
++        else if (!strncmp( line, "VmSize:", 7 ))
++            pvmi->VirtualSize = status_kib( line, 7 );
++        else if (!strncmp( line, "VmHWM:", 6 ))
++            pvmi->PeakWorkingSetSize = status_kib( line, 6 );
++        else if (!strncmp( line, "VmRSS:", 6 ))
++            pvmi->WorkingSetSize = status_kib( line, 6 );
++        else if (!strncmp( line, "RssAnon:", 8 ))
++            pvmi->PagefileUsage += status_kib( line, 8 );
++        else if (!strncmp( line, "VmSwap:", 7 ))
++            pvmi->PagefileUsage += status_kib( line, 7 );
+     }
+     pvmi->PeakPagefileUsage = pvmi->PagefileUsage;
+-
+-    fclose(f);
+ }
+ 
+ #elif defined(HAVE_LIBPROCSTAT)

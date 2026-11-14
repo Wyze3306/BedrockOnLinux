@@ -8,7 +8,7 @@ from .platform import config_home, data_home
 
 APP = "bedrock-on-linux"
 PRETTY = "BedrockOnLinux"
-VERSION = "2.3.1"
+VERSION = "3.0.0"
 # Published Flatpak identity; used to print a runnable command for that layout.
 FLATPAK_APP_ID = "io.github.wyze3306.BedrockOnLinux"
 
@@ -107,8 +107,13 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 # match the reviewed pins below.
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
 # The commit alone does not identify vendored follow-up patches.
-WINEGDK_SOURCE_MANIFEST_SHA256 = "e5b3763a60374f1a5b1506f459ad80f39fe302d2397f26e2d9b9d220af4e412b"
-WINEGDK_BUILD_REV = "wow64-archs-native22"
+WINEGDK_SOURCE_MANIFEST_SHA256 = "356ce8528c080bb5e97208e08d95ee91089922dd0669ef1c3aac4679b8bd3bd5"
+# How the WineGDK prefix is built from that source, when not the way it first
+# was: it is part of what the bytes are, so it is part of the name of the
+# release that holds them (scripts/winegdk-release-tag.sh). "stripped"
+# installs Wine's modules without their debugging sections.
+WINEGDK_PREFIX_RECIPE = "stripped"
+WINEGDK_BUILD_REV = "wow64-archs-native24"
 # native22 carries the ntdll loader patches the Microsoft Store packages need:
 # 0007 maps the main image from a descriptor, 0008 from a path so it survives
 # the Steam Linux Runtime container. Their game executable stays encrypted on
@@ -148,9 +153,19 @@ WINEGDK_BUILD_REV = "wow64-archs-native22"
 # the field unwritten, Minecraft read stack leftovers as its own memory use,
 # and when that looked huge it gave players added to the world a default
 # skin instead of theirs (#292).
-WINEGDK_ARCHIVE_SHA256 = "e98512e74b1c3f930fdd213b24ac4a01abfa3a6336276076a509530c540b2b13"
+#
+# native23 shortens vkd3d-proton's frame-limiter busy-wait under Wine
+# (#202), falls back to fsync on kernels without ntsync (0014), takes two
+# per-frame Wine calls off Minecraft's main thread (0015, 0016) and serves
+# the XGameEvent class achievements are graded from (0017, #152).
+#
+# native24 is native23 without what it never ran: Wine's modules are
+# installed stripped of their debugging sections, and Wine Mono and the
+# import libraries are left out. The code is the same; the engine is not
+# 2.5 GB on disk any more, nor its archive 863 MB.
+WINEGDK_ARCHIVE_SHA256 = "67be80852e20d74fb5d936de4350fd8b7406f1f0955f5f722bbd2ba38abd5f8c"
 # Build workflows verify this deterministic intermediate before reusing it.
-WINEGDK_PREFIX_SHA256 = "06510f8fd802f6c8663c56221983d1f1fbd2d80dbece4818fe83692fa5040ab4"
+WINEGDK_PREFIX_SHA256 = "02fccb6a4e65ef7a8646b6752efe49473dbf3d89e2b1394ea1ae582ffc8371af"
 # What a Mac takes from the Linux engine (bol.winemac): macOS runs no engine,
 # and no macOS Wine ships a GDK runtime. The engine release these files are
 # read out of, and the SHA-256 each has in it -- pinned here rather than
@@ -213,10 +228,10 @@ XODUS_SOURCE_COMMIT = "64d39eb87a56c7d0d7e7fde0b233654ac5477b0f"
 # way, so adding a patch there and forgetting this makes the build produce an
 # archive the workflow's assert cannot find -- which is the intended failure,
 # not a silent replacement of a published one.
-XODUS_REV = "64d39eb87a56-p11"
-# Integrity pin from the reviewed candidate build of the p11 archive.
-# https://github.com/Wyze3306/BedrockOnLinux/actions/runs/42488338212
-XODUS_ARCHIVE_SHA256 = "adb23afbcf6315b4278ec01e06ee9d512a3ea705d0ed182c26d9a1a5952d853a"
+XODUS_REV = "64d39eb87a56-p14"
+# Integrity pin from the reviewed candidate build of the p14 archive.
+# https://github.com/Wyze3306/BedrockOnLinux/actions/runs/43299041916
+XODUS_ARCHIVE_SHA256 = "4a3cd8888924f419470172a15ca06911b476e68b60203c433cf7d1a3b77db8d2"
 XODUS_DIR = DATA / "xodus"
 XODUS_BIN = XODUS_DIR / "xodus-cli"
 # xodus-cli links wry/tao unconditionally, so libwebkit2gtk-4.1 has to be
@@ -275,13 +290,58 @@ GDK_LINKS_URL = ("https://raw.githubusercontent.com/"
 # and worthless without the licence, so this costs no confidentiality; the
 # content id below is checked against every indexed URL so a bad or tampered
 # index cannot point the downloader at a different product.
+#
+# Not every entry is Bedrock. "title" names the game an edition installs, and
+# everything the launcher does to Minecraft itself -- its HBUI anchors, its
+# options.txt, LeviLamina, the Editor, the server list, the world backups --
+# is for "bedrock" alone. "catalogue" says where builds come from: "index" is
+# the GdkLinks index above, which only knows Bedrock; "store" is whatever build
+# the Store serves today, installed by product id into one folder that each
+# update is a delta of. "exe" is None when the package's MicrosoftGame.config
+# is what names the executable, which is the only place that knows for sure.
+# An entry without these keys is a Bedrock one (bol.games.edition_title).
 MC_PRODUCTS = (
     {"id": "release", "product": "9NBLGGH2JHXJ", "channel": "release",
      "content_id": "7792d9ce-355a-493c-afbd-768f4a77c3b0",
-     "name": "Minecraft for Windows", "beta": False},
+     "name": "Minecraft for Windows", "beta": False,
+     "title": "bedrock", "catalogue": "index", "short": "Stable",
+     "exe": "Minecraft.Windows.exe"},
     {"id": "preview", "product": "9P5X4QVLC2XR", "channel": "preview",
      "content_id": "98bd2335-9b01-4e4c-bd05-ccc01614078b",
-     "name": "Minecraft Preview for Windows", "beta": True},
+     "name": "Minecraft Preview for Windows", "beta": True,
+     "title": "bedrock", "catalogue": "index", "short": "Preview",
+     "exe": "Minecraft.Windows.exe"},
+    # Unreal Engine 4, Direct3D 11 through DXVK. A 5.9 GB package; the Store
+    # served 1.17.0.0 in November 2026.
+    {"id": "dungeons", "product": "9P8MK4NC0LJB", "channel": None,
+     "content_id": "911f6225-c9c8-4641-a6db-29d4ccafc666",
+     "package_family": "Microsoft.Lovika_8wekyb3d8bbwe",
+     "name": "Minecraft Dungeons", "beta": False,
+     "title": "dungeons", "catalogue": "store", "short": "Dungeons",
+     "exe": None},
+    # Bedrock's engine underneath, but its own game: none of Bedrock's
+    # fixups apply. A 12.5 GB package; the Store served 1.18.19068.0 in
+    # November 2026.
+    {"id": "legends", "product": "9N98Z825TNFW", "channel": None,
+     "content_id": "f8afac2c-44cd-4302-afc3-b6dc979e6656",
+     "package_family": "Microsoft.BadgerWin10_8wekyb3d8bbwe",
+     "name": "Minecraft Legends", "beta": False,
+     "title": "legends", "catalogue": "store", "short": "Legends",
+     "exe": None},
+    # Not an Xbox title: a free Store app that Windows Update serves as a
+    # plain AppxBundle, signed in to with a school or work account inside the
+    # game (issue #351, bol.wustore). Its own "title": none of Bedrock's
+    # fixups apply, and hiding Bedrock's sign-in button would take away the
+    # only way into it. "xbox_live": False keeps the Xbox Live account and
+    # its pre-auth away from it.
+    {"id": "education", "product": "9NBLGGH4R2R6", "channel": "education",
+     "source": "windows-update",
+     "family": "Microsoft.MinecraftEducationEdition_8wekyb3d8bbwe",
+     "wu_category": "df31e196-d4c7-4a25-8e23-2788c261f328",
+     "content_id": "ad6a119f-978a-62c1-5f10-c017dde2343a",
+     "name": "Minecraft Education", "beta": False, "xbox_live": False,
+     "title": "education", "catalogue": "windows-update",
+     "short": "Education", "exe": "Minecraft.Windows.exe"},
 )
 
 

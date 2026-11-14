@@ -49,8 +49,16 @@ readonly VENDORED_GAMING_SERVICES_PATCH="$PROJECT_ROOT/third_party/winegdk-nativ
 readonly VENDORED_GAMING_SERVICES_PATCH_SHA256="d43c0f2cf32b624bb12d6db890d6f9a3a45e72523837310d868bec78318f59ce"
 readonly VENDORED_PRIVATE_USAGE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0013-kernelbase-report-PrivateUsage-from-GetProcessMemoryInfo.patch"
 readonly VENDORED_PRIVATE_USAGE_PATCH_SHA256="850b8f80a23e1b9a5b25ab2b647125c7affe6650fe8f9c632678bba9dacae35e"
+readonly VENDORED_FSYNC_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0014-ntdll-server-fall-back-to-fsync-without-ntsync.patch"
+readonly VENDORED_FSYNC_PATCH_SHA256="57a7cf41297df589e369f9e059a3e3d8925de785ed588a24134ffa26b5f7f81a"
+readonly VENDORED_VM_COUNTERS_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch"
+readonly VENDORED_VM_COUNTERS_PATCH_SHA256="9fa03ed50b2a5bfb68a60f55aa4b1ce4b7d842010c6b3f2c176177528a722db6"
+readonly VENDORED_TIME_ZONE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch"
+readonly VENDORED_TIME_ZONE_PATCH_SHA256="6054f33a5a95c5beaf12039dca8b303fdfa66c4e01fb95b75479659f0aebc2d9"
+readonly VENDORED_GAME_EVENT_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch"
+readonly VENDORED_GAME_EVENT_PATCH_SHA256="c791f7bcab535204649c27ade0d328f669134f6044a1130362aeb5df964b28ad"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
-readonly SOURCE_SHA256SUMS_SHA256="e5b3763a60374f1a5b1506f459ad80f39fe302d2397f26e2d9b9d220af4e412b"
+readonly SOURCE_SHA256SUMS_SHA256="356ce8528c080bb5e97208e08d95ee91089922dd0669ef1c3aac4679b8bd3bd5"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
 readonly GLIBC_CEILING="2.31"
@@ -279,6 +287,10 @@ assert_inproc_sync_enabled() {
     found=1
     grep -qa "/dev/ntsync" "$server" ||
       die "${server#"$prefix"/} has no ntsync path — in-process sync compiled out"
+    # 0014: kernels without ntsync fall back to futex_waitv. The server only
+    # reads WINEFSYNC when that backend is compiled in.
+    grep -qa "WINEFSYNC" "$server" ||
+      die "${server#"$prefix"/} has no fsync fallback — 0014 not built"
   done < <(find "$prefix" -type f -name wineserver -print0)
   ((found > 0)) || die "no wineserver found below $prefix"
 }
@@ -313,6 +325,8 @@ internal_build_stage() {
   bind_directory "$work_root/tmp" "$rootfs/work/tmp"
   bind_directory "$work_root/home" "$rootfs/work/home"
 
+  cp -- "$PROJECT_ROOT/scripts/pe-stamp.py" "$work_root/tmp/pe-stamp.py"
+
   chroot "$rootfs" /usr/bin/env -i \
     HOME=/work/home TMPDIR=/work/tmp \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -325,7 +339,14 @@ internal_build_stage() {
         --disable-tests \
         --prefix=/work/prefix
       make -j"$MAKE_JOBS"
-      make install
+      # Stripped, the way Wine itself installs a release: its install rule
+      # strips each module and writes the builtin mark back onto the PE ones.
+      # The debugging sections were two thirds of the engine: 2.5 GB
+      # installed, 863 MB to download, and again in every prefix.
+      make install INSTALL_PROGRAM_FLAGS=-s
+      # strip rewrites each PE file with the time of the run (binutils 2.35
+      # does not read SOURCE_DATE_EPOCH there); put the link time back.
+      python3 /work/tmp/pe-stamp.py "$SOURCE_DATE_EPOCH" /work/prefix/lib/wine
       # ntdll links libunwind but the sniper runtime ships none; bundle the
       # bullseye libunwind so the engine is self-contained (matches the
       # container build and the upstream engine layout).
@@ -586,6 +607,26 @@ fi
 [[ "$(sha256sum "$VENDORED_PRIVATE_USAGE_PATCH" | cut -d' ' -f1)" == \
     "$VENDORED_PRIVATE_USAGE_PATCH_SHA256" ]] ||
   die "vendored PrivateUsage patch SHA-256 mismatch"
+[[ -f "$VENDORED_FSYNC_PATCH" ]] ||
+  die "vendored fsync fallback patch is missing"
+[[ "$(sha256sum "$VENDORED_FSYNC_PATCH" | cut -d' ' -f1)" == \
+    "$VENDORED_FSYNC_PATCH_SHA256" ]] ||
+  die "vendored fsync fallback patch SHA-256 mismatch"
+[[ -f "$VENDORED_VM_COUNTERS_PATCH" ]] ||
+  die "vendored process memory counters patch is missing"
+[[ "$(sha256sum "$VENDORED_VM_COUNTERS_PATCH" | cut -d' ' -f1)" == \
+    "$VENDORED_VM_COUNTERS_PATCH_SHA256" ]] ||
+  die "vendored process memory counters patch SHA-256 mismatch"
+[[ -f "$VENDORED_TIME_ZONE_PATCH" ]] ||
+  die "vendored time zone check patch is missing"
+[[ "$(sha256sum "$VENDORED_TIME_ZONE_PATCH" | cut -d' ' -f1)" == \
+    "$VENDORED_TIME_ZONE_PATCH_SHA256" ]] ||
+  die "vendored time zone check patch SHA-256 mismatch"
+[[ -f "$VENDORED_GAME_EVENT_PATCH" ]] ||
+  die "vendored XGameEvent patch is missing"
+[[ "$(sha256sum "$VENDORED_GAME_EVENT_PATCH" | cut -d' ' -f1)" == \
+    "$VENDORED_GAME_EVENT_PATCH_SHA256" ]] ||
+  die "vendored XGameEvent patch SHA-256 mismatch"
 [[ "$SOURCE_DATE_EPOCH" == "$EXPECTED_SOURCE_DATE_EPOCH" ]] ||
   die "WineGDK source timestamp changed: $SOURCE_DATE_EPOCH"
 
@@ -639,6 +680,10 @@ vendored_save_picker_patch_sha256=$VENDORED_SAVE_PICKER_PATCH_SHA256
 vendored_wayland_seat_patch_sha256=$VENDORED_WAYLAND_SEAT_PATCH_SHA256
 vendored_gaming_services_patch_sha256=$VENDORED_GAMING_SERVICES_PATCH_SHA256
 vendored_private_usage_patch_sha256=$VENDORED_PRIVATE_USAGE_PATCH_SHA256
+vendored_fsync_patch_sha256=$VENDORED_FSYNC_PATCH_SHA256
+vendored_vm_counters_patch_sha256=$VENDORED_VM_COUNTERS_PATCH_SHA256
+vendored_time_zone_patch_sha256=$VENDORED_TIME_ZONE_PATCH_SHA256
+vendored_game_event_patch_sha256=$VENDORED_GAME_EVENT_PATCH_SHA256
 source_sha256sums_sha256=$SOURCE_SHA256SUMS_SHA256
 source_date_epoch=$SOURCE_DATE_EPOCH
 debian_suite=$DEBIAN_SUITE
@@ -731,6 +776,26 @@ git -C "$WORK_ROOT/source" apply --check "$VENDORED_PRIVATE_USAGE_PATCH" ||
   die "vendored PrivateUsage patch does not apply"
 git -C "$WORK_ROOT/source" apply "$VENDORED_PRIVATE_USAGE_PATCH" ||
   die "could not apply vendored PrivateUsage patch"
+printf '==> Applying the fsync fallback for kernels without ntsync\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_FSYNC_PATCH" ||
+  die "vendored fsync fallback patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_FSYNC_PATCH" ||
+  die "could not apply vendored fsync fallback patch"
+printf '==> Applying the per-frame process memory counters fix\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_VM_COUNTERS_PATCH" ||
+  die "vendored process memory counters patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_VM_COUNTERS_PATCH" ||
+  die "could not apply vendored process memory counters patch"
+printf '==> Applying the per-frame time zone check fix\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_TIME_ZONE_PATCH" ||
+  die "vendored time zone check patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_TIME_ZONE_PATCH" ||
+  die "could not apply vendored time zone check patch"
+printf '==> Applying the XGameEvent runtime class\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_GAME_EVENT_PATCH" ||
+  die "vendored XGameEvent patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_GAME_EVENT_PATCH" ||
+  die "could not apply vendored XGameEvent patch"
 [[ -f "$SOURCE_SHA256SUMS" ]] || die "WineGDK source hash manifest is missing"
 [[ "$(sha256sum "$SOURCE_SHA256SUMS" | cut -d' ' -f1)" == \
     "$SOURCE_SHA256SUMS_SHA256" ]] ||

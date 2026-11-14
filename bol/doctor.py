@@ -3,7 +3,6 @@
 
 import shutil
 import sys
-from pathlib import Path
 
 from . import deps, discord, fixups, gamepad, hostarch, presence, webview
 from .config import DATA, PRETTY, VERSION
@@ -89,6 +88,13 @@ def gui_toolkit_summary():
         return "auto-installed on launch"
     error = deps.gui_import_error()
     if not error:
+        # Importing Qt does not load its X11 plugin, and a plugin that cannot
+        # load aborts the launcher instead of raising (stock Ubuntu and Mint
+        # have no libxcb-cursor0).
+        library = deps.xcb_plugin_missing_library()
+        if library:
+            return (f"installed, but Qt's X11 plugin cannot load: this "
+                    f"system has no {library}")
         return "OK (GUI)"
     library = deps.missing_shared_library(error)
     if library:
@@ -101,7 +107,12 @@ def doctor(acknowledge_gpu_crash=False):
     if acknowledge_gpu_crash and not _acknowledge_gpu_crash():
         return False
     info(f"{PRETTY} {VERSION} — system check ({os_name()})")
-    hint = pm_hint()
+    manager, hint = next(((pm, h) for pm, h in (
+        ("apt-get", "sudo apt install {}"), ("dnf", "sudo dnf install {}"),
+        ("pacman", "sudo pacman -S {}"), ("zypper", "sudo zypper in {}"))
+        if shutil.which(pm)), (None, "install: {}"))
+    if IS_MAC:
+        hint = pm_hint()
     miss = []
     print(f"  {'python3':12} : {sys.version.split()[0]}")
     # The game, the engine and xodus-cli are x86-64 programs (#250).
@@ -119,8 +130,8 @@ def doctor(acknowledge_gpu_crash=False):
         print(f"  {tool:12} : {'OK' if have else 'MISSING'}")
         if not have and not (tool == "curl" and shutil.which("wget")):
             miss.append(pkg)
-    # PySide6 is not named in `miss`: bol.deps.ensure_gui_deps() pip-installs
-    # the pinned PySide6-Essentials wheel on the first GUI launch, so a
+    # PySide6 is not named in `miss`: bol.deps.ensure_gui_deps() fetches the
+    # pinned PySide6-Essentials wheels on the first GUI launch, so a
     # portable .pyz or a bare checkout without it is ready even though the
     # import is not there yet. Reporting it as missing would also have to
     # name a package -- and there is no `python3-pyside6` to
@@ -136,11 +147,26 @@ def doctor(acknowledge_gpu_crash=False):
         if wine_problem:
             warn(wine_problem)
     print(f"  {'PySide6':12} : {gui_toolkit_summary()}")
+    # A toolkit that is there but cannot load is a missing package all the
+    # same: libgthread-2.0 on a stock openSUSE, libxcb-cursor0 on Ubuntu.
+    gui_library = None
+    if deps.have("PySide6"):
+        import_error = deps.gui_import_error()
+        gui_library = deps.missing_shared_library(import_error) \
+            if import_error else deps.xcb_plugin_missing_library()
+    if gui_library:
+        libraries = deps.missing_qt_libraries(gui_library)
+        command = deps.install_hint(*libraries)
+        # "sudo <manager> <verb> <package>..." -> the packages.
+        miss.extend(command.split()[3:] if command and
+                    command.startswith("sudo ") else libraries)
     cr_ok = deps.have("cryptography")
     print(f"  {'cryptography':12} : "
           f"{'OK (login)' if cr_ok else 'MISSING (login)'}")
     if not cr_ok:
-        miss.append("python3-cryptography")
+        # Arch drops the "3": python3-cryptography is no package there.
+        miss.append("python-cryptography" if manager == "pacman"
+                    else "python3-cryptography")
     # Minecraft is downloaded from the Microsoft Store, and xodus-cli opens
     # that sign-in in an embedded WebKitGTK webview. Without the library it
     # cannot even start -- not the download and not an installed game, whose
@@ -172,9 +198,17 @@ def doctor(acknowledge_gpu_crash=False):
     # keeps the game executable as ciphertext and the only copy of the plain
     # one is made, at every launch, out of the package file beside it -- so a
     # game directory that lost it is unplayable while looking complete.
-    game_dir = (load_settings().get("game_dir") or "").strip()
-    if game_dir and xodus.exe_is_encrypted(
-            Path(game_dir) / "Minecraft.Windows.exe"):
+    from .games import edition_exe, game_executable, is_bedrock, \
+        selected_edition
+
+    settings = load_settings()
+    game_dir = (settings.get("game_dir") or "").strip()
+    edition = selected_edition(settings)
+    game_exe = game_executable(game_dir, edition) if game_dir else None
+    if not is_bedrock(edition):
+        print(f"  {'title':12} : {edition['name']} (Minecraft for "
+              "Windows' own checks are skipped)")
+    if game_exe is not None and xodus.exe_is_encrypted(game_exe):
         if IS_MAC:
             # Not a repairable state on a Mac: decrypting it needs the
             # Linux-only downloader, so the answer is a different folder.
@@ -183,7 +217,8 @@ def doctor(acknowledge_gpu_crash=False):
             warn(xodus.MAC_UNSUPPORTED)
         else:
             print(f"  {'mc package':12} : "
-                  + ("OK" if not xodus.lost_package_cache(game_dir) else
+                  + ("OK" if not xodus.lost_package_cache(
+                      game_dir, edition_exe(edition)) else
                      f"MISSING ({xodus.PACKAGE_CACHE} in {game_dir}) — "
                      "press PLAY to download this build again"))
     # Whether the installed build still carries the two HBUI patches that
@@ -192,10 +227,12 @@ def doctor(acknowledge_gpu_crash=False):
     # and the anchors stop matching -- and nothing else notices: the game
     # starts, setup reports success, and only the Play screen behaves as
     # though no patch had run (#227/#228/#229).
-    signin_summary, signin_problem = fixups.hbui_signin_gate_status(game_dir)
-    print(f"  {'sign-in ui':12} : {signin_summary}")
-    if signin_problem:
-        warn(signin_problem)
+    if is_bedrock(edition):
+        signin_summary, signin_problem = fixups.hbui_signin_gate_status(
+            game_dir)
+        print(f"  {'sign-in ui':12} : {signin_summary}")
+        if signin_problem:
+            warn(signin_problem)
     # Which controllers the launcher window itself can be driven with. The
     # game reads its own pad through GameInput inside the prefix, so a blank
     # here says nothing about playing -- only about navigating the launcher

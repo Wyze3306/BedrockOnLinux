@@ -176,8 +176,9 @@ _AUTO_INJECT_POLL = 0.25
 # The window is up long before the game is: it opens on the loading screen,
 # and the main menu follows 13 s later on a warm start and over a minute on a
 # cold one. Injected at the window, a client lands mid-startup, which a manual
-# injection -- done from the menu -- never does, and that is where Flarial's
-# automatic injection lost the mouse while its manual one did not (#281). The
+# injection -- done from the menu -- never does. (Flarial losing the mouse
+# after an automatic injection was not this but the focus: see
+# bol.gameinput.builtin_gameinput_override, #281/#359.) The
 # game says when its menu is up by writing the feature flags it fetches right
 # after drawing it: measured on 1.26.52 at 0 to 8 s after the menu appeared,
 # never before. A session that never writes them is injected anyway, this

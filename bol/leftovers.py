@@ -19,8 +19,10 @@ from .log import info
 from .prefix import prefix_processes
 
 GAME_IMAGE = "minecraft.windows.exe"
-# Started for the game's WebView2, and of no use once the game has gone.
-LEFTOVER_IMAGES = ("microsoftedgeupdate.exe", "msedgewebview2.exe")
+# Started for the game -- by its WebView2, and by LeviLamina (bol.mods),
+# whose crash reporter watches it -- and of no use once the game has gone.
+LEFTOVER_IMAGES = ("microsoftedgeupdate.exe", "msedgewebview2.exe",
+                   "crashlogger.exe")
 
 # How long the game has to have been gone before its helpers are closed: a
 # game that restarts itself (a language change, an update) comes back well
@@ -60,6 +62,7 @@ class LeftoverReaper:
         self._clock = clock
         self._next_scan = 0.0
         self._game_seen = False
+        self._game_pids = set()
         self._gone_since = None
         self._termed = {}
         self._announced = False
@@ -69,12 +72,22 @@ class LeftoverReaper:
         if now < self._next_scan:
             return []
         self._next_scan = now + SCAN_EVERY_S
+        # While the game is up there is nothing to close, and finding the
+        # prefix's processes means reading the environment of every process
+        # on the machine, the game's included, which takes each one's memory
+        # map lock. So for as long as a game process seen earlier is still
+        # that same program, only it is looked at; the scan comes back the
+        # moment it is gone, which is when there is something to do.
+        if any(self._image(pid) == GAME_IMAGE for pid in self._game_pids):
+            return []
         try:
             images = {pid: self._image(pid)
                       for pid in self._scan(self.prefix)}
         except Exception:
             return []
-        if GAME_IMAGE in images.values():
+        self._game_pids = {pid for pid, name in images.items()
+                           if name == GAME_IMAGE}
+        if self._game_pids:
             self._game_seen = True
             self._gone_since = None
             self._termed.clear()

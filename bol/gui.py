@@ -19,16 +19,16 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import (
-    QObject, QPoint, QPointF, QSocketNotifier, Qt, QThread, QTimer, Signal,
+    QObject, QPoint, QPointF, QRect, QSize, QSocketNotifier, Qt, QThread, QTimer, Signal,
     Slot,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
-    QHBoxLayout, QInputDialog, QLabel,
+    QGridLayout, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTabWidget, QTextBrowser, QTextEdit,
-    QToolButton, QVBoxLayout, QWidget,
+    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QStyledItemDelegate, QTabWidget, QTextBrowser, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from .auth import NativeAuth, msa_logout, msa_signed_in, msa_gamertag
@@ -39,10 +39,13 @@ from .config import (
 from .relocation import migrate_data, paths_overlap, DIRS_TO_MOVE, FILES_TO_MOVE
 from .content import game_content_dir, import_content
 from .doctor import acknowledge_gpu_crash, gpu_crash_acknowledgement_status
-from .games import installed_builds, list_editions, list_versions, remove_build
+from .games import (installed_builds, installed_versions, list_editions,
+                    list_versions, remove_build)
 from .gamesetup import NoGameFolder, do_setup, import_game
 from . import betterrtx, gpus
 from .inject import run_injector
+from . import icons
+from .gui_profiles import ProfilesPage
 from .launch import direct_launch_readiness, launch, single_window_session
 from . import saves
 from .navigation import ControllerNav
@@ -57,7 +60,8 @@ from .profiles import (
     rename_profile, require_profile_shortcuts_supported,
     require_shortcuts_supported, write_play_shortcut, write_profile_shortcut,
 )
-from .update import check_for_update, self_update
+from . import feed, netpolicy, rollback
+from .update import check_for_update, describe_install, self_update
 from .util import load_settings, save_settings, format_display_version, mc_releases, gh_releases
 
 try:
@@ -228,6 +232,30 @@ def icon_candidates(module_file=None):
 # Theme
 # ======================================================================
 
+def _chevron(color, up=False):
+    """A chevron for drop-downs, as a file Qt style sheets can point at.
+
+    Styling a combo box's drop-down takes its native arrow away, and a style
+    sheet only reads images from files. Written once per colour into the
+    cache; on any failure the arrow is simply missing, never the window.
+    """
+    from .config import CACHE  # noqa: PLC0415 - GUI-only helper
+    name = f"chevron-{'up' if up else 'down'}-{color.lstrip('#')}.svg"
+    path = CACHE / "ui" / name
+    points = "2,8 6,4 10,8" if up else "2,4 6,8 10,4"
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" '
+           'viewBox="0 0 12 12"><polyline points="' + points + '" fill="none" '
+           f'stroke="{color}" stroke-width="1.8" stroke-linecap="round" '
+           'stroke-linejoin="round"/></svg>')
+    try:
+        if not path.is_file() or path.read_text() != svg:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(svg)
+    except OSError:
+        return ""
+    return path.as_posix()
+
+
 @dataclass
 class Theme:
     """Palette used to generate the app's QSS."""
@@ -323,6 +351,49 @@ class Theme:
         QLabel#Sub {{ color: {self.sub}; }}
         QLabel#Muted {{ color: {self.muted}; font-size: 11px; }}
         QLabel#Hero {{ font-size: 26px; font-weight: 700; }}
+        QFrame#ProfileCard {{
+            background: {self.card};
+            border: 1px solid {self.border};
+            border-radius: 14px;
+        }}
+        QFrame#ProfileCard[active="true"] {{ border: 1px solid {self.accent}; }}
+        QFrame#InstanceRow {{
+            background: {self.card};
+            border: 1px solid {self.border};
+            border-left: 3px solid {self.green};
+            border-radius: 12px;
+        }}
+        QFrame#EmptyHint {{
+            background: transparent;
+            border: 1px dashed {self.card3};
+            border-radius: 14px;
+        }}
+        QLabel#HintTitle {{ font-weight: 700; }}
+        QLabel#ProfileName {{ font-size: 15px; font-weight: 700; }}
+        QLabel#SectionTitle {{
+            color: {self.sub}; font-size: 11px; font-weight: 700;
+        }}
+        QLabel#Warn {{ color: {self.red}; padding: 0px 4px 4px 4px; }}
+        QLabel#Badge {{
+            color: {self.sub};
+            background: {self.card2};
+            border-radius: 9px;
+            padding: 2px 9px;
+            font-size: 11px;
+            font-weight: 700;
+        }}
+        QLabel#Badge[tone="accent"] {{
+            color: {self.accent}; background: {self.accent_dim};
+        }}
+        QLabel#Badge[tone="live"] {{
+            color: {self.green}; background: {self.green_dim};
+        }}
+        QPushButton#MoreBtn {{ padding: 6px 9px; }}
+        QPushButton#DangerGhost {{
+            background: {self.card2}; color: {self.red}; font-weight: 600;
+        }}
+        QPushButton#DangerGhost:hover {{ background: {self.red}; color: white; }}
+        QPushButton#DangerGhost:disabled {{ color: {self.muted}; background: {self.card2}; }}
         QLabel#Chip {{
             color: {self.accent};
             background: {self.accent_dim};
@@ -360,17 +431,32 @@ class Theme:
             font-weight: 700;
         }}
         QPushButton#Primary:hover {{ background: {self.accent_hov}; }}
+        QPushButton#Primary:disabled {{ background: {self.card3}; color: {self.muted}; }}
+        QPushButton#Ghost:disabled, QPushButton#GhostSmall:disabled,
+        QPushButton#DangerSmall:disabled {{ color: {self.muted}; }}
         QPushButton#Danger {{ background: {self.red}; color: white; }}
         QPushButton#Danger:hover {{ background: {self.red_hov}; }}
-        QPushButton#Ghost {{ background: transparent; color: {self.sub}; }}
-        QPushButton#Ghost:hover {{ background: {self.card2}; color: {self.fg}; }}
-        QPushButton#GhostSmall {{ background: transparent; color: {self.sub}; font-size: 11px; padding: 4px 8px; }}
-        QPushButton#GhostSmall:hover {{ background: {self.card2}; color: {self.fg}; }}
+        QPushButton#Ghost {{ background: {self.card2}; color: {self.fg}; font-weight: 600; }}
+        QPushButton#Ghost:hover {{ background: {self.card3}; }}
+        QPushButton#GhostSmall {{ background: {self.card2}; color: {self.fg}; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 8px; }}
+        QPushButton#GhostSmall:hover {{ background: {self.card3}; }}
+        QPushButton#EditionRow {{ background: transparent; border-radius: 10px; padding: 0px; }}
+        QPushButton#EditionRow:hover {{ background: {self.card2}; }}
+        QPushButton#EditionRow:checked {{ background: {self.accent_dim}; }}
+        QFrame#Page {{ background: transparent; border: none; }}
+        QPushButton#FoldBtn {{
+            background: transparent; color: {self.muted};
+            border-radius: 6px; padding: 0px; font-size: 16px; font-weight: 700;
+        }}
+        QPushButton#FoldBtn:hover {{ background: {self.card2}; color: {self.fg}; }}
+        QPushButton#FoldBtn:disabled {{ color: {self.card3}; }}
         QPushButton#DangerSmall {{ background: {self.card2}; color: {self.red}; font-size: 11px; padding: 4px 8px; border-radius: 10px; }}
         QPushButton#DangerSmall:hover {{ background: {self.red}; color: white; }}
         QPushButton#IconBtn {{
             background: {self.card2};
             border-radius: 8px;
+            padding: 0px;
+            font-size: 15px;
         }}
         QPushButton#IconBtn:hover {{ background: {self.card3}; }}
         QPushButton#ToolRow {{
@@ -392,6 +478,32 @@ class Theme:
             font-weight: 600;
         }}
         QPushButton#ToolRowDanger:hover {{ background: {self.red}; color: white; }}
+        QFrame#Rail {{
+            background: {self.card};
+            border: 1px solid {self.border};
+            border-radius: 18px;
+        }}
+        QPushButton#NavItem {{
+            background: transparent;
+            color: {self.sub};
+            border-radius: 10px;
+            padding: 9px 12px;
+            text-align: left;
+            font-size: 13px;
+            font-weight: 600;
+        }}
+        QPushButton#NavItem:hover {{ background: {self.card2}; color: {self.fg}; }}
+        QPushButton#NavItem:checked {{
+            background: {self.accent_dim};
+            color: {self.accent};
+        }}
+        QLabel#PageTitle {{ font-size: 18px; font-weight: 700; }}
+        QLabel#Brand {{ font-size: 14px; font-weight: 800; }}
+        QFrame#Tile {{
+            background: {self.card2};
+            border-radius: 14px;
+        }}
+        QFrame#Tile:hover {{ background: {self.card3}; }}
         QPushButton#Toggle {{
             background: transparent;
             color: {self.sub};
@@ -410,6 +522,63 @@ class Theme:
             selection-background-color: {self.accent};
         }}
         QLineEdit:focus {{ border: 1px solid {self.accent}; }}
+        QComboBox, QSpinBox {{
+            background: {self.card2};
+            color: {self.fg};
+            border: 1px solid {self.border};
+            border-radius: 10px;
+            padding: 5px 30px 5px 12px;
+            min-height: 20px;
+        }}
+        QSpinBox {{ padding-right: 22px; }}
+        QComboBox:hover, QSpinBox:hover {{
+            background: {self.card3};
+            border: 1px solid {self.sub};
+        }}
+        QComboBox:focus, QSpinBox:focus, QComboBox:on {{
+            border: 1px solid {self.accent};
+        }}
+        QComboBox:disabled, QSpinBox:disabled {{ color: {self.muted}; }}
+        QComboBox::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: center right;
+            width: 26px;
+            border: none;
+            background: transparent;
+        }}
+        QComboBox::down-arrow {{
+            image: url("{_chevron(self.sub)}");
+            width: 12px; height: 12px;
+        }}
+        QComboBox::down-arrow:on {{ image: url("{_chevron(self.accent, up=True)}"); }}
+        QSpinBox::up-button, QSpinBox::down-button {{
+            subcontrol-origin: border;
+            width: 20px;
+            border: none;
+            background: transparent;
+        }}
+        QSpinBox::up-button {{ subcontrol-position: top right; }}
+        QSpinBox::down-button {{ subcontrol-position: bottom right; }}
+        QSpinBox::up-arrow {{
+            image: url("{_chevron(self.sub, up=True)}"); width: 9px; height: 9px;
+        }}
+        QSpinBox::down-arrow {{
+            image: url("{_chevron(self.sub)}"); width: 9px; height: 9px;
+        }}
+        QComboBox QAbstractItemView {{
+            padding: 4px;
+            border-radius: 8px;
+        }}
+        QComboBox QAbstractItemView::item {{
+            min-height: 26px;
+            padding: 2px 10px;
+            border-radius: 6px;
+        }}
+        QComboBox QAbstractItemView::item:selected,
+        QComboBox QAbstractItemView::item:hover {{
+            background: {self.accent_dim};
+            color: {self.accent};
+        }}
         QListWidget {{
             background: {self.card2};
             border: none;
@@ -456,8 +625,7 @@ class Theme:
         QProgressBar::chunk {{ background: {self.accent}; border-radius: 4px; }}
         QTabWidget::pane {{
             border: none;
-            background: {self.bg};
-            border-radius: 12px;
+            background: transparent;
             top: 4px;
         }}
         QTabBar {{ background: transparent; }}
@@ -744,6 +912,7 @@ class SwitchRow(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         label = QLabel(text)
+        self.label = label
         lay.addWidget(label)
         lay.addStretch(1)
         self.switch = ToggleSwitch(theme or Theme())
@@ -757,6 +926,14 @@ class SwitchRow(QWidget):
 
     def isChecked(self):
         return self.switch.isChecked()
+
+
+class _ChipLabel(QLabel):
+    """A chip that is not drawn while it has nothing to say."""
+
+    def setText(self, text):
+        super().setText(text)
+        self.setVisible(bool(str(text).strip()))
 
 
 class Popup(QFrame):
@@ -773,6 +950,20 @@ class Popup(QFrame):
         self.move(pos)
         self.show()
 
+    def show_beside(self, anchor: QWidget, gap=8):
+        """To the right of ``anchor``, bottom edges level, kept on screen:
+        how a menu opens from the foot of the navigation rail."""
+        self.adjustSize()
+        top_left = anchor.mapToGlobal(QPoint(anchor.width() + gap,
+                                             anchor.height() - self.height()))
+        screen = anchor.screen().availableGeometry() if anchor.screen() \
+            else None
+        if screen is not None:
+            top_left.setY(max(screen.top(), min(
+                top_left.y(), screen.bottom() - self.height())))
+        self.move(top_left)
+        self.show()
+
     def show_above(self, anchor: QWidget, gap=4):
         pos = anchor.mapToGlobal(QPoint(0, -self.height() - gap))
         self.move(pos)
@@ -780,8 +971,140 @@ class Popup(QFrame):
 
 
 # ======================================================================
+# Edition picker
+# ======================================================================
+
+def rounded_pixmap(source, size, radius=None):
+    """``source`` scaled to fill a ``size`` square with rounded corners."""
+    ratio = 2
+    out = QPixmap(size * ratio, size * ratio)
+    out.setDevicePixelRatio(ratio)
+    out.fill(Qt.transparent)
+    scaled = source.scaled(size * ratio, size * ratio,
+                           Qt.KeepAspectRatioByExpanding,
+                           Qt.SmoothTransformation)
+    scaled.setDevicePixelRatio(ratio)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform)
+    path = QPainterPath()
+    r = size * 0.22 if radius is None else radius
+    path.addRoundedRect(0, 0, size, size, r, r)
+    painter.setClipPath(path)
+    painter.drawPixmap(QRect(0, 0, size, size), scaled)
+    painter.end()
+    return out
+
+
+def edition_pixmap(logo, size, theme):
+    """An edition's Store logo, rounded; until it is known, a quiet tile
+    with a controller drawn on it."""
+    if logo is not None and not logo.isNull():
+        return rounded_pixmap(logo, size)
+    ratio = 2
+    out = QPixmap(size * ratio, size * ratio)
+    out.setDevicePixelRatio(ratio)
+    out.fill(Qt.transparent)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(theme.card3))
+    painter.drawRoundedRect(0, 0, size, size, size * 0.22, size * 0.22)
+    glyph = icons.pixmap("game", theme.sub, int(size * 0.62))
+    offset = (size - int(size * 0.62)) / 2
+    painter.drawPixmap(QPointF(offset, offset), glyph)
+    painter.end()
+    return out
+
+
+def edition_caption(entry):
+    """The second line of an edition in the menu."""
+    if entry.get("id") == "release":
+        return "Minecraft Bedrock"
+    if entry.get("id") == "preview":
+        return "Minecraft Bedrock, beta builds"
+    return entry.get("name") or ""
+
+
+class EditionMenu(Popup):
+    """The editions, one row each with its badge; opens from the dock."""
+
+    def __init__(self, parent, editions, logo_for):
+        super().__init__(parent, width=270, height=12 + 52 * len(editions))
+        self._logo_for = logo_for
+        self.badges = {}
+        self.setObjectName("Popup")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(2)
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.buttons = {}
+        for entry in editions:
+            b = QPushButton()
+            b.setObjectName("EditionRow")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedHeight(48)
+            b.setToolTip(entry["name"])
+            # The row draws its own labels; this is its name for screen
+            # readers (and for anything else asking what the row is).
+            b.setAccessibleName(entry.get("short") or entry["name"])
+            row = QHBoxLayout(b)
+            row.setContentsMargins(10, 4, 10, 4)
+            row.setSpacing(10)
+            badge = QLabel()
+            badge.setPixmap(logo_for(entry["id"], 32))
+            badge.setAttribute(Qt.WA_TransparentForMouseEvents)
+            self.badges[entry["id"]] = badge
+            row.addWidget(badge)
+            words = QVBoxLayout()
+            words.setSpacing(0)
+            name = QLabel(entry.get("short") or entry["name"])
+            name.setStyleSheet("font-weight:700;")
+            name.setAttribute(Qt.WA_TransparentForMouseEvents)
+            words.addWidget(name)
+            caption = QLabel(edition_caption(entry))
+            caption.setObjectName("Muted")
+            caption.setAttribute(Qt.WA_TransparentForMouseEvents)
+            words.addWidget(caption)
+            row.addLayout(words, 1)
+            self.group.addButton(b)
+            self.buttons[entry["id"]] = b
+            v.addWidget(b)
+
+    def repaint_logos(self):
+        for edition_id, badge in self.badges.items():
+            badge.setPixmap(self._logo_for(edition_id, 32))
+
+
+# ======================================================================
 # Version picker
 # ======================================================================
+
+class _InstalledMark(QStyledItemDelegate):
+    """Draws "Installed" at the right of the rows that carry the mark (#376).
+
+    The row's text stays the version label alone: it is what a pick is
+    found again by, and what the filter matches.
+    """
+    TEXT = "Installed"
+    ROLE = Qt.UserRole + 1
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        if not index.data(self.ROLE):
+            return
+        theme = getattr(self.parent().window().parent(), "theme", None)
+        painter.save()
+        font = painter.font()
+        font.setPointSizeF(max(7.0, font.pointSizeF() * 0.85))
+        painter.setFont(font)
+        painter.setPen(QColor(getattr(theme, "green", "#43a047")))
+        painter.drawText(option.rect.adjusted(0, 0, -10, 0),
+                         Qt.AlignRight | Qt.AlignVCenter, self.TEXT)
+        painter.restore()
+
 
 class VersionPicker(Popup):
     picked = Signal(str)
@@ -808,14 +1131,21 @@ class VersionPicker(Popup):
         row.addWidget(self.refresh_btn)
         v.addLayout(row)
         self.list = QListWidget()
+        self.list.setItemDelegate(_InstalledMark(self.list))
         v.addWidget(self.list)
         self.search.textChanged.connect(self._filter)
         self.list.itemClicked.connect(lambda it: self.picked.emit(it.text()))
 
-    def set_labels(self, labels, current):
+    def set_labels(self, labels, current, installed=()):
+        """Fill the list; ``installed`` names the labels already on disk."""
+        installed = set(installed)
         self.list.clear()
         for lab in labels:
             it = QListWidgetItem(lab)
+            if lab in installed:
+                it.setData(_InstalledMark.ROLE, True)
+                it.setToolTip("Already downloaded: PLAY starts it without "
+                              "downloading anything.")
             self.list.addItem(it)
             if lab == current:
                 self.list.setCurrentItem(it)
@@ -886,8 +1216,10 @@ class ProfileMenu(Popup):
             b = btn(name, lambda: self.switch.emit(path), kind="ghost", h=30)
             b.setStyleSheet("text-align:left;" + ("font-weight:700;color:%s;" % "#37b06b" if active else ""))
             h.addWidget(b, 1)
-            wb = btn("New Win", lambda: self.new_window.emit(path), kind="ghost", w=64, h=30,
+            wb = btn("New window", lambda: self.new_window.emit(path),
+                     kind="ghost", h=30,
                      tip=f"Open {name} in a new window")
+            wb.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
             h.addWidget(wb)
             self._v.addWidget(row)
 
@@ -1026,44 +1358,6 @@ class AccountsMenu(Popup):
         super().hideEvent(event)
 
 
-class GearButton(QAbstractButton):
-    """A drawn settings-gear icon (painted, not a font glyph/emoji)."""
-
-    def __init__(self, theme: "Theme", parent=None):
-        super().__init__(parent)
-        self._theme = theme
-        self.setFixedSize(52, 52)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setAttribute(Qt.WA_Hover, True)
-        self.setToolTip("Settings")
-
-    def set_theme(self, theme: "Theme"):
-        self._theme = theme
-        self.update()
-
-    def paintEvent(self, _event):
-        import math
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        rect = self.rect()
-        bg = QColor(self._theme.card3 if self.underMouse() else self._theme.card2)
-        p.setPen(Qt.NoPen)
-        p.setBrush(bg)
-        p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 12, 12)
-
-        cx, cy = rect.center().x(), rect.center().y()
-        outer_r, inner_r, hole_r, teeth = 11.5, 8.0, 4.2, 8
-        p.setBrush(QColor(self._theme.fg))
-        points = [
-            QPointF(cx + (outer_r if i % 2 == 0 else inner_r) * math.cos(math.pi * i / teeth),
-                    cy + (outer_r if i % 2 == 0 else inner_r) * math.sin(math.pi * i / teeth))
-            for i in range(teeth * 2)
-        ]
-        p.drawPolygon(points)
-        p.setBrush(bg)
-        p.drawEllipse(QPointF(cx, cy), hole_r, hole_r)
-
-
 # ======================================================================
 # Main window
 # ======================================================================
@@ -1098,10 +1392,11 @@ class LaunchWorker(QThread):
     # in a log nobody has open when the game closes.
     session_notice = Signal(str)
 
-    def __init__(self, ver, editor=False):
+    def __init__(self, ver, editor=False, hidden=False):
         super().__init__()
         self._ver = ver
         self._editor = editor
+        self._hidden = hidden
 
     def run(self):
         try:
@@ -1117,8 +1412,11 @@ class LaunchWorker(QThread):
 
             notices = []
             try:
+                # Passed only when asked for: a visible launch is the call
+                # it has always been.
+                options = {"hidden": True} if self._hidden else {}
                 launch(on_started=on_started, notices=notices,
-                       editor=self._editor)
+                       editor=self._editor, **options)
             finally:
                 self.come_back.emit()
             for notice in notices:
@@ -1134,6 +1432,37 @@ class LaunchWorker(QThread):
                 self.needs_game_folder.emit(message)
             else:
                 self.failed.emit(message)
+
+
+def _version_edition_id(v):
+    """The edition id of one picker entry, whatever shape it was given in."""
+    edition = (v or {}).get("edition")
+    if isinstance(edition, dict):
+        return edition.get("id") or "release"
+    if isinstance(edition, str) and edition:
+        return edition
+    return "preview" if (v or {}).get("beta") else "release"
+
+
+def _version_label(v):
+    """What the picker shows for one entry.
+
+    A Bedrock build by its shortened number. Another title has one entry,
+    the build the Store serves: its name, and that build's number once it
+    is installed.
+    """
+    edition = v.get("edition")
+    if isinstance(edition, dict) and edition.get("catalogue") == "store":
+        name = edition.get("short") or edition.get("name") or "Minecraft"
+        return f"{name}  ·  {v.get('build') or 'latest'}"
+    # Education follows Bedrock's build numbers, and the label is how a pick
+    # is found again: never the same for two editions.
+    label = format_display_version(v["tag"], v["beta"])
+    if v["beta"]:
+        label += "  ·  BETA"
+    elif _version_edition_id(v) == "education":
+        label += "  ·  EDU"
+    return label
 
 
 class MainWindow(QMainWindow):
@@ -1176,17 +1505,24 @@ class MainWindow(QMainWindow):
         self._auth_bridge.refused.connect(self._on_refused)
 
         self.setWindowTitle(PRETTY)
-        self.resize(1000, 660)
-        self.setMinimumSize(880, 640)
+        self.resize(1120, 700)
+        self.setMinimumSize(1000, 640)
 
         self._load_icon()
 
         root = QWidget()
         root.setObjectName("Root")
         self.setCentralWidget(root)
-        outer = QVBoxLayout(root)
-        outer.setContentsMargins(22, 18, 22, 16)
+        frame = QHBoxLayout(root)
+        frame.setContentsMargins(16, 16, 22, 16)
+        frame.setSpacing(16)
+        # The navigation rail: every page one click away, the page shown
+        # lit up. Built before the pages, which the rail only names.
+        frame.addWidget(self._build_rail())
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 2, 0, 0)
         outer.setSpacing(8)
+        frame.addLayout(outer, 1)
 
         outer.addLayout(self._build_topbar())
 
@@ -1196,11 +1532,16 @@ class MainWindow(QMainWindow):
         self.settings_page = self._build_settings()
         self.changelog_page = self._build_changelog()
         self.profiles_page = self._build_profiles_page()
+        # Built the first time they are opened: most sessions never do.
+        self.mods_page = None
+        self.content_page = None
         self.stack.addWidget(self.hero_page)
         self.stack.addWidget(self.settings_page)
         self.stack.addWidget(self.changelog_page)
         self.stack.addWidget(self.profiles_page)
         self.stack.setCurrentWidget(self.hero_page)
+        self.stack.currentChanged.connect(lambda _: self._sync_rail())
+        self._sync_rail()
 
         self.status_row = self._build_status_row()
         outer.addLayout(self.status_row)
@@ -1219,8 +1560,17 @@ class MainWindow(QMainWindow):
 
         self._changelog_loaded = False
 
-        QTimer.singleShot(50, self.refresh_versions)
-        QTimer.singleShot(200, self.check_for_update_async)
+        # Nothing connects by itself until the player has seen what the
+        # launcher contacts and said how updates are checked (bol.netpolicy).
+        self._network_started = False
+        if netpolicy.decided(self.settings):
+            self._start_network()
+        else:
+            QTimer.singleShot(0, self._show_network_notice)
+        # Three seconds on screen is a launcher that starts: the one an
+        # update replaced is no longer needed (bol.rollback).
+        QTimer.singleShot(3000, rollback.confirm)
+        QTimer.singleShot(0, self._report_rollback)
 
         if self.settings.get("show_changelog_on_startup", False):
             QTimer.singleShot(0, self.toggle_changelog)
@@ -1265,6 +1615,11 @@ class MainWindow(QMainWindow):
         window when Minecraft starts is a feature, and it is what supervises
         the session afterwards.
         """
+        # The report window owns two threads of its own and waits for them
+        # when it closes: close it before the window that parents it goes.
+        report_dialog = getattr(self, "_report_dialog", None)
+        if report_dialog is not None and _alive(report_dialog):
+            report_dialog.done(0)
         for worker in self._workers.values():
             if worker is not None and worker.isRunning():
                 _park_worker(worker)
@@ -1293,57 +1648,296 @@ class MainWindow(QMainWindow):
         self._paint_edition_toggle()
         for row in getattr(self, "_switches", ()):
             row.switch.set_theme(self.theme)
-        if getattr(self, "settings_btn", None):
-            self.settings_btn.set_theme(self.theme)
+        if getattr(self, "rail_buttons", None):
+            self._paint_rail_icons()
+        if getattr(self, "edition_menu", None) is not None:
+            self.edition_menu.repaint_logos()
+            self._paint_edition_field(self._checked_edition_id())
         if getattr(self, "nav", None) is not None:
             self.nav.set_accent(self.theme.accent)
+        if getattr(self, "mods_page", None) is not None and \
+                self.stack.currentWidget() is self.mods_page:
+            self.mods_page.refresh_builds()
         if _alive(getattr(self, "accounts_menu", None)):
             self.accounts_menu.set_theme(self.theme)
             self._refresh_accounts()
 
     # ------------------------------------------------------------ top bar
-    def _build_topbar(self) -> QHBoxLayout:
-        row = QHBoxLayout()
+    RAIL_WIDE = 212
+    RAIL_NARROW = 64
 
-        brand = QFrame(); brand.setObjectName("Pill")
-        bl = QHBoxLayout(brand); bl.setContentsMargins(10, 6, 10, 6)
+    def _build_rail(self) -> QFrame:
+        rail = QFrame(); rail.setObjectName("Rail")
+        self.rail = rail
+        v = QVBoxLayout(rail)
+        v.setContentsMargins(10, 12, 10, 12)
+        v.setSpacing(4)
+
+        brand = QHBoxLayout(); brand.setSpacing(8)
+        self._rail_brand_row = brand
         icon_lbl = QLabel()
         if self.icon_pixmap:
-            icon_lbl.setPixmap(self.icon_pixmap.scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        bl.addWidget(icon_lbl)
-        whats_new = QToolButton(); whats_new.setText("What's New")
-        whats_new.setCursor(Qt.PointingHandCursor)
-        whats_new.setStyleSheet("font-weight:700; border:none; background:transparent;")
-        whats_new.clicked.connect(self.toggle_changelog)
-        bl.addWidget(whats_new)
-        ver_lbl = QLabel(f"v{VERSION}"); ver_lbl.setObjectName("Sub")
-        bl.addWidget(ver_lbl)
-        gh_btn = btn("GitHub", self._open_github, kind="ghost", h=26)
-        bl.addWidget(gh_btn)
-        row.addWidget(brand)
-        row.addStretch(1)
+            icon_lbl.setPixmap(self.icon_pixmap.scaled(
+                30, 30, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        icon_lbl.setToolTip(PRETTY)
+        brand.addWidget(icon_lbl)
+        self.rail_brand = QLabel("BedrockOnLinux"); self.rail_brand.setObjectName("Brand")
+        brand.addWidget(self.rail_brand, 1)
+        # Folds the rail down to its icons, and back; remembered. A small
+        # chevron beside the name; folded, it sits under the icon.
+        self.rail_fold = QPushButton("‹")
+        self.rail_fold.setObjectName("FoldBtn")
+        self.rail_fold.setCursor(Qt.PointingHandCursor)
+        self.rail_fold.setFixedSize(24, 24)
+        self.rail_fold.setToolTip("Fold the menu to its icons")
+        self.rail_fold.clicked.connect(lambda: self.set_rail_collapsed(True))
+        brand.addWidget(self.rail_fold)
+        v.addLayout(brand)
+        self.rail_unfold = QPushButton("›")
+        self.rail_unfold.setObjectName("FoldBtn")
+        self.rail_unfold.setCursor(Qt.PointingHandCursor)
+        self.rail_unfold.setFixedSize(24, 24)
+        self.rail_unfold.setToolTip("Show the menu's names")
+        self.rail_unfold.clicked.connect(lambda: self.set_rail_collapsed(False))
+        v.addWidget(self.rail_unfold, 0, Qt.AlignHCenter)
+        v.addSpacing(10)
 
-        # Profile switcher pill
+        self.rail_group = QButtonGroup(self)
+        self.rail_group.setExclusive(True)
+        self.rail_buttons = {}
+        self._rail_texts = {}
+
+        def item(key, icon_name, text, slot, tip):
+            b = QPushButton()
+            b.setObjectName("NavItem")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedHeight(38)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False: slot())
+            self.rail_group.addButton(b)
+            self.rail_buttons[key] = b
+            b.setIconSize(QSize(20, 20))
+            self._rail_texts[key] = (icon_name, text)
+            v.addWidget(b)
+            return b
+
+        item("home", "home", "Play", self.go_home, "Choose a version and play")
+        item("content", "addons", "Add-ons && Maps", self.open_content,
+             "Add-ons, maps, texture packs and skins from MCPEDL and "
+             "CurseForge")
+        # Kept under its old name: the Mods page was a pill of the top bar.
+        self.mods_card = item("mods", "mods", "Mods", self.open_mods,
+                              "LeviLamina mods: browse, install, import")
+        item("profiles", "profiles", "Profiles", self.open_profiles,
+             "Separate sign-ins, worlds and settings")
+        item("settings", "settings", "Settings", self.open_settings,
+             "Launcher and game settings")
+        item("changelog", "news", "What's New", self.open_changelog,
+             "What changed in each version")
+        v.addStretch(1)
+
+        # Who plays: the profile and the accounts, at the foot of the rail.
         self.prof_card = QFrame(); self.prof_card.setObjectName("Pill")
         self.prof_card.setCursor(Qt.PointingHandCursor)
-        pl = QHBoxLayout(self.prof_card); pl.setContentsMargins(14, 6, 10, 6)
-        self.prof_label = QLabel(f"Profile: {current_profile_name()}")
-        pl.addWidget(self.prof_label)
-        pl.addWidget(QLabel("▾"))
+        pl = QHBoxLayout(self.prof_card); pl.setContentsMargins(10, 6, 8, 6)
+        pl.setSpacing(8)
+        self.prof_icon = QLabel()
+        pl.addWidget(self.prof_icon)
+        self.prof_label = QLabel(current_profile_name())
+        self.prof_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        pl.addWidget(self.prof_label, 1)
+        self.prof_arrow = QLabel("▸")
+        pl.addWidget(self.prof_arrow)
         self.prof_card.mousePressEvent = lambda e: self.open_profile_menu()
-        row.addWidget(self.prof_card)
+        v.addWidget(self.prof_card)
 
-        # Accounts pill -- opens the menu holding both sign-ins
         self.acct_card = QFrame(); self.acct_card.setObjectName("Pill")
         self.acct_card.setCursor(Qt.PointingHandCursor)
-        al = QHBoxLayout(self.acct_card); al.setContentsMargins(14, 6, 10, 6)
+        al = QHBoxLayout(self.acct_card); al.setContentsMargins(10, 6, 8, 6)
+        al.setSpacing(8)
         self.acct_dot = QLabel("●")
         al.addWidget(self.acct_dot)
         self.acct_text = QLabel("Sign in")
-        al.addWidget(self.acct_text)
-        al.addWidget(QLabel("▾"))
+        self.acct_text.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        al.addWidget(self.acct_text, 1)
+        self.acct_arrow = QLabel("▸")
+        al.addWidget(self.acct_arrow)
         self.acct_card.mousePressEvent = lambda e: self.open_accounts_menu()
-        row.addWidget(self.acct_card)
+        v.addWidget(self.acct_card)
+        v.addSpacing(4)
+
+        self.rail_foot = QWidget()
+        foot = QHBoxLayout(self.rail_foot); foot.setContentsMargins(4, 0, 0, 0)
+        ver_lbl = QLabel(f"v{VERSION}"); ver_lbl.setObjectName("Muted")
+        foot.addWidget(ver_lbl)
+        foot.addStretch(1)
+        foot.addWidget(btn("Report", self.open_report, kind="ghost-small",
+                           h=24, tip="Report a problem: send what is needed "
+                                     "to diagnose it, with nothing personal "
+                                     "in it"))
+        foot.addWidget(btn("GitHub", self._open_github, kind="ghost-small",
+                           h=24))
+        v.addWidget(self.rail_foot)
+        self.set_rail_collapsed(self.settings.get("rail_collapsed", False),
+                                save=False)
+        return rail
+
+    # Below this width the rail folds by itself, whatever was chosen: the
+    # dock's five edition toggles and PLAY need the room.
+    RAIL_AUTO_FOLD = 1120
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "rail", None) is not None:
+            folded = self.rail.width() == self.RAIL_NARROW
+            if folded != self._rail_folded():
+                self._paint_rail()
+
+    def _rail_folded(self):
+        return bool(self.settings.get("rail_collapsed", False)) or \
+            self.width() < self.RAIL_AUTO_FOLD
+
+    def set_rail_collapsed(self, collapsed, save=True):
+        """Fold the rail to its icons, or open it to their names; the
+        choice is remembered."""
+        collapsed = bool(collapsed)
+        if save and self.settings.get("rail_collapsed", False) != collapsed:
+            self.settings = load_settings()
+            self.settings["rail_collapsed"] = collapsed
+            save_settings(self.settings)
+        self.settings["rail_collapsed"] = collapsed
+        self._paint_rail()
+
+    def _paint_rail_icons(self):
+        """Tint the menu's and the home tiles' icons for the theme."""
+        t = self.theme
+        for key, b in self.rail_buttons.items():
+            b.setIcon(icons.toggle_icon(self._rail_texts[key][0], t.sub,
+                                        t.fg, t.accent))
+        self.prof_icon.setPixmap(icons.pixmap("user", t.sub, 18))
+        for label, name in getattr(self, "_tile_icons", ()):
+            label.setPixmap(icons.pixmap(name, t.accent, 22))
+
+    def _paint_rail(self):
+        collapsed = self._rail_folded()
+        self.rail.setFixedWidth(self.RAIL_NARROW if collapsed
+                                else self.RAIL_WIDE)
+        for key, b in self.rail_buttons.items():
+            _icon, text = self._rail_texts[key]
+            b.setText("" if collapsed else f"  {text}")
+            b.setToolTip(text.replace("&&", "&") if collapsed
+                         else b.toolTip())
+            b.setStyleSheet("text-align:center; padding:0;"
+                            if collapsed else "")
+        self._paint_rail_icons()
+        self.rail_fold.setVisible(not collapsed)
+        self.rail_unfold.setVisible(collapsed)
+        self._rail_brand_row.setAlignment(Qt.AlignHCenter if collapsed
+                                          else Qt.Alignment())
+        self.rail_brand.setVisible(not collapsed)
+        self.rail_foot.setVisible(not collapsed)
+        for widget in (self.prof_label, self.prof_arrow, self.acct_text,
+                       self.acct_arrow):
+            widget.setVisible(not collapsed)
+        for card in (self.prof_card, self.acct_card):
+            card.layout().setContentsMargins(*((0, 6, 0, 6) if collapsed
+                                               else (10, 6, 8, 6)))
+            card.setFixedHeight(38 if collapsed else 34)
+        for icon in (self.prof_icon, self.acct_dot):
+            icon.setAlignment(Qt.AlignCenter)
+            icon.setSizePolicy(QSizePolicy.Expanding if collapsed
+                               else QSizePolicy.Fixed, QSizePolicy.Preferred)
+
+        self.prof_card.setToolTip(f"Profile: {current_profile_name()}")
+        # Too narrow to unfold: the button says why instead of doing nothing.
+        narrow = self.width() < self.RAIL_AUTO_FOLD
+        self.rail_unfold.setEnabled(not narrow)
+        self.rail_unfold.setToolTip("Widen the window to show the menu's "
+                                    "names" if narrow
+                                    else "Show the menu's names")
+
+    # Page name shown above it, by page.
+    _PAGE_TITLES = {
+        "home": "Play", "content": "Add-ons & Maps", "mods": "Mods",
+        "profiles": "Profiles", "settings": "Settings",
+        "changelog": "What's New",
+    }
+
+    def _page_key(self, page=None):
+        page = self.stack.currentWidget() if page is None else page
+        for key, attr in (("home", "hero_page"), ("content", "content_page"),
+                          ("mods", "mods_page"), ("profiles", "profiles_page"),
+                          ("settings", "settings_page"),
+                          ("changelog", "changelog_page")):
+            if page is not None and page is getattr(self, attr, None):
+                return key
+        return "home"
+
+    def _sync_rail(self):
+        """Light up the rail item of the page now shown, and name it."""
+        key = self._page_key()
+        button = getattr(self, "rail_buttons", {}).get(key)
+        if button is not None and not button.isChecked():
+            button.setChecked(True)
+        if getattr(self, "page_title", None) is not None:
+            self.page_title.setText(self._PAGE_TITLES.get(key, ""))
+
+    def _show_page(self, page, entered=None):
+        self.stack.setCurrentWidget(page)
+        self._nav_follow_page(entered)
+
+    def go_home(self):
+        self._show_page(self.hero_page)
+
+    def open_settings(self):
+        if self.stack.currentWidget() is not self.settings_page:
+            self.toggle_settings()
+
+    def open_changelog(self):
+        if self.stack.currentWidget() is not self.changelog_page:
+            self.toggle_changelog()
+
+    def open_profiles(self):
+        if self.stack.currentWidget() is not self.profiles_page:
+            self.toggle_profiles()
+
+    def open_mods(self):
+        if self.mods_page is None or \
+                self.stack.currentWidget() is not self.mods_page:
+            self.toggle_mods()
+
+    def open_content(self, kind=None, query=None, slug=None):
+        """Show the Add-ons & Maps page, optionally on a kind, a search or
+        one project's page."""
+        if self.content_page is None:
+            # Imported with the page: most sessions never open it.
+            from .gui_content import ContentPage
+            self.content_page = ContentPage(self)
+            self.stack.addWidget(self.content_page)
+        if self.stack.currentWidget() is not self.content_page:
+            self.stack.setCurrentWidget(self.content_page)
+            self.content_page.opened()
+            self._nav_follow_page(self.content_page)
+        if kind:
+            self.content_page.show_kind(kind)
+        if query:
+            self.content_page.search_for(query)
+        if slug:
+            self.content_page.open_slug(slug)
+
+    def toggle_content(self):
+        if self.content_page is not None and \
+                self.stack.currentWidget() is self.content_page:
+            self.go_home()
+        else:
+            self.open_content()
+
+    def _build_topbar(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        self.page_title = QLabel("Play"); self.page_title.setObjectName("PageTitle")
+        row.addWidget(self.page_title)
+        row.addStretch(1)
         return row
 
     def _open_github(self):
@@ -1351,24 +1945,86 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ hero
     def _build_hero(self) -> QWidget:
+        page = QWidget()
+        col = QVBoxLayout(page)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(12)
+
         card = QFrame(); card.setObjectName("Card")
-        v = QVBoxLayout(card)
-        v.setAlignment(Qt.AlignCenter)
+        h = QHBoxLayout(card)
+        h.setContentsMargins(26, 22, 22, 22)
+        h.setSpacing(22)
+        # The edition chosen next to PLAY: its Store logo and its name.
+        self.hero_icon = QLabel()
+        self.hero_icon.setFixedSize(104, 104)
         if self.icon_pixmap:
-            lbl = QLabel()
-            lbl.setPixmap(self.icon_pixmap.scaled(118, 118, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            lbl.setAlignment(Qt.AlignCenter)
-            v.addWidget(lbl)
-        title = QLabel("Minecraft Bedrock"); title.setObjectName("Hero")
-        title.setAlignment(Qt.AlignCenter)
-        v.addWidget(title)
-        sub = QLabel("Bedrock Edition for Linux"); sub.setObjectName("Sub")
-        sub.setAlignment(Qt.AlignCenter)
-        v.addWidget(sub)
-        self.selected_chip = QLabel(""); self.selected_chip.setObjectName("Chip")
-        self.selected_chip.setAlignment(Qt.AlignCenter)
-        v.addWidget(self.selected_chip, 0, Qt.AlignCenter)
-        return card
+            self.hero_icon.setPixmap(self.icon_pixmap.scaled(104, 104, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        h.addWidget(self.hero_icon, 0, Qt.AlignVCenter)
+        titles = QVBoxLayout(); titles.setSpacing(4)
+        titles.addStretch(1)
+        self.hero_title = QLabel("Minecraft Bedrock"); self.hero_title.setObjectName("Hero")
+        titles.addWidget(self.hero_title)
+        self.hero_sub = QLabel("Bedrock Edition for Linux"); self.hero_sub.setObjectName("Sub")
+        titles.addWidget(self.hero_sub)
+        self.selected_chip = _ChipLabel(); self.selected_chip.setObjectName("Chip")
+        self.selected_chip.setText("")
+        titles.addWidget(self.selected_chip, 0, Qt.AlignLeft)
+        titles.addStretch(1)
+        h.addLayout(titles, 1)
+
+        tiles = QGridLayout(); tiles.setSpacing(10)
+        self._tile_icons = []
+        for index, (glyph, name, hint, slot) in enumerate((
+                ("addons", "Add-ons & Maps", "MCPEDL · CurseForge",
+                 self.open_content),
+                ("mods", "Mods", "LeviLamina", self.open_mods),
+                ("import", "Import a file", ".mcpack · .mcworld · .mcaddon",
+                 self._import_from_home),
+                ("folder", "Worlds & packs", "Open the game folder",
+                 lambda: self._open_folder(game_content_dir())))):
+            tiles.addWidget(self._home_tile(glyph, name, hint, slot),
+                            index // 2, index % 2)
+        h.addLayout(tiles)
+        col.addWidget(card, 1)
+
+        from .gui_content import FeaturedShelf  # noqa: PLC0415
+        self.featured = FeaturedShelf(self)
+        # The banner gives way first; the shelf keeps the height its cards
+        # need.
+        col.addWidget(self.featured, 2)
+        # Loaded by _start_network, once the first-run notice is answered.
+        if not self.settings.get("home_featured", True):
+            self.featured.hide()
+        return page
+
+    def _home_tile(self, glyph, name, hint, slot) -> QFrame:
+        tile = QFrame(); tile.setObjectName("Tile")
+        tile.setCursor(Qt.PointingHandCursor)
+        tile.setFixedSize(210, 64)
+        tile.setToolTip(name)
+        t = QHBoxLayout(tile); t.setContentsMargins(14, 8, 12, 8); t.setSpacing(10)
+        icon = QLabel(); icon.setFixedSize(22, 22)
+        icon.setPixmap(icons.pixmap(glyph, self.theme.accent, 22))
+        self._tile_icons.append((icon, glyph))
+        t.addWidget(icon)
+        words = QVBoxLayout(); words.setSpacing(0)
+        label = QLabel(name); label.setStyleSheet("font-weight:700;")
+        words.addWidget(label)
+        note = QLabel(hint); note.setObjectName("Muted")
+        words.addWidget(note)
+        t.addLayout(words, 1)
+        tile.mousePressEvent = lambda e: slot() if e.button() == Qt.LeftButton else None
+        return tile
+
+    def _save_home_featured(self, on):
+        self._save_setting("home_featured", on)
+        self.featured.setVisible(on)
+        if on and not self.featured.shelves:
+            self.featured.load()
+
+    def _import_from_home(self):
+        self.open_content()
+        self.content_page.import_files()
 
     # ------------------------------------------------------------ status row
     def _build_status_row(self) -> QVBoxLayout:
@@ -1400,9 +2056,41 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout(dock)
         h.setContentsMargins(16, 14, 16, 14)
 
+        # Edition: one pill, its badge and name; the menu lists them all.
+        editions = list_editions(include_beta=True)
+        self.edition_field = QFrame(); self.edition_field.setObjectName("PillOnCard")
+        self.edition_field.setFixedHeight(52)
+        self.edition_field.setMinimumWidth(150)
+        self.edition_field.setCursor(Qt.PointingHandCursor)
+        self.edition_field.setToolTip("Choose the game or edition")
+        efl = QHBoxLayout(self.edition_field)
+        efl.setContentsMargins(10, 0, 12, 0); efl.setSpacing(10)
+        self.edition_badge = QLabel()
+        efl.addWidget(self.edition_badge)
+        self.edition_name = QLabel("")
+        self.edition_name.setStyleSheet("font-weight:700;")
+        efl.addWidget(self.edition_name, 1)
+        efl.addWidget(QLabel("▾"))
+        self.edition_field.mousePressEvent = lambda e: self.open_edition_menu()
+        h.addWidget(self.edition_field)
+
+        self._edition_logos = {}
+        self.edition_menu = EditionMenu(self, editions, self.edition_logo)
+        self.edition_group = self.edition_menu.group
+        self.edition_buttons = self.edition_menu.buttons
+        self._edition_entries = {e["id"]: e for e in editions}
+        for edition_id, b in self.edition_buttons.items():
+            b.clicked.connect(
+                lambda _checked=False, eid=edition_id: self._pick_edition(eid))
+            b.toggled.connect(
+                lambda on, eid=edition_id: on and self._paint_edition_field(eid))
+        self.stable_btn = self.edition_buttons["release"]
+        self.preview_btn = self.edition_buttons["preview"]
+        self.education_btn = self.edition_buttons.get("education")
+
         # Version field
         self.ver_field = QFrame(); self.ver_field.setObjectName("PillOnCard")
-        self.ver_field.setFixedSize(220, 52)
+        self.ver_field.setFixedSize(196, 52)
         self.ver_field.setCursor(Qt.PointingHandCursor)
         vfl = QHBoxLayout(self.ver_field); vfl.setContentsMargins(14, 0, 12, 0)
         self.ver_label = QLabel("Loading…")
@@ -1411,42 +2099,75 @@ class MainWindow(QMainWindow):
         self.ver_field.mousePressEvent = lambda e: self.open_picker()
         h.addWidget(self.ver_field)
 
-        # Edition toggle
-        ed_field = QFrame(); ed_field.setObjectName("PillOnCard")
-        ed_field.setFixedHeight(52)
-        efl = QHBoxLayout(ed_field); efl.setContentsMargins(6, 8, 6, 8)
-        self.edition_group = QButtonGroup(self)
-        self.edition_group.setExclusive(True)
-        self.stable_btn = btn("Stable", None, kind="ghost", w=78, h=32)
-        self.preview_btn = btn("Preview", None, kind="ghost", w=78, h=32)
-        for b in (self.stable_btn, self.preview_btn):
-            b.setObjectName("Toggle")
-            b.setCheckable(True)
-        self.edition_group.addButton(self.stable_btn)
-        self.edition_group.addButton(self.preview_btn)
-        efl.addWidget(self.stable_btn)
-        efl.addWidget(self.preview_btn)
-        self.stable_btn.clicked.connect(lambda: self.select_edition("release"))
-        self.preview_btn.clicked.connect(lambda: self.select_edition("preview"))
-        h.addWidget(ed_field)
-
         h.addStretch(1)
 
         self.details_btn = btn("Details", self.toggle_details, kind="ghost", w=76, h=52,
                                 tip="Show Activity Logs")
         h.addWidget(self.details_btn)
-        self.settings_btn = GearButton(self.theme)
-        self.settings_btn.clicked.connect(self.toggle_settings)
-        h.addWidget(self.settings_btn)
         self.play_btn = btn("▶  PLAY", self.do_play, kind="play", w=120, h=52, tip="Play Game")
         h.addWidget(self.play_btn)
 
-        edition_id = "preview" if self.settings.get("show_betas", False) else "release"
-        (self.preview_btn if edition_id == "preview" else self.stable_btn).setChecked(True)
+        edition_id = self.settings.get("ui_edition")
+        if edition_id not in self.edition_buttons:
+            edition_id = ("preview" if self.settings.get("show_betas", False)
+                          else "release")
+        self.edition_buttons[edition_id].setChecked(True)
         return dock
 
     def _paint_edition_toggle(self):
-        pass  # QSS handles the checked-state colouring via #Toggle:checked
+        pass  # QSS handles the checked-state colouring via #EditionRow:checked
+
+    # What the home banner calls each edition.
+    _HERO_NAMES = {
+        "release": ("Minecraft Bedrock", "Bedrock Edition for Linux"),
+        "preview": ("Minecraft Preview", "Bedrock's beta builds, on Linux"),
+    }
+
+    def edition_logo(self, edition_id, size):
+        return edition_pixmap(self._edition_logos.get(edition_id), size,
+                              self.theme)
+
+    def _load_edition_logos(self):
+        from . import storeart  # noqa: PLC0415 - network, worker only
+        editions = list(self._edition_entries.values())
+        worker = Worker(lambda: storeart.logos(editions))
+        worker.done.connect(self._edition_logos_loaded)
+        self._start_worker("edition-logos", worker)
+
+    def _edition_logos_loaded(self, logos):
+        for edition_id, data in (logos or {}).items():
+            pixmap = QPixmap()
+            if pixmap.loadFromData(data):
+                self._edition_logos[edition_id] = pixmap
+        self.edition_menu.repaint_logos()
+        self._paint_edition_field(self._checked_edition_id())
+
+    def _paint_edition_field(self, edition_id):
+        entry = self._edition_entries.get(edition_id) or {}
+        self.edition_badge.setPixmap(self.edition_logo(edition_id, 30))
+        self.edition_name.setText(entry.get("short") or entry.get("name")
+                                  or edition_id)
+        if getattr(self, "hero_title", None) is None:
+            return
+        name = entry.get("name") or "Minecraft"
+        for suffix in (" for Windows", " - Windows"):
+            name = name.replace(suffix, "")
+        title, sub = self._HERO_NAMES.get(edition_id, (name, "On Linux"))
+        self.hero_title.setText(title)
+        self.hero_sub.setText(sub)
+        logo = self._edition_logos.get(edition_id)
+        if logo is not None:
+            self.hero_icon.setPixmap(rounded_pixmap(logo, 104, 22))
+        elif self.icon_pixmap:
+            self.hero_icon.setPixmap(self.icon_pixmap.scaled(
+                104, 104, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def open_edition_menu(self):
+        self.edition_menu.show_above(self.edition_field, gap=8)
+
+    def _pick_edition(self, edition_id):
+        self.edition_menu.close()
+        self.select_edition(edition_id)
 
     # ------------------------------------------------------------ log drawer
     def _build_log_drawer(self) -> QFrame:
@@ -1591,13 +2312,36 @@ class MainWindow(QMainWindow):
         self.version_popup.refresh_requested.connect(
             self._refresh_versions_from_picker)
 
+    def _installed_labels(self):
+        """The picker labels whose build is on disk right now (#376).
+
+        Read from the game folders rather than from the catalogue loaded at
+        startup, so a build downloaded since then is marked too.
+        """
+        on_disk = {}
+        marked = set()
+        for label, version in zip(self.ui_state.get("labels") or [],
+                                  self.ui_state.get("versions") or []):
+            edition_id = _version_edition_id(version)
+            if edition_id not in on_disk:
+                try:
+                    on_disk[edition_id] = installed_versions(edition_id)
+                except Exception:
+                    on_disk[edition_id] = None
+            builds = on_disk[edition_id]
+            if (version["tag"] in builds if builds is not None
+                    else version.get("installed")):
+                marked.add(label)
+        return marked
+
     def open_picker(self):
         labels = [l for l, v in zip(self.ui_state.get("labels") or [],
                                      self.ui_state.get("versions") or [])
                   if self._edition_matches(v)]
         if not labels:
             return
-        self.version_popup.set_labels(labels, self.ver_label.text())
+        self.version_popup.set_labels(labels, self.ver_label.text(),
+                                      self._installed_labels())
         self.version_popup.setFixedWidth(max(260, self.ver_field.width()))
         self.version_popup.show_above(self.ver_field)
 
@@ -1606,13 +2350,19 @@ class MainWindow(QMainWindow):
         self.ver_label.setText(label)
         self._update_selected_chip()
 
+    def _checked_edition_id(self):
+        for edition_id, button in getattr(self, "edition_buttons", {}).items():
+            if button.isChecked():
+                return edition_id
+        return "release"
+
     def _edition_matches(self, v, wanted=None):
-        wanted = (wanted or ("preview" if self.preview_btn.isChecked() else "release")) == "preview"
-        return bool(v.get("beta", False)) == wanted
+        return _version_edition_id(v) == (wanted or self._checked_edition_id())
 
     def select_edition(self, edition_id):
         self.settings = load_settings()
         self.settings["show_betas"] = edition_id == "preview"
+        self.settings["ui_edition"] = edition_id
         save_settings(self.settings)
         matches = [l for l, v in zip(self.ui_state.get("labels") or [],
                                       self.ui_state.get("versions") or [])
@@ -1627,7 +2377,10 @@ class MainWindow(QMainWindow):
         if not lab or lab == "Loading…":
             self.selected_chip.setText("")
             return
-        is_beta = "BETA" in lab
+        picked = self.selected_version()
+        edition_id = (_version_edition_id(picked) if picked else
+                      ("preview" if "BETA" in lab else "release"))
+        is_beta = edition_id == "preview"
         self.settings = load_settings()
         changed = False
         if self.settings.get("ui_is_beta") != is_beta:
@@ -1640,15 +2393,19 @@ class MainWindow(QMainWindow):
         # restarted after playing an older build quietly downloaded another
         # 2.5 GB of game nobody had asked for (#214).
         display = lab.split("  ")[0]
-        picked = self.selected_version()
         cur_mc_ver = picked["tag"] if picked else display
         if self.settings.get("mc_version") != cur_mc_ver:
             self.settings["mc_version"] = cur_mc_ver
             changed = True
+        if picked and self.settings.get("ui_edition") != edition_id:
+            self.settings["ui_edition"] = edition_id
+            changed = True
         if changed:
             save_settings(self.settings)
-        self.selected_chip.setText(f"  {display}{'  ·  BETA' if is_beta else ''}  ")
-        (self.preview_btn if is_beta else self.stable_btn).setChecked(True)
+        suffix = ("  ·  BETA" if is_beta
+                  else "  ·  EDU" if edition_id == "education" else "")
+        self.selected_chip.setText(f"  {display}{suffix}  ")
+        self.edition_buttons.get(edition_id, self.stable_btn).setChecked(True)
         self.theme.beta = is_beta
         self.apply_theme()
         cur_kill = self.ui_state.get("busy")
@@ -1658,7 +2415,7 @@ class MainWindow(QMainWindow):
         lab = self.ver_label.text()
         if not self.ui_state["versions"] or not lab:
             return None
-        labels = [format_display_version(v["tag"], v["beta"]) + ("  ·  BETA" if v["beta"] else "")
+        labels = [_version_label(v)
                   for v in self.ui_state["versions"]]
         try:
             idx = labels.index(lab)
@@ -1692,7 +2449,8 @@ class MainWindow(QMainWindow):
                     continue
                 for b in builds:
                     versions.append({"tag": b["version"], "beta": ed.get("beta", False),
-                                      "edition": ed, "installed": b.get("installed", False)})
+                                      "edition": ed, "installed": b.get("installed", False),
+                                      "build": b.get("build")})
             return versions
 
         if ignore_cache:
@@ -1736,7 +2494,7 @@ class MainWindow(QMainWindow):
             log._LOG_SINK("xx no versions loaded")
             return
         self.ui_state["versions"] = versions
-        labels = [format_display_version(v["tag"], v["beta"]) + ("  ·  BETA" if v["beta"] else "")
+        labels = [_version_label(v)
                   for v in versions]
         self.ui_state["labels"] = labels
         if _alive(self.version_popup) and self.version_popup.isVisible():
@@ -1744,7 +2502,8 @@ class MainWindow(QMainWindow):
             current_label = current.text() if current else self.ver_label.text()
             open_labels = [l for l, v in zip(labels, versions)
                            if self._edition_matches(v)]
-            self.version_popup.set_labels(open_labels, current_label)
+            self.version_popup.set_labels(open_labels, current_label,
+                                          self._installed_labels())
         self.ver_label.setText(
             labels[self._saved_version_index(versions)])
         self._update_selected_chip()
@@ -1760,9 +2519,18 @@ class MainWindow(QMainWindow):
         build is the part that has to be rare -- it is a silent 2.5 GB
         download the next time PLAY is pressed.
         """
-        wanted = (load_settings().get("mc_version") or "").strip()
+        settings = load_settings()
+        wanted = (settings.get("mc_version") or "").strip()
         if not wanted:
             return 0
+        # Every title the Store alone serves has the same tag ("current"),
+        # so the edition picks between them; then the tag alone, as before.
+        edition = (settings.get("ui_edition") or settings.get("mc_edition")
+                   or "").strip()
+        for index, version in enumerate(versions):
+            if version["tag"] == wanted and edition and \
+                    _version_edition_id(version) == edition:
+                return index
         for index, version in enumerate(versions):
             if version["tag"] == wanted:
                 return index
@@ -1785,15 +2553,15 @@ class MainWindow(QMainWindow):
         info = current_profile_info()
         self.profile_popup.rebuild(list_profiles(), info.get("path"))
         self.profile_popup.setFixedWidth(max(260, self.prof_card.width()))
-        self.profile_popup.show_below(self.prof_card)
+        self.profile_popup.show_beside(self.prof_card)
 
     def _profile_switch_blocked(self) -> bool:
         if self.ui_state.get("launch_active"):
             self.warn_box("Minecraft is running",
                 "Close Minecraft first and wait for the game to exit before "
-                "switching profiles in this window.\n\nThe \"New Win\" button "
-                "opens another profile in a second launcher window, but only "
-                "one profile can play at a time.")
+                "switching profiles in this window.\n\nAnother profile can "
+                "play at the same time: start it from the Profiles page, or "
+                "open it in a second launcher window with \"New window\".")
             return True
         if self.ui_state.get("busy"):
             self.warn_box("Operation in progress",
@@ -1847,7 +2615,8 @@ class MainWindow(QMainWindow):
     def _open_profile_manager(self):
         self.profile_popup.close()
         self.toggle_profiles()
-        self.prof_label.setText(f"Profile: {current_profile_name()}")
+        self.prof_label.setText(current_profile_name())
+        self.prof_card.setToolTip(f"Profile: {current_profile_name()}")
 
     # ------------------------------------------------------------ accounts
     def _refresh_account_row(self, phase):
@@ -1950,7 +2719,7 @@ class MainWindow(QMainWindow):
     def open_accounts_menu(self):
         self._refresh_accounts()
         self.accounts_menu.setFixedWidth(max(352, self.acct_card.width()))
-        self.accounts_menu.show_below(self.acct_card)
+        self.accounts_menu.show_beside(self.acct_card)
 
     def disarm_account_confirms(self):
         """Called when the menu hides: a confirmation must never outlive the
@@ -2435,7 +3204,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(1500, lambda: self._copy_btn.setText("Copy code"))
 
     # ------------------------------------------------------------ play / kill
-    def do_play(self, *, editor=False):
+    def do_play(self, *, editor=False, hidden=False):
         if self.ui_state["busy"]:
             return
         ver = self.selected_version()
@@ -2449,7 +3218,10 @@ class MainWindow(QMainWindow):
             # is what issue #214 was reported with.
             self._store_login_already_open()
             return
-        if not self._online_sign_in_settled():
+        # The Xbox sign-in is Bedrock's; Minecraft Education asks for its
+        # own school or work account once it starts.
+        xbox_live = (ver.get("edition") or {}).get("xbox_live", True)
+        if xbox_live and not self._online_sign_in_settled():
             return
         if not self._preview_data_settled(ver):
             return
@@ -2457,7 +3229,7 @@ class MainWindow(QMainWindow):
         self.set_status("Preparing…")
         self._show_bar_busy()
 
-        w = LaunchWorker(ver, editor=editor)
+        w = LaunchWorker(ver, editor=editor, hidden=hidden)
         w.progress.connect(self.set_progress)
         w.done.connect(self._play_finished)
         w.failed.connect(self._play_failed)
@@ -2572,8 +3344,16 @@ class MainWindow(QMainWindow):
                                  title="Minecraft could not start",
                                  then=self._play_again_after_ack)
         else:
-            self.error_box("Minecraft could not start", message[:2000])
+            # With the way to report it one click away (see error_box).
+            self.error_box("Minecraft could not start", message[:2000],
+                           report=True)
         self._offer_pending_restart()
+
+    def open_report(self, title="", comment=""):
+        """The "Report a problem" window (bol.gui_report)."""
+        from .gui_report import open_report_dialog
+        return open_report_dialog(self, title=title or "",
+                                  comment=comment or "")
 
     def _play_again_after_ack(self):
         """The player pressed PLAY and answered Yes: carry on with PLAY.
@@ -2752,15 +3532,11 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ settings page
     def _build_settings(self) -> QWidget:
-        page = QFrame(); page.setObjectName("Card")
+        # Flat: the page title is above it and the menu is the way back, so
+        # the tabs and their cards sit straight on the window.
+        page = QFrame(); page.setObjectName("Page")
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(20, 18, 20, 18)
-        head = QHBoxLayout()
-        t = QLabel("Settings"); t.setObjectName("Title")
-        head.addWidget(t)
-        head.addStretch(1)
-        head.addWidget(btn("← Back", self.toggle_settings, kind="flat", w=76, h=28))
-        outer.addLayout(head)
+        outer.setContentsMargins(0, 0, 0, 0)
 
         tabs = QTabWidget()
         outer.addWidget(tabs, 1)
@@ -2770,6 +3546,8 @@ class MainWindow(QMainWindow):
             self._scrollable(self._build_versions_tab()), "Versions")
         tabs.addTab(self._scrollable(self._build_advanced_tab()), "Advanced")
         tabs.addTab(self._scrollable(self._build_tools_tab()), "Tools")
+        self._network_tab = tabs.addTab(
+            self._scrollable(self._build_network_tab()), "Network")
         # Adding up what every build weighs means walking tens of thousands
         # of files, so it happens when someone opens the tab that shows the
         # figure -- not on the way to a window that may never show it.
@@ -2781,6 +3559,8 @@ class MainWindow(QMainWindow):
         if index == getattr(self, "_versions_tab", -1):
             self.refresh_builds()
             self.refresh_backups()
+        if index == getattr(self, "_network_tab", -1):
+            self._refresh_network_status()
 
     def _scrollable(self, inner: QWidget) -> QScrollArea:
         area = QScrollArea()
@@ -2804,6 +3584,14 @@ class MainWindow(QMainWindow):
                             "Open the What's New tab automatically each time the launcher starts.")
         cl_row.toggled.connect(lambda on: self._save_setting("show_changelog_on_startup", on))
         startup.addWidget(cl_row)
+
+        featured_row = self._switch(
+            "Show popular add-ons on the home page",
+            self.settings.get("home_featured", True),
+            "Fetches this week's most popular add-ons, maps and texture "
+            "packs from MCPEDL when the launcher starts.")
+        featured_row.toggled.connect(self._save_home_featured)
+        startup.addWidget(featured_row)
 
         confine_row = self._switch("Keep the mouse inside the window",
                                  self.settings.get("confine_cursor", False),
@@ -3374,7 +4162,9 @@ class MainWindow(QMainWindow):
 
             fr = self._switch("Limit frame rate to the display",
                             self.settings.get("limit_frame_rate", True),
-                            "Only applies when Minecraft has no limit of its own.")
+                            "Caps an unlimited game at the display's rate. On "
+                            "Wayland or gamescope it also paces vsync just under "
+                            "it, for less mouse delay.")
             fr.toggled.connect(lambda on: self._save_setting("limit_frame_rate", on))
             graphics.addWidget(fr)
 
@@ -3718,6 +4508,12 @@ class MainWindow(QMainWindow):
                 tip="Confirm the previous graphics-driver incident has been "
                     "checked, so PLAY is unblocked again.")
             maintenance.addWidget(self.gpu_ack_btn)
+        maintenance.addWidget(tool_row(
+            "Report a problem…", self.open_report,
+            tip="Send the launcher's developers what they need to diagnose "
+                "a problem: your description, system information and logs, "
+                "with everything personal removed. You see all of it "
+                "before anything is sent."))
         maintenance.addWidget(tool_row("Open logs folder",
                                    self._open_logs_folder,
                                    tip="Open the folder with launch and activity logs, "
@@ -3947,15 +4743,9 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ changelog page
     def _build_changelog(self) -> QWidget:
-        page = QFrame(); page.setObjectName("Card")
+        page = QFrame(); page.setObjectName("Page")
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(20, 18, 20, 18)
-        head = QHBoxLayout()
-        t = QLabel("Changelog"); t.setObjectName("Title")
-        head.addWidget(t)
-        head.addStretch(1)
-        head.addWidget(btn("← Back", self.toggle_changelog, kind="flat", w=76, h=28))
-        outer.addLayout(head)
+        outer.setContentsMargins(0, 0, 0, 0)
 
         self.changelog_tabs = QTabWidget()
         outer.addWidget(self.changelog_tabs, 1)
@@ -3969,38 +4759,34 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ profiles page
     def _build_profiles_page(self) -> QWidget:
-        page = QFrame(); page.setObjectName("Card")
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(20, 18, 20, 18)
-        outer.setSpacing(10)
+        return ProfilesPage(self)
 
-        head = QHBoxLayout()
-        t = QLabel("Manage Profiles"); t.setObjectName("Title")
-        head.addWidget(t)
-        head.addStretch(1)
-        head.addWidget(btn("← Back", self.toggle_profiles, kind="flat", w=76, h=28))
-        outer.addLayout(head)
+    def toggle_mods(self):
+        if self.mods_page is not None and \
+                self.stack.currentWidget() is self.mods_page:
+            self.stack.setCurrentWidget(self.hero_page)
+            self._nav_follow_page()
+        else:
+            if self.mods_page is None:
+                from .gui_mods import ModsPage
+                self.mods_page = ModsPage(self)
+                self.stack.addWidget(self.mods_page)
+            self.stack.setCurrentWidget(self.mods_page)
+            self.mods_page.opened()
+            self._nav_follow_page(self.mods_page)
 
-        desc = QLabel("Each profile maintains an isolated Xbox sign-in, Wine "
-                       "prefix, worlds, and settings.")
-        desc.setObjectName("Sub")
-        desc.setWordWrap(True)
-        outer.addWidget(desc)
-
-        area = QScrollArea(); area.setWidgetResizable(True)
-        area.setFrameShape(QFrame.NoFrame)
-        self.profiles_list_widget = QWidget()
-        self.profiles_list_layout = QVBoxLayout(self.profiles_list_widget)
-        self.profiles_list_layout.setSpacing(8)
-        area.setWidget(self.profiles_list_widget)
-        outer.addWidget(area, 1)
-
-        footer = QHBoxLayout()
-        footer.addWidget(btn("+ New Profile", self._prompt_create_profile_and_refresh, kind="primary", h=32))
-        footer.addStretch(1)
-        outer.addLayout(footer)
-
-        return page
+    def select_build(self, version, beta, edition=None):
+        """Make the picker next to PLAY point at an installed build, as if it
+        was picked there. False when the picker does not list it."""
+        edition = edition or ("preview" if beta else "release")
+        for label, entry in zip(self.ui_state.get("labels") or [],
+                                self.ui_state.get("versions") or []):
+            if entry.get("tag") == version and \
+                    _version_edition_id(entry) == edition:
+                self.select_edition(edition)
+                self.set_version(label)
+                return True
+        return False
 
     def toggle_profiles(self):
         if self.stack.currentWidget() is self.profiles_page:
@@ -4012,51 +4798,7 @@ class MainWindow(QMainWindow):
             self._nav_follow_page(self.profiles_page)
 
     def refresh_profiles(self):
-        layout = self.profiles_list_layout
-        while layout.count():
-            item = layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        active_info = current_profile_info()
-        active_path = active_info.get("path")
-
-        def add_row(name, path, subtitle, is_active):
-            row = QFrame(); row.setObjectName("CardFlat")
-            h = QHBoxLayout(row)
-            h.setContentsMargins(14, 10, 14, 10)
-            h.setSpacing(6)
-            left = QVBoxLayout()
-            nlab = QLabel(name); nlab.setStyleSheet("font-weight:700;")
-            left.addWidget(nlab)
-            slab = QLabel(subtitle); slab.setObjectName("Muted")
-            left.addWidget(slab)
-            h.addLayout(left, 1)
-
-            h.addWidget(btn("New Window", lambda: open_profile_window(path),
-                            kind="ghost-small", w=84, h=26,
-                            tip="Open this profile in another window"))
-            if path is not None:
-                h.addWidget(btn("Folder", lambda: open_path(path),
-                                kind="ghost-small", w=52, h=26))
-                h.addWidget(btn("Rename", lambda: self._rename_profile_row(name, is_active),
-                                kind="ghost-small", w=58, h=26))
-                h.addWidget(btn("Delete", lambda: self._delete_profile_row(name, is_active),
-                                kind="danger-small", w=58, h=26))
-            if is_active:
-                lab = QLabel("Active"); lab.setStyleSheet(f"color:{self.theme.green}; font-weight:700; font-size:11px;")
-                h.addWidget(lab)
-            else:
-                h.addWidget(btn("Switch", lambda: self._switch_profile_row(path),
-                                kind="ghost-small", w=58, h=26))
-            layout.addWidget(row)
-
-        add_row("Default", None, "Main installation root", active_path is None)
-        for p in list_profiles():
-            path = p.get("path")
-            is_active = active_path is not None and Path(active_path).resolve() == Path(path).resolve()
-            add_row(p.get("name", ""), path, f"profiles/{p.get('slug', '')}", is_active)
-        layout.addStretch(1)
+        self.profiles_page.refresh()
 
     def _switch_profile_row(self, path):
         if self._switch_profile_target(path):
@@ -4260,10 +5002,285 @@ class MainWindow(QMainWindow):
             parts.append("<hr>")
         return self._wrap_changelog_html("".join(parts))
 
+    # ------------------------------------------------------------ network
+    def _start_network(self):
+        """Everything the window fetches by itself, once it is allowed to."""
+        if self._network_started:
+            return
+        self._network_started = True
+        QTimer.singleShot(50, self.refresh_versions)
+        QTimer.singleShot(200, self.check_for_update_async)
+        QTimer.singleShot(300, self._load_edition_logos)
+        if self.settings.get("home_featured", True) \
+                and _alive(getattr(self, "featured", None)):
+            QTimer.singleShot(400, self.featured.load)
+
+    def _banner(self, text, color=None):
+        """A strip under the title bar; returns (frame, its button row)."""
+        bar = QFrame(); bar.setObjectName("CardFlat")
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(14, 10, 14, 10)
+        lab = QLabel(text)
+        lab.setWordWrap(True)
+        lab.setTextFormat(Qt.PlainText)
+        if color:
+            lab.setStyleSheet(f"color:{color}; font-weight:700;")
+        v.addWidget(lab)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        v.addLayout(row)
+        self.centralWidget().layout().insertWidget(1, bar)
+        return bar, row
+
+    def _show_network_notice(self):
+        """The first-run notice: what is contacted, before anything is.
+
+        A strip, not a dialog: it names the choice without taking the
+        window, and PLAY stays where it is. Until it is answered the
+        launcher fetches nothing by itself.
+        """
+        if not _alive(self) or self.centralWidget() is None \
+                or _alive(getattr(self, "_network_notice", None)):
+            return
+        fetched = ("So far only the Qt interface was downloaded (from "
+                   "files.pythonhosted.org). "
+                   if os.environ.get("BOL_BOOTSTRAP_FETCHED")
+                   else "Nothing has been contacted yet. ")
+        bar, row = self._banner(
+            f"Before {PRETTY} goes online. " + fetched
+            + "It can check GitHub for launcher updates and for a small "
+            "signed data file of fixes (new Minecraft builds, incident "
+            "notices). Installing Minecraft and signing in talk to Microsoft "
+            "and GitHub when you use them. " + netpolicy.NO_TELEMETRY
+            + " How should updates be checked?")
+        self._network_notice = bar
+        row.addWidget(btn("What is contacted…", self._show_network_details,
+                          kind="flat", h=30))
+        row.addWidget(btn("Off", lambda: self._choose_network_mode("off"),
+                          kind="flat", w=64, h=30,
+                          tip=netpolicy.MODE_HELP["off"]))
+        row.addWidget(btn("Only when I ask",
+                          lambda: self._choose_network_mode("ask"),
+                          kind="flat", h=30, tip=netpolicy.MODE_HELP["ask"]))
+        row.addWidget(btn("Automatic",
+                          lambda: self._choose_network_mode("auto"),
+                          kind="primary", w=112, h=30,
+                          tip=netpolicy.MODE_HELP["auto"]))
+
+    def _choose_network_mode(self, mode):
+        self._save_setting(netpolicy.SETTING, mode)
+        feed.forget()
+        bar = getattr(self, "_network_notice", None)
+        if _alive(bar):
+            bar.setParent(None)
+        self._network_notice = None
+        combo = getattr(self, "network_mode_combo", None)
+        if _alive(combo):
+            index = combo.findData(mode)
+            if index >= 0 and index != combo.currentIndex():
+                combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(False)
+        self._refresh_network_status()
+        if self._network_started:
+            if mode == "auto":
+                self.check_for_update_async()
+        else:
+            self._start_network()
+
+    def _show_network_details(self):
+        """Open Settings on the Network tab, where the full list is."""
+        if self.stack.currentWidget() is not self.settings_page:
+            self.stack.setCurrentWidget(self.settings_page)
+        self.settings_tabs.setCurrentIndex(self._network_tab)
+
+    def _build_network_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        updates = card_section(
+            v, "Updates and data fixes",
+            "The launcher can look for its own updates and for a small "
+            "signed data file: fixes for new Minecraft builds, replacement "
+            "components and incident notices, without a new release.")
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Check for updates:"))
+        self.network_mode_combo = SettingComboBox()
+        for key in netpolicy.MODES:
+            self.network_mode_combo.addItem(netpolicy.MODE_LABELS[key], key)
+            self.network_mode_combo.setItemData(
+                self.network_mode_combo.count() - 1,
+                netpolicy.MODE_HELP[key], Qt.ToolTipRole)
+        current = netpolicy.mode(self.settings)
+        if current is None:
+            self.network_mode_combo.setPlaceholderText("Not chosen yet")
+            self.network_mode_combo.setCurrentIndex(-1)
+        else:
+            self.network_mode_combo.setCurrentIndex(
+                self.network_mode_combo.findData(current))
+        self.network_mode_combo.currentIndexChanged.connect(
+            lambda i: i >= 0 and self._choose_network_mode(
+                self.network_mode_combo.itemData(i)))
+        row.addWidget(self.network_mode_combo)
+        row.addStretch(1)
+        updates.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Release channel:"))
+        self.update_channel_combo = SettingComboBox()
+        self.update_channel_combo.addItem("Stable", "stable")
+        self.update_channel_combo.addItem("Pre-release", "prerelease")
+        self.update_channel_combo.setCurrentIndex(
+            1 if netpolicy.channel(self.settings) == "prerelease" else 0)
+        self.update_channel_combo.setToolTip(
+            "Pre-release also offers versions published for testing before "
+            "they become the stable release.")
+        self.update_channel_combo.currentIndexChanged.connect(
+            lambda i: self._save_setting(
+                netpolicy.CHANNEL_SETTING,
+                self.update_channel_combo.itemData(i)))
+        row.addWidget(self.update_channel_combo)
+        row.addStretch(1)
+        updates.addLayout(row)
+
+        updates.addWidget(tool_row(
+            "Check now", lambda: self.check_for_update_async(manual=True),
+            tip="Look for a launcher update and refresh the data file once, "
+                "whatever the setting above."))
+        self.network_status = QLabel()
+        self.network_status.setWordWrap(True)
+        self.network_status.setObjectName("Muted")
+        updates.addWidget(self.network_status)
+        # Filled when the tab is opened: naming the install kind asks the
+        # package database, which is not worth doing for every window.
+
+        hosts = card_section(
+            v, "What the launcher connects to",
+            "The complete list. Only the first group happens by itself, and "
+            "only if you allow it above.")
+        listing = QLabel(netpolicy.disclosure_html())
+        listing.setTextFormat(Qt.RichText)
+        listing.setWordWrap(True)
+        listing.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        hosts.addWidget(listing)
+        v.addStretch(1)
+        return w
+
+    def _refresh_network_status(self):
+        label = getattr(self, "network_status", None)
+        if not _alive(label):
+            return
+        lines = ["This install: " + describe_install()]
+        try:
+            state = feed.status()
+        except Exception:
+            state = {"in_service": False, "serial": None}
+        if not state["in_service"]:
+            lines.append("Data file: not in service in this build.")
+        elif netpolicy.mode(self.settings) == "off":
+            lines.append("Data file: ignored (updates are off).")
+        elif state["serial"]:
+            lines.append(f"Data file: {state['serial']}, signature valid.")
+        else:
+            lines.append("Data file: none fetched yet.")
+        label.setText("\n".join(lines))
+
+    def _report_rollback(self):
+        note = rollback.last_rollback()
+        if note and _alive(self) and self.centralWidget() is not None:
+            bar, row = self._banner(
+                f"The update to v{note.get('from')} did not start on this "
+                f"system, so v{note.get('to')} was put back. Please report "
+                "it.", self.theme.red)
+            row.addWidget(btn("OK", lambda: bar.setParent(None),
+                              kind="flat", w=64, h=30))
+
+    def _show_notices(self):
+        """Incident notices from the signed data file, once each."""
+        if not _alive(self) or self.centralWidget() is None:
+            return
+        try:
+            notices = feed.notices(
+                minecraft=self.settings.get("mc_version"),
+                settings=self.settings)
+        except Exception:
+            return
+        dismissed = set(self.settings.get("dismissed_notices") or [])
+        shown = self.__dict__.setdefault("_notices_shown", set())
+        for notice in notices:
+            key = notice["id"]
+            if key in dismissed or key in shown:
+                continue
+            shown.add(key)
+            text = notice["title"]
+            if notice.get("text"):
+                text += "\n" + notice["text"]
+            color = {"critical": self.theme.red,
+                     "warning": self.theme.blue}.get(notice.get("level"))
+            bar, row = self._banner(text, color)
+            url = notice.get("url")
+            if url:
+                row.addWidget(btn(
+                    "Open", lambda _=False, u=url: subprocess.Popen(
+                        ["xdg-open", u], stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL),
+                    kind="flat", w=64, h=30))
+            row.addWidget(btn(
+                "Dismiss", lambda _=False, b=bar, k=key:
+                self._dismiss_notice(b, k), kind="flat", w=80, h=30))
+
+    def _dismiss_notice(self, bar, key):
+        bar.setParent(None)
+        self.settings = load_settings()
+        kept = [k for k in (self.settings.get("dismissed_notices") or [])
+                if k != key][-49:]
+        self.settings["dismissed_notices"] = kept + [key]
+        save_settings(self.settings)
+
     # ------------------------------------------------------------ self-update
-    def check_for_update_async(self):
-        w = Worker(check_for_update)
-        w.done.connect(lambda rel: rel and _alive(self) and self._show_update_banner(rel))
+    def check_for_update_async(self, manual=False):
+        """Look for a launcher update and fresh data, when that is allowed.
+
+        "auto" does it at startup. "ask" offers a button instead, and "off"
+        does nothing; `manual` is that button, or Check now in Settings, and
+        is its own permission for one check.
+        """
+        mode = netpolicy.mode(self.settings)
+        if not manual and mode != "auto":
+            self._show_notices()
+            if mode == "ask" and not _alive(getattr(self, "_ask_bar", None)):
+                bar, row = self._banner(
+                    "Check for launcher updates and data fixes?")
+                self._ask_bar = bar
+                row.addWidget(btn("Not now", lambda: bar.setParent(None),
+                                  kind="flat", w=80, h=30))
+                row.addWidget(btn(
+                    "Check now",
+                    lambda: (bar.setParent(None),
+                             self.check_for_update_async(manual=True)),
+                    kind="primary", w=112, h=30))
+            return
+
+        def work():
+            data = feed.refresh() if manual else feed.refresh_if_due()
+            return data, check_for_update()
+
+        def done(result):
+            if not _alive(self):
+                return
+            (data_state, _detail), rel = result
+            self._refresh_network_status()
+            self._show_notices()
+            if rel:
+                self._show_update_banner(rel)
+            elif manual:
+                self.set_status(
+                    f"{PRETTY} {VERSION} is up to date."
+                    + (" Data fixes updated." if data_state == "updated"
+                       else ""))
+
+        w = Worker(work)
+        w.done.connect(done)
         self._start_worker("update-check", w)
 
     def _show_update_banner(self, rel):
@@ -4395,6 +5412,9 @@ class MainWindow(QMainWindow):
             self.toggle_changelog()
         elif self.stack.currentWidget() is self.profiles_page:
             self.toggle_profiles()
+        elif self.mods_page is not None and \
+                self.stack.currentWidget() is self.mods_page:
+            self.toggle_mods()
 
     def _on_nav_devices(self, names):
         """A controller was plugged in or unplugged."""
@@ -4440,8 +5460,22 @@ class MainWindow(QMainWindow):
     def warn_box(self, title, message):
         self._box(QMessageBox.Warning, title, message).exec()
 
-    def error_box(self, title, message):
-        self._box(QMessageBox.Critical, title, message).exec()
+    def error_box(self, title, message, report=False):
+        """An error; with `report`, a button that opens "Report a problem"
+        with this error already in the comment, so a player who has no idea
+        what the message means still sends it."""
+        box = self._box(QMessageBox.Critical, title, message)
+        if not report:
+            box.exec()
+            return
+        report_button = box.addButton("Report a problem…",
+                                      QMessageBox.ActionRole)
+        box.setDefaultButton(box.addButton(QMessageBox.Ok))
+        box.exec()
+        if box.clickedButton() is report_button:
+            self.open_report(
+                title=title,
+                comment="The launcher showed this error:\n" + message[:1500])
 
     def question_box(self, title, message) -> bool:
         box = self._box(QMessageBox.Question, title, message)

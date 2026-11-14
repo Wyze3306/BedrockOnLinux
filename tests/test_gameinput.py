@@ -101,3 +101,24 @@ class RedistRefreshTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuiltinOverrideTests(unittest.TestCase):
+    """Wine's builtin gameinput.dll stays out of the game once the native
+    redist can stand in for it (#281, #359)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.prefix = Path(tmp.name) / "pfx"
+
+    def test_no_redist_keeps_the_builtin(self):
+        self.assertIsNone(gameinput.builtin_gameinput_override(self.prefix))
+
+    def test_an_installed_redist_disables_the_builtin(self):
+        x64 = self.prefix / "drive_c/Program Files/Microsoft GameInput/x64"
+        x64.mkdir(parents=True)
+        (x64 / "GameInputRedist.dll").write_bytes(_image())
+        (x64 / "GameInputRedistService.exe").write_bytes(_image())
+        self.assertEqual(gameinput.builtin_gameinput_override(self.prefix),
+                         "gameinput=d")

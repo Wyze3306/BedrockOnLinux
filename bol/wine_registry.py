@@ -296,12 +296,6 @@ def update_prefix_registry(
         return False
 
     with _locked(prefix):
-        # Our file lock serializes BedrockOnLinux writers, while this separate
-        # assertion prevents a live wineserver from later overwriting the
-        # offline changes with its in-memory hive.
-        from .prefix import require_prefix_idle
-        require_prefix_idle(prefix, "update the offline Wine registry")
-
         originals = {}
         rendered = {}
         for path, changes in requested:
@@ -321,6 +315,14 @@ def update_prefix_registry(
                 pass
         if not changed:
             return False
+        # Our file lock serializes BedrockOnLinux writers, while this separate
+        # assertion prevents a live wineserver from later overwriting the
+        # offline changes with its in-memory hive. It reads the environment
+        # of every process on the machine, and a launch asks for half a dozen
+        # updates that mostly find their values already there, so it is made
+        # only once there is something to write.
+        from .prefix import require_prefix_idle
+        require_prefix_idle(prefix, "update the offline Wine registry")
 
         staged = {path: _stage(path, rendered[path], 0o600)
                   for path in changed}

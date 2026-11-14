@@ -63,6 +63,23 @@ PRIVATE_USAGE_PATCH = (
     DELTA / "0013-kernelbase-report-PrivateUsage-from-"
             "GetProcessMemoryInfo.patch"
 )
+FSYNC_PATCH = (
+    DELTA / "0014-ntdll-server-fall-back-to-fsync-without-ntsync.patch"
+)
+VM_COUNTERS_PATCH = (
+    DELTA / "0015-ntdll-reread-proc-self-status-through-a-kept-"
+            "descriptor.patch"
+)
+TIME_ZONE_PATCH = (
+    DELTA / "0016-ntdll-check-the-time-zone-at-most-once-a-second.patch"
+)
+GAME_EVENT_PATCH = (
+    DELTA / "0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch"
+)
+# The follow-ups after 0013. They were first applied around the manifest so
+# that native22 kept verifying; native23 pins every file they change.
+LATE_PATCHES = (FSYNC_PATCH, VM_COUNTERS_PATCH, TIME_ZONE_PATCH,
+                GAME_EVENT_PATCH)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -71,7 +88,16 @@ CHANGED_FILES = {
     "dlls/combase/marshal.c",
     "dlls/combase/stubmanager.c",
     "dlls/kernelbase/debug.c",
+    "dlls/ntdll/Makefile.in",
+    "dlls/ntdll/unix/fsync.c",
+    "dlls/ntdll/unix/fsync.h",
     "dlls/ntdll/unix/loader.c",
+    "dlls/ntdll/unix/process.c",
+    "dlls/ntdll/unix/server.c",
+    "dlls/ntdll/unix/sync.c",
+    "dlls/ntdll/unix/system.c",
+    "dlls/ntdll/unix/unix_private.h",
+    "dlls/ntdll/unix/virtual.c",
     "dlls/ole32/dcom.idl",
     "dlls/windows.storage.applicationdata/Makefile.in",
     "dlls/windows.storage.applicationdata/main.c",
@@ -95,6 +121,7 @@ CHANGED_FILES = {
     "dlls/xgameruntime/GDKComponent/System/Threading/XAsync.c",
     "dlls/xgameruntime/GDKComponent/System/Threading/XAsync.h",
     "dlls/xgameruntime/GDKComponent/System/XStore.c",
+    "dlls/xgameruntime/GDKComponent/System/XGameEvent.c",
     "dlls/xgameruntime/GDKComponent/InitInternalGDKC.c",
     "dlls/xgameruntime/GDKComponent/System/XGame.c",
     "dlls/xgameruntime/GDKComponent/System/XSystem.c",
@@ -111,7 +138,18 @@ CHANGED_FILES = {
     "include/windows.storage.pickers.idl",
     "include/xgame.idl",
     "include/xgameerr.h",
+    "include/wine/server_protocol.h",
     "libs/uuid/uuid.c",
+    "server/Makefile.in",
+    "server/fsync.c",
+    "server/fsync.h",
+    "server/inproc_sync.c",
+    "server/main.c",
+    "server/process.c",
+    "server/protocol.def",
+    "server/request_handlers.h",
+    "server/request_trace.h",
+    "server/thread.c",
 }
 PINNED_SOURCE_FILES = CHANGED_FILES | {"dlls/winex11.drv/init.c"}
 
@@ -185,6 +223,14 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
             self._constant("VENDORED_PRIVATE_USAGE_PATCH_SHA256"),
         )
         self.assertEqual(
+            hashlib.sha256(FSYNC_PATCH.read_bytes()).hexdigest(),
+            self._constant("VENDORED_FSYNC_PATCH_SHA256"),
+        )
+        self.assertEqual(
+            hashlib.sha256(GAME_EVENT_PATCH.read_bytes()).hexdigest(),
+            self._constant("VENDORED_GAME_EVENT_PATCH_SHA256"),
+        )
+        self.assertEqual(
             hashlib.sha256(SOURCE_SUMS.read_bytes()).hexdigest(),
             self._constant("SOURCE_SHA256SUMS_SHA256"),
         )
@@ -209,7 +255,8 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
                      + SAVE_PICKER_PATCH.read_text()
                      + WAYLAND_SEAT_PATCH.read_text()
                      + GAMING_SERVICES_PATCH.read_text()
-                     + PRIVATE_USAGE_PATCH.read_text())
+                     + PRIVATE_USAGE_PATCH.read_text()
+                     + "".join(path.read_text() for path in LATE_PATCHES))
         self.assertTrue(text.startswith(f"From {WINEGDK_SOURCE_COMMIT} "))
         changed = {
             left for left, right in re.findall(
@@ -563,21 +610,19 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         build = BUILD_WORKFLOW.read_text()
         engine = ENGINE_WORKFLOW.read_text()
         release = RELEASE_WORKFLOW.read_text()
+        # One script names the release, from the commit, the manifest and
+        # the build recipe; no workflow spells the name out itself.
+        tag_script = (ROOT / "scripts/winegdk-release-tag.sh").read_text()
+        self.assertIn("pin WINEGDK_SOURCE_MANIFEST_SHA256", tag_script)
         self.assertIn(
-            'out="winegdk-prefix-${short}-${manifest_short}.tar.gz"',
-            build,
-        )
+            'echo "winegdk-${commit:0:12}-${manifest:0:12}'
+            '${recipe:+-$recipe}"', tag_script)
+        self.assertIn('tag="$(scripts/winegdk-release-tag.sh)"', build)
+        self.assertIn('out="winegdk-prefix-${tag#winegdk-}.tar.gz"', build)
+        self.assertIn("tag_name: ${{ env.PREFIX_TAG }}", build)
+        self.assertIn('gh release download "$tag"', engine)
         self.assertIn(
-            "tag_name: winegdk-${{ env.SHORT }}-${{ env.MANIFEST_SHORT }}",
-            build,
-        )
-        self.assertIn(
-            'gh release download "winegdk-${short}-${manifest_short}"',
-            engine,
-        )
-        self.assertIn(
-            '"winegdk-${wshort}-${wmshort}" '
-            '"winegdk-prefix-${wshort}-${wmshort}.tar.gz"',
+            'needs_build "$wtag" "winegdk-prefix-${wtag#winegdk-}.tar.gz"',
             release,
         )
         self.assertIn(
@@ -870,6 +915,64 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
                       additions)
         self.assertIn("} PROCESS_MEMORY_COUNTERS_EX;", additions)
 
+    def test_fsync_backs_ntsync_up_without_replacing_it(self):
+        # Wine 11 lost esync/fsync: without /dev/ntsync (mainline < 6.14)
+        # every wait was a wineserver round-trip. 0014 is Valve's futex_waitv
+        # backend for the inproc sync framework, used only when ntsync fails.
+        text = FSYNC_PATCH.read_text()
+        additions = "\n".join(
+            line[1:] for line in text.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        self.assertIn("b62913d8cab fsync: Introduce futex-based inproc sync "
+                      "backend.", text)
+        # The server still tries ntsync first and only then falls back.
+        server_open = additions.index(
+            'fd = open( "/dev/ntsync", O_CLOEXEC | O_RDONLY );')
+        fallback = additions.index(
+            "else if (do_fsync()) fd = FSYNC_USED_BY_SERVER;")
+        self.assertLess(server_open, fallback)
+        self.assertIn("do_fsync_cached = 0;", additions)
+        self.assertIn('getenv( "WINEFSYNC" )', additions)
+        self.assertIn("__NR_futex_waitv", additions)
+        # Proton's per-game switches are environment-only and off by default.
+        for name in ("WINE_FSYNC_SIMULATE_SCHED_QUANTUM",
+                     "WINE_FSYNC_YIELD_TO_WAITERS",
+                     "WINE_FSYNC_HELP_SIMULATED_PULSE"):
+            self.assertIn(f'fsync_env_flag( "{name}" )', additions)
+        self.assertNotIn("SteamGameId", additions)
+        # Valve's bundled header is not used; the system one stays.
+        self.assertNotIn("ntsync_tmp.h", additions)
+        # The protocol change ships with its regenerated outputs, which a
+        # plain configure && make does not rebuild.
+        self.assertIn("#define SERVER_PROTOCOL_VERSION 931", additions)
+        self.assertIn("DECL_HANDLER(fsync_free_shm_idx);", additions)
+        changed = set(re.findall(r"^diff --git a/(\S+) b/\1$", text,
+                                 re.MULTILINE))
+        self.assertIn("server/protocol.def", changed)
+        self.assertIn("include/wine/server_protocol.h", changed)
+        self.assertIn("server/request_handlers.h", changed)
+        self.assertIn("server/request_trace.h", changed)
+        # configure is not regenerated by the builders, so nothing may
+        # depend on a new configure check.
+        self.assertNotIn("configure.ac", changed)
+        self.assertNotIn("HAVE_LINUX_FUTEX_H", additions)
+        # glibc kept shm_open in librt until 2.34 and the engine is built
+        # against Debian 11's 2.31; configure only adds -lrt when
+        # clock_gettime needs it, so both links name it themselves.
+        self.assertIn("$(HWLOC_LIBS) -lrt", additions)
+        self.assertIn("$(INOTIFY_LIBS) $(PROCSTAT_LIBS) -lrt", additions)
+        # native23 pins every file 0014 changes in SOURCE-SHA256SUMS.
+        self.assertLessEqual(changed, PINNED_SOURCE_FILES,
+                             changed - PINNED_SOURCE_FILES)
+
+    def test_both_builders_require_the_fsync_fallback_in_the_server(self):
+        for script in (SCRIPT, CONTAINER_SCRIPT):
+            with self.subTest(script=script.name):
+                text = script.read_text()
+                self.assertIn('grep -qa "WINEFSYNC"', text)
+                self.assertIn('grep -qa "/dev/ntsync"', text)
+
     def test_the_save_picker_is_what_every_export_activates(self):
         # #167: RoActivateInstance of this class failed with
         # REGDB_E_CLASSNOTREG, and every export stayed on its loading screen.
@@ -893,6 +996,119 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         self.assertIn(
             "interface Windows.Foundation.Collections.IVector<HSTRING>;",
             additions)
+
+    @staticmethod
+    def _additions(path):
+        return "\n".join(
+            line[1:] for line in path.read_text().splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+
+    def test_own_memory_counters_cost_one_read(self):
+        # Minecraft asks for its memory counters every frame: an open, stdio
+        # reads, hundreds of sscanf() and a close were 2.8% of its main thread.
+        additions = self._additions(VM_COUNTERS_PATCH)
+        self.assertIn("static LONG proc_self_status_fd = -1;", additions)
+        self.assertIn(
+            'open( "/proc/self/status", O_RDONLY | O_CLOEXEC )', additions)
+        self.assertIn("pread( fd, buffer, sizeof(buffer) - 1, 0 )", additions)
+        # Two threads racing to open it keep one descriptor, never leak one.
+        self.assertIn(
+            "InterlockedCompareExchange( &proc_self_status_fd, fd, -1 )",
+            additions)
+        self.assertNotIn("sscanf", additions)
+        for field in ("VmPeak:", "VmSize:", "VmHWM:", "VmRSS:", "RssAnon:",
+                      "VmSwap:"):
+            with self.subTest(field=field):
+                self.assertIn(f'"{field}"', additions)
+        # Another process's counters are still read afresh and closed.
+        self.assertIn('"/proc/%u/status", unix_pid', additions)
+        self.assertIn("close( fd );", additions)
+
+    def test_time_zone_is_checked_at_most_once_a_second(self):
+        # Four GetTimeZoneInformation calls per frame each made glibc stat
+        # /etc/localtime twice before finding the cached answer still valid.
+        text = TIME_ZONE_PATCH.read_text()
+        additions = self._additions(TIME_ZONE_PATCH)
+        self.assertIn("static time_t last_check = -1;", additions)
+        self.assertIn("now = time(NULL);", additions)
+        self.assertIn("if (now == last_check)", additions)
+        # The early return comes before any libc time zone call.
+        self.assertLess(text.index("if (now == last_check)"),
+                        text.index("tm = gmtime(&year_start);"))
+        # Both paths that leave a valid cache record the check.
+        self.assertEqual(additions.count("last_check = now;"), 2)
+
+    @staticmethod
+    def _changed_files(path):
+        return set(re.findall(r"^diff --git a/(\S+) b/\1$", path.read_text(),
+                              re.MULTILINE))
+
+    def test_game_events_reach_the_launcher(self):
+        # #152: QueryApiImpl refused this class with E_NOTIMPL, XSAPI dropped
+        # every event the game wrote, and no achievement ever unlocked.
+        additions = self._additions(GAME_EVENT_PATCH)
+        self.assertIn(
+            "DEFINE_GUID(CLSID_XGameEventImpl, 0xbbfbdcc7, 0xbfe7, 0x409b, "
+            "0xa5, 0xca, 0xed, 0xf0, 0x54, 0x96, 0x0b, 0x4d);",
+            additions)
+        self.assertIn("IsEqualGUID( runtimeClassId, &CLSID_XGameEventImpl )",
+                      additions)
+        self.assertIn("*out = x_game_event_get();", additions)
+        self.assertIn("GDKComponent/System/XGameEvent.c", additions)
+        # The file bol/gameevents.py reads and forwards.
+        self.assertIn('L"BOL_GAME_EVENT_LOG"', additions)
+        self.assertIn('"BOL_GAME_EVENT_LOG"',
+                      (ROOT / "bol" / "gameevents.py").read_text())
+
+    def test_late_patches_are_pinned_and_applied_before_the_source_check(self):
+        """SOURCE-SHA256SUMS describes the tree every engine is built from.
+
+        0014 to 0017 were applied around the manifest while native22 was
+        current; native23 pins every file they change and moves
+        WINEGDK_SOURCE_MANIFEST_SHA256 with it, so no patch may land on top of
+        the verified tree any more.
+        """
+        late = sorted(
+            path for path in DELTA.glob("*.patch")
+            if path.name[:4] >= "0014"
+        )
+        self.assertEqual(late, sorted(LATE_PATCHES))
+        for path in late:
+            changed = self._changed_files(path)
+            with self.subTest(patch=path.name):
+                self.assertLessEqual(changed, PINNED_SOURCE_FILES,
+                                     changed - PINNED_SOURCE_FILES)
+        self.assertEqual(
+            self._changed_files(GAME_EVENT_PATCH) & PINNED_SOURCE_FILES,
+            {"dlls/xgameruntime/main.c", "dlls/xgameruntime/private.h",
+             "dlls/xgameruntime/Makefile.in",
+             "dlls/xgameruntime/GDKComponent/System/XGameEvent.c"},
+        )
+        check = 'sha256sum --strict -c "$SOURCE_SHA256SUMS"'
+        for script in (SCRIPT, CONTAINER_SCRIPT):
+            text = script.read_text()
+            verified = text.index(check)
+            for path in late:
+                with self.subTest(script=script.name, patch=path.name):
+                    name = re.search(
+                        r'^readonly (VENDORED_\w+_PATCH)="[^"]*/'
+                        + re.escape(path.name) + '"$',
+                        text, re.MULTILINE).group(1)
+                    self.assertLess(text.index(f'apply --check "${name}"'),
+                                    text.index(f'apply "${name}"'))
+                    self.assertLess(text.index(f'apply "${name}"'), verified)
+                    self.assertEqual(text.count(f'apply "${name}"'), 1)
+
+    def test_packager_requires_game_events_in_both_architectures(self):
+        text = PACKAGER.read_text()
+        arch_loop = text.index('for arch in "${ARCHES[@]}"; do',
+                               text.index("# The native engine must expose"))
+        marker = text.index(
+            'has_text "$xgdk" "short write of an event record"', arch_loop)
+        self.assertLess(marker, text.index("\ndone", arch_loop))
+        self.assertIn('WARN( "short write of an event record',
+                      self._additions(GAME_EVENT_PATCH))
 
     def test_every_vendored_patch_is_applied_and_attested(self):
         """A patch in third_party ships only if the builders apply it.

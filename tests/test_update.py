@@ -282,6 +282,10 @@ class AppImageUpdateTests(unittest.TestCase):
                                   return_value="appimage"), \
                 mock.patch.dict(update.os.environ,
                                 {"APPIMAGE": str(self.app)}), \
+                mock.patch.object(update, "_probe", return_value=None), \
+                mock.patch.object(update.shutil, "which",
+                                  return_value=None), \
+                mock.patch.object(update.rollback, "arm"), \
                 mock.patch.object(update, "download", side_effect=fetch):
             return update.self_update(self.release), seen
 

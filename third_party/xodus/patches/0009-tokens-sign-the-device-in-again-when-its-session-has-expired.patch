@@ -37,8 +37,6 @@ reported, not retried.
 
 Reported downstream as
 https://github.com/Wyze3306/BedrockOnLinux/issues/367.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  crates/xodus-cli/src/license.rs        | 106 +++++++++++++++----
  crates/xodus/src/api/live/mod.rs       |  74 ++++++++++++-

@@ -21,7 +21,7 @@ on:
         type: boolean
         default: false
       channel:
-        description: "release (versioned) or nightly (rolling prerelease)"
+        description: "release (versioned), prerelease (versioned, never Latest) or nightly (rolling prerelease)"
         type: string
         default: release
   workflow_dispatch:
@@ -31,7 +31,7 @@ on:
         type: boolean
         default: false
       channel:
-        description: "release (versioned) or nightly (rolling prerelease)"
+        description: "release (versioned), prerelease (versioned, never Latest) or nightly (rolling prerelease)"
         type: string
         default: release
   push:
@@ -240,8 +240,16 @@ jobs:
             tag="nightly"
             name="BedrockOnLinux nightly ${ver} ($(date -u +%Y-%m-%d), ${GITHUB_SHA:0:7})"
             pre="true"
-          else
+          elif [ "$channel" = "prerelease" ]; then
+            # A versioned pre-release: its own v<VERSION> tag, marked as a
+            # pre-release so it is never Latest. The launcher's updater and
+            # AppImageUpdate on stable installs only follow Latest.
+            tag="v${ver}"; name="BedrockOnLinux ${ver} (pre-release)"; pre="true"
+          elif [ "$channel" = "release" ]; then
             tag="v${ver}"; name="BedrockOnLinux ${ver}"; pre="false"
+          else
+            echo "::error::unknown channel '$channel'" >&2
+            exit 1
           fi
           {
             echo "VER=$ver"

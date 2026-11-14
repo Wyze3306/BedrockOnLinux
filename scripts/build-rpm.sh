@@ -174,8 +174,10 @@ Requires:       libxcb-sync.so.1()(64bit)
 Requires:       libxcb-util.so.1()(64bit)
 Requires:       libxcb-xfixes.so.0()(64bit)
 Requires:       libxcb-xkb.so.1()(64bit)
-# xodus-cli opens the Microsoft Store sign-in in an embedded webview.
-Requires:       webkit2gtk4.1
+# xodus-cli opens the Microsoft Store sign-in in an embedded webview. By
+# soname like the rest: "webkit2gtk4.1" is Fedora's package name, and
+# openSUSE, which calls it libwebkit2gtk-4_1-0, refused the whole package.
+Requires:       libwebkit2gtk-4.1.so.0()(64bit)
 Recommends:     mesa-vulkan-drivers
 
 %description

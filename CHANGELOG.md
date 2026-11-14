@@ -66,6 +66,246 @@
   (`native21`) and the SHA-256 of each of the six, independently of the
   Linux pin.
 
+## Unreleased
+
+### Added
+
+- **Several games at once, one per profile.** Profiles no longer take turns:
+  each can run its own Minecraft while the others play. The Profiles page
+  lists every running game, whichever window, shortcut or terminal started
+  it, with Hide, Show and Close, and `bedrock-on-linux instances` does the
+  same from a terminal. See [docs/INSTANCES.md](docs/INSTANCES.md).
+- **Hidden games.** "Play hidden" on a profile, or `play --hidden`, starts
+  Minecraft with its window kept off the screen, for a tool that drives the
+  game rather than a player. It can be shown at any time.
+- **Fixes without a new release.** The launcher can fetch a small signed
+  data file with what used to need a release: anchors for a Minecraft build
+  that rearranged its menus, a rebuilt downloader or sign-in runtime, and
+  notices when Microsoft's services are down. It is accepted only when its
+  signature matches a key built into the launcher, a downgraded file is
+  refused, every download it names is checked against a signed SHA-256, and
+  without it the launcher runs on what it shipped with. PLAY never waits on
+  it.
+- **You are told what the launcher connects to, and you choose.** Before the
+  first connection a notice lists every host, what is sent there and why,
+  and asks how updates are checked: automatically, only when you ask, or
+  never. Settings has a Network tab with the same list, `bedrock-on-linux
+  network` prints it, and the README has it too. No telemetry or identifier
+  is sent, to anyone.
+- **A release channel setting**: stable, or pre-releases as well.
+- **The version list shows what is already installed**
+  ([#376](https://github.com/Wyze3306/BedrockOnLinux/issues/376)). A build
+  on disk carries an *Installed* mark in the picker next to PLAY, read from
+  the game folders each time the list opens, so you can tell which versions
+  start at once and which would be downloaded.
+- **Report a problem.** A button at the foot of the menu, in Settings ▸
+  Tools and on the error shown when a launch fails, and `bedrock-on-linux
+  report` in a terminal. You write a title and a comment; the launcher adds
+  its version and install type, the pinned and installed components, your
+  Minecraft build, distribution, kernel, session, GPU and drivers, the
+  settings that change behaviour and the end of the logs. Every part goes
+  through one privacy pass that removes your user name and home folder,
+  host name, gamertag, XUID, e-mail, IP and MAC addresses, serial numbers,
+  tokens, and the names of your worlds, servers and profiles; a line that
+  might still name you is dropped. The window shows exactly what will be
+  sent, with a box to leave each part out, and names where it goes. Nothing
+  is sent before you press Send. Send files the issue in one click through
+  the project's report relay, `reports.linesia.net`, which keeps no copy and
+  does not log your address; GitHub's own issue form in your browser stays
+  available, and is the fallback when the relay cannot be reached. See
+  [docs/report-relay.md](docs/report-relay.md).
+- `bedrock-on-linux --version`.
+
+### Changed
+
+- **The game engine is less than half its size** (engine native24, not
+  published yet). Wine's modules are installed without their debugging
+  sections, which were two thirds of them, and Wine Mono, which nothing the
+  launcher runs uses, is left out with the import libraries. The code is
+  native23's.
+- **Minecraft gets back the memory of a second copy of itself.** A Store
+  build is decrypted into memory at every start and handed to Wine as a
+  staged copy; the first copy stayed open in the launch wrapper for the whole
+  session: 324 MB with 1.26.60, 423 MB with Preview 1.26.70, which could not
+  even be swapped out where the game is kept out of swap. It is closed once
+  the staged copy exists.
+- **The launcher no longer reads every process on the machine every two
+  seconds while the game runs.** It did so to find what the game's WebView2
+  leaves behind once Minecraft closes, and that reading includes the game's
+  own process. While the game is up, only the game is looked at.
+- **PLAY checks the game engine once instead of three times.** Setup, the
+  launch after it and the graphics payload each hashed the Wine runtime and
+  the vkd3d DLLs again; a check already made in the same run stands for as
+  long as none of those files has changed on disk.
+- **The six Xbox Live tokens of a sign-in are requested together.** On a
+  start with no session left from earlier, they were asked for one after the
+  other. `BOL_PREAUTH_SERIAL=1` goes back to one request at a time.
+- **A .deb, .rpm or Flatpak install keeps its compiled Python.** Those
+  installs are read-only and ship no bytecode, so each start compiled the
+  whole launcher again; it is now kept in the user's cache directory
+  (0.32 s down to 0.16 s to load the window's code on the development
+  machine).
+- **The previous boot's kernel log is read once per boot** by the graphics
+  safety check, not at every PLAY, once it has been found clean. The current
+  boot's is still read every time.
+- The offline registry updates of a launch only look for running Wine
+  processes when they have something to write.
+- **The Profiles page was rebuilt.** One card per profile with its Xbox
+  account, build and folder, Play and Play hidden in view, and Folder,
+  Rename and Delete in a menu.
+- **Launcher updates are checked, tried and reversible.** Every install kind
+  now goes through the same steps: the download must match its SHA-256 (a
+  release that states none is refused), the new launcher is started once
+  before it replaces anything, and an AppImage or .pyz keeps the previous
+  file and returns to it if the new one does not start. An AppImage uses a
+  delta download when `appimageupdatetool` is installed. A Nix install is
+  pointed at its flake instead of at a download.
+
+### Fixed
+
+- **A certificate download that fails no longer stops the launch**
+  ([#374](https://github.com/Wyze3306/BedrockOnLinux/issues/374)). On
+  networks where `curl.se` is out of reach, setup ended at "Download failed
+  after 5 attempts: https://curl.se/ca/cacert.pem". The launcher now gives
+  the game this system's own certificate bundle, which holds the same roots,
+  and tries the download again on a later launch.
+- Buttons on the Profiles page and in the profile menu were cut off ("ew
+  Window", "ename") wherever the desktop's font was wider than the fixed
+  widths they were given. Nothing there has a fixed width any more.
+
+## 3.0.0 — 2026-11-12 (pre-release)
+
+A pre-release of the next major version. Add-ons, maps and texture packs
+install in one click from MCPEDL and CurseForge, LeviLamina mods have their
+own page, and the launcher has a new layout. Minecraft runs on Debian 12,
+Ubuntu 22.04 and Fedora 39 and on Apple silicon under Asahi Linux, starts
+sooner after PLAY, and unlocks achievements. Engine native23 spends less CPU
+between frames and keeps its speed on kernels without ntsync, and the camera
+follows the mouse sooner on Wayland desktops. Stable 2.3.x installs are not
+offered this version: download it from this release to try it.
+
+### Added
+
+- **Add-ons, maps, texture packs and skins from MCPEDL and CurseForge.** A
+  new Add-ons & Maps page searches both (they are one catalogue now: every
+  CurseForge Bedrock project is mirrored on MCPEDL under the same name),
+  sorts by this week's or this month's popularity, downloads, updates or
+  date, and installs a project's file in one click, straight into the
+  folders the game reads. A pasted MCPEDL or CurseForge link opens that
+  project. Files come over HTTPS from MCPEDL's and CurseForge's servers
+  only; projects whose author hosts files elsewhere get a button to open
+  that link in the browser instead. The Library tab lists every pack and
+  world the game will find, whoever put it there, and removes them into a
+  trash kept for 30 days rather than deleting them.
+- **A new layout.** Every page is now one click away in a menu on the left
+  (Play, Add-ons & Maps, Mods, Profiles, Settings, What's New), with the
+  page shown lit up and named above it; the profile and the accounts sit at
+  its foot. It folds down to its icons, and folds by itself in a narrow
+  window. Pages sit flat on the window with one level of cards, and every
+  button looks like one. The game or edition is one pill next to PLAY,
+  with a badge per edition, opening a menu of them all. The home page has shortcuts to content, mods, importing a file
+  and the game folder, and shows this week's popular add-ons, maps and
+  texture packs (Settings > General turns that off).
+- **LeviLamina mods.** A Mods page browses the levimc.org catalogue and
+  installs, updates, imports and turns off mods per Minecraft build.
+
+- **Apple silicon under Asahi Linux.** Asahi's kernel uses 16 KiB memory
+  pages, and Wine and FEX-Emu need 4 KiB ones. With muvm installed, the
+  launcher now starts itself inside a muvm microVM, where muvm registers
+  FEX-Emu, and everything it runs from there gets 4 KiB pages, the host's
+  GPU, controllers and display, as Steam does on Asahi. Before, setup looked
+  for FEX-Emu on the host, found none (muvm registers it only inside the
+  microVM) and told the player to install what they already had. Inside
+  muvm the graphics check no longer counts RandR providers: the display it
+  reaches there is the host's, whose providers say nothing about the
+  microVM's GPU, and a count of zero refuses PLAY. Without muvm,
+  setup now says to install it. `BOL_NO_MUVM=1` keeps the launcher on the
+  host (#250).
+
+### Fixed
+
+- **Importing a .mcaddon installs its packs.** Most add-ons are a zip of
+  .mcpack files rather than of the packs' folders, and the import stopped
+  at "No manifest.json". Packs inside an add-on are unpacked too, a world
+  bundled with one is imported as a world, a world zipped inside a folder
+  of its own is lifted out so the game lists it, packs named through their
+  translations (`pack.name`) get their real name, and colour codes no
+  longer end up in folder names.
+
+- **The game starts close to two seconds sooner after PLAY.** Before Wine
+  starts, xodus-cli finds the game's files in the downloaded package, fetches
+  the licence and decrypts the executable, and two of those steps spent most
+  of their time on 4 KiB reads and writes, each handed to another thread.
+  They now go through a block cache and 4 MiB buffers. From xodus-cli's
+  start to the hand-over to Wine, in real launches of 1.26.52: 4.3 s down
+  to 2.4 s (medians), with CPU time down from 2.5 s to 0.6 s. The decrypted
+  executable is byte for byte the same.
+- **Minecraft downloads and starts on Debian 12, Ubuntu 22.04 and the
+  distributions built on it (Linux Mint 21, Pop!_OS 22.04, Zorin OS 17) and
+  Fedora 39.** xodus-cli, which downloads the game and decrypts it at every
+  launch, was linked against glibc 2.39 and stopped there on "version
+  `GLIBC_2.39' not found", so only the Flatpak worked. It is now linked
+  against glibc 2.31, the same floor as the game engine. It still needs
+  WebKitGTK 4.1, from the system's package manager on these releases
+  (`libwebkit2gtk-4.1-0` on Debian and Ubuntu): the bundled replacement is
+  built on Debian 13 and needs its glibc, and the launcher now says to
+  install the package instead of saying nothing helps, and keeps a system
+  WebKitGTK it would otherwise have swapped for the bundle (#264).
+- **Less CPU spent waiting between frames with vsync on.** With a Max
+  Framerate set in Minecraft, the launcher swaps the game's own limiter,
+  which holds a whole CPU core under Wine, for vkd3d-proton's. That one
+  still ends every wait spinning, about a fifth of a core at 60 FPS: more
+  than the game's own main thread uses in the menu. When vsync is on and the
+  Max Framerate is at least the display's refresh rate, vsync already keeps
+  the game at that rate, so the launcher now only turns the game's limiter
+  off and adds none of its own. Measured on a 60 Hz display: the same
+  60 FPS, and the game's CPU use in the menu down from 40% to 22% of a core
+  (#202). On a Wayland desktop and in gamescope the launcher now paces
+  vsync itself, for the reason under *The camera follows the mouse sooner*.
+- **Fullscreen fills the screen with *Keep the mouse inside the window*
+  on.** That setting runs the game in a Wine virtual desktop, where the
+  game's title bar is one Wine draws. Switching to fullscreen took the bar
+  away, but the picture stayed where it was: a white band along the top, and
+  the bottom of the picture, the hotbar with it, below the screen. The game
+  draws into an X window of its own, which Wine creates below the title bar
+  and afterwards only resizes; the engine's fix for #78 keeps it from moving
+  it. The helper the launcher runs inside Wine for that setting
+  (`src/desktop-bridge.c`) now reports where the game's client area starts,
+  and the launcher moves the picture there, in both directions. Measured in
+  a virtual 1600×900 screen: after F11 the picture moved from 4,30 to 3,3 in
+  the game's window and the white band is gone (#202).
+- **Engine native23 (pre-release).** vkd3d-proton's frame limiter, which
+  the launcher uses for a cap below the display's refresh rate and for
+  BOL_FRAME_RATE, ended every wait with a 1 ms spin plus a sixth of the
+  frame; under Wine a 0.5 ms tail is enough. Its thread drops from about a
+  fifth of a core to a twentieth at 60 FPS, and from 30% to 16-21% at
+  141 FPS, with steadier frame times (#202). The engine also falls back to
+  fsync on kernels without ntsync, takes two Wine calls the game makes on
+  every frame off its main thread (#202), and serves the XGameEvent class
+  that Xbox Live grades achievements from (#152).
+- **The camera follows the mouse sooner on Wayland desktops and in
+  gamescope.** There Minecraft draws through Xwayland, which reports each
+  frame as presented as soon as it passes it on, so with vsync on frames
+  queued up unseen and each one reached the screen about four refreshes
+  after the game drew it: 139 ms from moving the mouse to seeing the
+  picture move at 60 Hz. The launcher now paces the game just under the
+  display's refresh rate (59.88 FPS at 60 Hz), which keeps that queue
+  empty: 75 ms. It costs vkd3d-proton's limiter, a twentieth of a CPU core
+  at 60 FPS with engine native23, and one repeated frame every 8 seconds.
+  **Settings ▸ Advanced ▸ Limit frame rate to the display** turns it off.
+  A `VKD3D_FRAME_RATE` with decimals, which Proton used to turn into no limit
+  at all, now reaches vkd3d-proton too. Measurements in
+  `docs/INPUT-LATENCY.md` (#202).
+
+- **The ntsync warning knows about the engine's fsync fallback.** The check
+  before PLAY now counts an engine built with WineGDK patch `0014` (engine
+  native23 and later) as fast on a kernel without `/dev/ntsync`, as long as
+  the kernel has `futex_waitv` (Linux 5.16), and names `PROTON_NO_FSYNC` when
+  that is what turns the fallback off. Measured with ntsync hidden from the
+  game: the wineserver used 5% of a core in a world instead of 1.5%, and
+  with `0014` it went back to the ntsync level while the game ran at 250 to
+  255 FPS.
+
 ## 2.3.1 — 2026-11-11
 
 Other players keep their own skins on servers, the Realms button of the title

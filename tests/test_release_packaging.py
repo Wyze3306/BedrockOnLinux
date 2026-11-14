@@ -422,6 +422,26 @@ class BuildReleaseHygieneTests(unittest.TestCase):
         self.assertLess(build, required)
         self.assertIn('required_failures+=("Flatpak")', script[build:required])
 
+    def test_prerelease_channel_is_versioned_and_never_latest(self):
+        # A pre-release (3.0.0) is built from a branch the Flathub manifest
+        # does not pin, so its Flatpak comes from the checkout; it keeps its
+        # own v<VERSION> tag but must never become Latest, which is what the
+        # launcher's updater and AppImageUpdate on stable installs follow.
+        script = BUILD_RELEASE.read_text(encoding="utf-8")
+        self.assertIn(
+            'nightly|prerelease) FLATPAK_NOTE=" (working tree, not the pinned tag)" ;;',
+            script)
+        workflow = (ROOT / ".github/workflows/build-app.yml").read_text(
+            encoding="utf-8")
+        branch = workflow.index('elif [ "$channel" = "prerelease" ]; then')
+        end = workflow.index("fi", branch)
+        self.assertIn('tag="v${ver}"', workflow[branch:end])
+        self.assertIn('pre="true"', workflow[branch:end])
+        self.assertIn("make_latest: ${{ env.RELEASE_PRERELEASE == 'false' }}",
+                      workflow)
+        # An unknown channel fails instead of publishing a stable release.
+        self.assertIn("unknown channel", workflow)
+
     def test_nightly_builds_the_flatpak_from_the_checkout(self):
         # The manifest's pinned tag is behind the default branch between
         # releases, so a nightly that built it would ship a Flatpak unrelated

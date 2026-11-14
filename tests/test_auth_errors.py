@@ -106,6 +106,67 @@ class PreauthFailureDiagnosticTests(unittest.TestCase):
         })
         self.assertIn("Xbox profile", auth.xbl_preauth_error_message())
 
+    def test_rejections_name_their_xerr_in_the_log_and_the_message(self):
+        """Every account problem reads "HTTP 401" alone; the XErr is what
+        tells a missing profile from a suspension or an unserved region."""
+
+        expiry = "2999-01-01T00:00:00Z"
+        warnings = []
+        with tempfile.TemporaryDirectory() as td:
+            urlopen = mock.Mock(side_effect=[
+                _Response(200, {"Token": "device", "NotAfter": expiry}),
+                _Response(200, {"Token": "user", "NotAfter": expiry}),
+                *[_Response(401, {"XErr": 2148916235}) for _ in range(6)],
+            ])
+            with mock.patch.object(auth, "DATA", Path(td)), \
+                    mock.patch("urllib.request.urlopen", urlopen), \
+                    mock.patch.object(auth, "warn",
+                                      side_effect=lambda text:
+                                      warnings.append(str(text))), \
+                    mock.patch.object(auth, "info"), \
+                    mock.patch.object(auth, "ok"), \
+                    mock.patch("bol.network.clock_is_unsynchronized",
+                               return_value=False):
+                self.assertFalse(auth.xbl_preauth(self.access_secret))
+                message = auth.xbl_preauth_error_message()
+
+        self.assertIn(
+            "xbl_preauth: xsts-achievements HTTP 401 (XErr 0x8015DC0B)",
+            warnings)
+        self.assertIn("country or region", message)
+        self.assertIn("0x8015DC0B", message)
+        self.assertNotIn("Xbox profile", message)
+
+    def test_known_xerr_codes_get_their_own_advice(self):
+        for code, words in ((2148916227, "suspended"),
+                            (2148916229, "family settings"),
+                            (2148916233, "no Xbox profile"),
+                            (2148916234, "terms of use")):
+            with self.subTest(code=code):
+                auth._clear_xbl_preauth_diagnostic()
+                auth._record_xbl_preauth_diagnostic(
+                    "xsts-achievements",
+                    auth._xbl_response_error(
+                        _Response(401, {"XErr": code}))[0],
+                    401, code)
+                with mock.patch("bol.network.clock_is_unsynchronized",
+                                return_value=False):
+                    message = auth.xbl_preauth_error_message()
+                self.assertIn(words, message)
+                self.assertIn("0x%08X" % code, message)
+
+    def test_unknown_xerr_keeps_the_generic_advice_and_names_the_code(self):
+        auth._clear_xbl_preauth_diagnostic()
+        self.addCleanup(auth._clear_xbl_preauth_diagnostic)
+        auth._record_xbl_preauth_diagnostic(
+            "xsts-achievements", "account", 401, 2148916299)
+        with mock.patch("bol.network.clock_is_unsynchronized",
+                        return_value=False):
+            message = auth.xbl_preauth_error_message()
+        self.assertTrue(message.startswith(
+            auth._XBL_PREAUTH_MESSAGES["account"]))
+        self.assertIn("0x8015DC4B", message)
+
     def test_child_account_error_gets_age_family_guidance(self):
         expiry = "2999-01-01T00:00:00Z"
         failure = {

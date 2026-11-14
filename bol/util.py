@@ -127,11 +127,13 @@ LAUNCHER_OWNED_ENV = (
     "PROTON_USE_WINED3D",
     "PROTON_LOG",
     "PROTON_LOG_DIR",
-    # Wine 11 has no esync/fsync, so ntsync is the only fast synchronization
-    # path left. A stale global export of this must not silently serialise
-    # every Minecraft worker thread behind the wineserver; the Advanced
-    # custom-environment field remains the supported way to turn it off.
+    # ntsync is Wine 11's fast synchronization path and fsync (engine patch
+    # 0014) the only fallback when the kernel lacks it. A stale global export
+    # of either must not silently serialise every Minecraft worker thread
+    # behind the wineserver; the Advanced custom-environment field remains
+    # the supported way to turn them off.
     "PROTON_NO_NTSYNC",
+    "PROTON_NO_FSYNC",
 )
 
 # The Settings control which configures a launcher-owned variable properly,

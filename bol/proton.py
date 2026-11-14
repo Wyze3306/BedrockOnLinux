@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 from .config import CACHE, GDK_PROTON_REPO, PROTON_DIR, WINEGDK_OUT
 from .engine_lock import managed_engine_lock
 from .log import die, info, ok, warn
-from .pe import PE, _backup_once, apply_patch
+from .pe import PE, _backup_once, apply_patch, code_machine
 from .util import (
     asset_url,
     download,
@@ -342,7 +342,20 @@ def patch_proton(root: Path, strict=True):
     wine = root / "files/lib/wine/x86_64-windows"
     combase, ntdll = wine / "combase.dll", wine / "ntdll.dll"
     if not combase.exists() or not ntdll.exists():
+        if (root / "files/lib/wine/aarch64-windows/ntdll.dll").exists():
+            warn("This Proton's Wine is built for ARM64; the x86-64 combase "
+                 "and ntdll patches do not apply to it and are skipped.")
+            return
         return fail(f"Wine DLLs missing in {wine}")
+    # Both patches write x86-64 instructions. An ARM64EC or ARM64X Wine
+    # (#250) keeps the same file names, and relax=True below stubs over any
+    # prologue, so without this check they would land in ARM code.
+    for dll in (combase, ntdll):
+        arch = code_machine(dll)
+        if arch not in (None, "x86_64"):
+            warn(f"{dll.name} holds {arch} code, not x86-64; the combase and "
+                 "ntdll patches are skipped.")
+            return
 
     # (1) combase.RoOriginateErrorW stub aborts at the package-identity check.
     off = PE(combase).export_off("RoOriginateErrorW")

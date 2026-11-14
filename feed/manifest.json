@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "components": {
+    "stable": {},
+    "prerelease": {}
+  },
+  "launcher": {},
+  "minecraft": {
+    "hbui": []
+  },
+  "notices": []
+}

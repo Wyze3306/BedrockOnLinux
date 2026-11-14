@@ -8,19 +8,29 @@ from . import hostarch
 from .auth import msa_signed_in
 from .config import LOGS
 from .deps import ensure_login_deps
-from .fixups import fix_curl_ssl, hide_signin_button, install_gdk_xbox_dlls
+from .fixups import (
+    fix_curl_ssl,
+    hide_signin_button,
+    install_ca_bundle,
+    install_gdk_xbox_dlls,
+)
 from .gameinput import install_gameinput
 from .config import GAMES
 from .games import (
     _auto_selection,
     _game_root,
+    edition_exe,
+    edition_for_dir,
     import_game_folder,
     install_game,
     installed_builds,
+    is_bedrock,
     mc_version_str,
     list_versions,
+    selected_edition,
     prune_legacy_game_archives,
     use_game_dir,
+    uses_xbox_live,
     version_dir,
 )
 from .log import BolError, desktop_notify, info, ok, warn
@@ -155,6 +165,12 @@ def update_game_before_play(always=False, setup=None, versions=None):
     return newest
 
 
+def _build_root(folder):
+    """The complete build in ``folder``, for whichever title it holds."""
+    folder = Path(folder).expanduser()
+    return _game_root(folder, edition_exe(edition_for_dir(folder)))
+
+
 def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
               force=False, progress=None):
     # Everything setup downloads is x86-64; say so before the first of them
@@ -171,10 +187,10 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
     elif mc_edition:
         use_game_dir(install_game(mc_edition, mc_version, progress,
                                   force=force))
-    elif game_dir and _game_root(Path(game_dir).expanduser()):
+    elif game_dir and _build_root(game_dir):
         use_game_dir(game_dir)
     cur = load_settings().get("game_dir")
-    if not cur or not _game_root(Path(cur)):
+    if not cur or not _build_root(cur):
         if IS_MAC:
             # A build already on this Mac, or NoGameFolder -- before the
             # engine below, which is worth preparing only for a game that
@@ -185,6 +201,12 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
             use_game_dir(install_game(edition, version, progress,
                                       force=force))
     gd = Path(load_settings()["game_dir"])
+    # The DLLs the game folder gets are Bedrock's own fixes -- its XCurl and
+    # libHttpClient, its sign-in button. Another title keeps what it shipped
+    # with: those replacements were never tried on it, and Minecraft
+    # Education has neither XCurl nor Xbox Live to fix (#351).
+    bedrock = is_bedrock(edition_for_dir(gd))
+    xbox_live = uses_xbox_live(gd)
     if IS_MAC:
         # A native Wine (Game Porting Toolkit, CrossOver, Whisky or plain),
         # in place of GDK-Proton inside umu. The GDK Xbox DLLs are skipped
@@ -196,11 +218,15 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
     else:
         if load_settings().get("proton_source") == "winegdk":
             ensure_winegdk(force, progress)
-            install_gdk_xbox_dlls(gd)
+            if bedrock:
+                install_gdk_xbox_dlls(gd)
         else:
             ensure_proton(proton_tag, force, progress)
         ensure_umu(force)
-    fix_curl_ssl(gd)
+    if bedrock:
+        fix_curl_ssl(gd)
+    elif xbox_live:
+        install_ca_bundle(gd)
     if not boot_prefix():
         raise BolError(
             "Could not initialise the Wine prefix, so setup stopped before "
@@ -211,7 +237,12 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
         from .winemac import install_gdk_runtime
         install_gdk_runtime(active_prefix())
     install_gameinput(active_prefix(), gd)
-    hide_signin_button(gd)
+    if not xbox_live:
+        ok("Setup complete — click PLAY, then sign in to Minecraft Education "
+           "with your school or work account.")
+        return
+    if bedrock:
+        hide_signin_button(gd)
     if IS_MAC:
         ok("Setup complete — click PLAY. This Mac runs Minecraft offline and "
            "on the LAN: Xbox Live sign-in needs the WineGDK engine, which is "
@@ -433,8 +464,12 @@ _DIAG_RULES = [
 ]
 
 
-def diagnose():
-    """Scan game logs and surface a likely cause."""
+def diagnose(quiet=False):
+    """Scan game logs and surface a likely cause.
+
+    ``quiet`` returns the causes without printing them, for a problem report
+    (bol.report) that carries them rather than shows them.
+    """
     blobs = []
     for p in (LOGS / "proton.log", LOGS / "minecraft.log",
               LOGS / "winegdk-build.log"):
@@ -539,12 +574,23 @@ def diagnose():
                     "PROTON_USE_WINED3D forces the legacy renderer, which "
                     "Minecraft's menu can crash on. Use the Renderer setting "
                     "instead." % ", ".join(overrides))
+    played = selected_edition(load_settings())
+    # Minecraft Education signs in with a school or work account of its own:
+    # no Xbox account to miss (#351).
     # On a Mac there is no sign-in to suggest: it needs the WineGDK engine.
-    if not msa_signed_in() and not IS_MAC:
-        hits.append("No Microsoft account linked — the game runs, but in "
-                    "offline mode: single-player worlds and LAN play only. "
-                    "Click 'Sign in' before PLAY for Realms, servers, the "
-                    "Marketplace and Xbox friends.")
+    if not msa_signed_in() and not IS_MAC \
+            and (played or {}).get("xbox_live", True):
+        if is_bedrock(played):
+            hits.append("No Microsoft account linked — the game runs, but in "
+                        "offline mode: single-player worlds and LAN play "
+                        "only. Click 'Sign in' before PLAY for Realms, "
+                        "servers, the Marketplace and Xbox friends.")
+        else:
+            hits.append(f"No Microsoft account linked — {played['name']} "
+                        "cannot sign in to Xbox Live. Click 'Sign in' "
+                        "before PLAY.")
+    if quiet:
+        return hits
     if hits:
         warn("Likely cause:")
         for h in dict.fromkeys(hits):
