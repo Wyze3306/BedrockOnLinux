@@ -22,6 +22,7 @@ import os
 from collections import namedtuple
 
 from .config import APP, PRETTY
+from .report import ISSUE_REPO, RELAY_URL
 
 SETTING = "network_updates"
 CHANNEL_SETTING = "update_channel"
@@ -53,6 +54,7 @@ GROUPS = (
     ("install", "Installing or updating Minecraft and its runtime"),
     ("signin", "Signing in and playing online"),
     ("content", "Browsing add-ons, mods and changelogs"),
+    ("report", "Reporting a problem (only when you press Send)"),
 )
 
 _PLAIN_GET = ("A plain download request: your IP address and the launcher's "
@@ -137,6 +139,32 @@ ENDPOINTS = (
         _PLAIN_GET,
         "The Minecraft and launcher changelogs, when you open them."),
 )
+
+_REPORT_SENDS = (
+    "The report exactly as the window shows it before you send: your title "
+    "and comment, system information and log excerpts, with names, paths, "
+    "addresses, account details and tokens removed. Your IP address, like "
+    "any web request.")
+
+ENDPOINTS += (
+    Endpoint(
+        "report", ("github.com",),
+        "Nothing by the launcher itself: your browser opens the form, and "
+        "you submit it with your own GitHub account.",
+        f"The new-issue form of {ISSUE_REPO}, filled in with your report, "
+        "when no report relay is used."),
+)
+if RELAY_URL:
+    # Named the day a relay is deployed and RELAY_URL is set (bol.report).
+    from urllib.parse import urlsplit as _urlsplit
+    ENDPOINTS += (
+        Endpoint(
+            "report", (_urlsplit(RELAY_URL).hostname,),
+            _REPORT_SENDS,
+            f"The {PRETTY} report relay, which files your report as a "
+            f"public issue on github.com/{ISSUE_REPO}. It keeps no copy "
+            "and does not log your address."),
+    )
 
 NO_TELEMETRY = ("No telemetry, no usage statistics and no install or machine "
                 "identifier is ever sent, to anyone.")

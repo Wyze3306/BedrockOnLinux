@@ -369,8 +369,12 @@ _DIAG_RULES = [
 ]
 
 
-def diagnose():
-    """Scan game logs and surface a likely cause."""
+def diagnose(quiet=False):
+    """Scan game logs and surface a likely cause.
+
+    ``quiet`` returns the causes without printing them, for a problem report
+    (bol.report) that carries them rather than shows them.
+    """
     blobs = []
     for p in (LOGS / "proton.log", LOGS / "minecraft.log",
               LOGS / "winegdk-build.log"):
@@ -488,6 +492,8 @@ def diagnose():
             hits.append(f"No Microsoft account linked — {played['name']} "
                         "cannot sign in to Xbox Live. Click 'Sign in' "
                         "before PLAY.")
+    if quiet:
+        return hits
     if hits:
         warn("Likely cause:")
         for h in dict.fromkeys(hits):
