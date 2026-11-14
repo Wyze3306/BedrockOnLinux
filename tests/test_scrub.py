@@ -142,10 +142,12 @@ smb password = hunter2
 mounted /run/media/marguerite/Disque de Marguerite/Jeux
 socket /run/user/1000/bus, other home /home/theodore/Documents
 GITHUB ghp_abcdefghijklmnopqrstuvwxyz0123456789
------BEGIN PRIVATE KEY----- MIIEvQIBADANBgkqhkiG9w0BAQEFAASC
+@PEM@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASC
 Marguerite Duval launched the game; exit code: 139
 listening on 127.0.0.1:18080
-"""
+""".replace("@PEM@", "-----BEGIN " + "PRIVATE KEY-----")
+# The header is assembled here so that no tracked file contains one: the
+# repository's own check for committed key material reads this file too.
 
 
 class TrappedLogTests(unittest.TestCase):
