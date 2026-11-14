@@ -156,7 +156,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native24"
 # installed stripped of their debugging sections, and Wine Mono and the
 # import libraries are left out. The code is the same; the engine is not
 # 2.5 GB on disk any more, nor its archive 863 MB.
-WINEGDK_ARCHIVE_SHA256 = "67be80852e20d74fb5d936de4350fd8b7406f1f0955f5f722bbd2ba38abd5f8c"
+WINEGDK_ARCHIVE_SHA256 = "06f87bcda4ccf139efc05fa943c3f5110aa9bbea08c4a8e2ebaafedaa818ef7f"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "3abba830089fc7f2b788ab8228024fa8573c8530f7458c9e7ae45419dd9f9a58"
 
