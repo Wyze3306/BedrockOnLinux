@@ -41,14 +41,45 @@ class FirstRunTests(_Base):
         said = " ".join(_texts(bar, QLabel))
         self.assertIn("Nothing has been contacted yet", said)
         self.assertIn("No telemetry", said)
-        self.assertEqual(
-            _texts(bar, QPushButton),
-            ["What is contacted…", "Off", "Only when I ask", "Automatic"])
+        self.assertEqual(_texts(bar, QPushButton),
+                         ["What is contacted…", "Continue"])
+        self.assertEqual(list(bar.cards), ["auto", "ask", "off"])
 
-    def test_the_notice_is_a_strip_and_play_stays_usable(self):
+    def test_the_notice_is_a_dialog_over_the_window(self):
         window = self.window(network_updates=None)
-        self.assertTrue(window.play_btn.isEnabled())
-        self.assertIsNone(self.app.activeModalWidget())
+        notice = window._network_notice
+        self.assertIsInstance(notice, gui.QDialog)
+        self.assertTrue(notice.isModal())
+        self.assertIs(notice.parent(), window)
+
+    def test_continue_saves_the_picked_card(self):
+        window = self.window(network_updates=None)
+        notice = window._network_notice
+        notice.cards["ask"].picked.emit()
+        self.assertTrue(notice.cards["ask"].isChecked())
+        self.assertFalse(notice.cards["auto"].isChecked())
+        notice.continue_btn.click()
+        self.app.processEvents()
+        self.assertEqual(window.settings["network_updates"], "ask")
+        self.assertIsNone(window._network_notice)
+        self.assertTrue(window._network_started)
+
+    def test_closing_without_a_choice_records_nothing(self):
+        window = self.window(network_updates=None)
+        with mock.patch.object(window, "_save_setting") as save:
+            window._network_notice.reject()
+            self.app.processEvents()
+        save.assert_not_called()
+        self.assertIsNone(window._network_notice)
+        self.assertTrue(window._network_started)
+
+    def test_the_list_of_hosts_opens_inside_the_dialog(self):
+        window = self.window(network_updates=None)
+        notice = window._network_notice
+        self.assertFalse(notice.disclosure_box.isVisibleTo(notice))
+        notice.details_btn.click()
+        self.assertTrue(notice.disclosure_box.isVisibleTo(notice))
+        self.assertIn("github.com", notice.disclosure.text())
 
     def test_an_answer_is_saved_and_only_then_does_the_window_go_online(self):
         window = self.window(network_updates=None)

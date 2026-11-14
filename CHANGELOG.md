@@ -97,6 +97,12 @@
 
 ### Fixed
 
+- **The first-run network question is a real dialog.** It opened as a
+  column wedged between the navigation rail and the page, with the text
+  squeezed into it; update and notice banners landed in the same place. The
+  question is now a dialog over the window with one card per choice and the
+  list of hosts inside it, and banners sit under the page title.
+
 - **A certificate download that fails no longer stops the launch**
   ([#374](https://github.com/Wyze3306/BedrockOnLinux/issues/374)). On
   networks where `curl.se` is out of reach, setup ended at "Download failed

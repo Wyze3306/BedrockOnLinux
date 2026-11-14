@@ -806,6 +806,198 @@ def btn(text, cmd=None, kind="ghost", w=None, h=32, tip=None, parent=None) -> QP
     return b
 
 
+class ChoiceCard(QFrame):
+    """One answer of a choice dialog: a title over a line of help, picked
+    by a click, Space or Enter. Shown lit when it is the current pick."""
+
+    picked = Signal()
+
+    def __init__(self, title, help_text, badge=None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("ChoiceCard")
+        self.setProperty("checked", False)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 12, 16, 14)
+        v.setSpacing(4)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self.title = QLabel(title)
+        self.title.setObjectName("ChoiceTitle")
+        head.addWidget(self.title)
+        if badge:
+            tag = QLabel(badge)
+            tag.setObjectName("ChoiceBadge")
+            head.addWidget(tag)
+        head.addStretch(1)
+        v.addLayout(head)
+        self.help = QLabel(help_text)
+        self.help.setObjectName("Sub")
+        self.help.setWordWrap(True)
+        v.addWidget(self.help)
+        for label in self.findChildren(QLabel):
+            label.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def setChecked(self, on):
+        self.setProperty("checked", bool(on))
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def isChecked(self):
+        return bool(self.property("checked"))
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(
+                event.position().toPoint()):
+            self.picked.emit()
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            self.picked.emit()
+            return
+        super().keyPressEvent(event)
+
+
+class NetworkChoiceDialog(QDialog):
+    """First run: what the launcher contacts and how updates are checked.
+
+    Nothing is fetched while it is open. ``chosen`` carries the mode the
+    player confirmed; closing it without one only emits ``rejected``.
+    """
+
+    chosen = Signal(str)
+    ORDER = ("auto", "ask", "off")
+
+    def __init__(self, parent, theme):
+        super().__init__(parent)
+        self.setObjectName("Root")
+        self.setWindowTitle(f"{PRETTY}: updates")
+        self.setStyleSheet(theme.qss() + f"""
+            QFrame#ChoiceCard {{
+                background: {theme.card};
+                border: 1px solid {theme.border};
+                border-radius: 12px;
+            }}
+            QFrame#ChoiceCard:hover {{ background: {theme.card2}; }}
+            QFrame#ChoiceCard:focus {{ border: 1px solid {theme.sub}; }}
+            QFrame#ChoiceCard[checked="true"] {{
+                background: {theme.accent_dim};
+                border: 2px solid {theme.accent};
+            }}
+            QLabel#ChoiceTitle {{ font-size: 14px; font-weight: 700; }}
+            QLabel#ChoiceBadge {{
+                background: {theme.accent}; color: white;
+                font-size: 10px; font-weight: 700;
+                padding: 2px 8px; border-radius: 8px;
+            }}
+            QLabel#Privacy {{
+                background: {theme.card2}; border-radius: 10px;
+                padding: 10px 12px; color: {theme.sub};
+            }}
+        """)
+        self.setModal(True)
+        self.setFixedWidth(560)
+        self.mode = "auto"
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(26, 24, 26, 22)
+        outer.setSpacing(12)
+
+        title = QLabel(f"How should {PRETTY} go online?")
+        title.setObjectName("Title")
+        title.setStyleSheet("font-size: 19px;")
+        title.setWordWrap(True)
+        outer.addWidget(title)
+
+        fetched = ("So far only the Qt interface was downloaded (from "
+                   "files.pythonhosted.org)."
+                   if os.environ.get("BOL_BOOTSTRAP_FETCHED")
+                   else "Nothing has been contacted yet.")
+        intro = QLabel(
+            f"{fetched} The launcher can check GitHub for its own updates "
+            "and for a small signed data file of fixes (new Minecraft "
+            "builds, incident notices). Installing Minecraft and signing in "
+            "reach Microsoft and GitHub only when you use them.")
+        intro.setObjectName("Sub")
+        intro.setWordWrap(True)
+        intro.setTextFormat(Qt.PlainText)
+        outer.addWidget(intro)
+        outer.addSpacing(4)
+
+        self.cards = {}
+        # Wrapped labels in a fixed-width dialog get no height-for-width
+        # pass: give each help line the height its known width needs.
+        help_width = 560 - 2 * 26 - 2 * 16 - 4
+        for key in self.ORDER:
+            card = ChoiceCard(netpolicy.MODE_LABELS[key],
+                              netpolicy.MODE_HELP[key],
+                              badge="Recommended" if key == "auto" else None)
+            card.help.setMinimumHeight(card.help.heightForWidth(help_width))
+            card.picked.connect(lambda k=key: self._pick(k))
+            self.cards[key] = card
+            outer.addWidget(card)
+        self._pick("auto")
+
+        privacy = QLabel(netpolicy.NO_TELEMETRY)
+        privacy.setObjectName("Privacy")
+        privacy.setWordWrap(True)
+        outer.addSpacing(2)
+        outer.addWidget(privacy)
+
+        self.disclosure = QLabel(netpolicy.disclosure_html())
+        self.disclosure.setObjectName("Sub")
+        self.disclosure.setWordWrap(True)
+        self.disclosure.setTextFormat(Qt.RichText)
+        self.disclosure.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.disclosure_box = QScrollArea()
+        self.disclosure_box.setWidgetResizable(True)
+        self.disclosure_box.setFrameShape(QFrame.NoFrame)
+        self.disclosure_box.setWidget(self.disclosure)
+        self.disclosure_box.setFixedHeight(200)
+        self.disclosure_box.hide()
+        outer.addWidget(self.disclosure_box)
+
+        outer.addSpacing(6)
+        foot = QHBoxLayout()
+        self.details_btn = btn("What is contacted…", self._toggle_details,
+                               kind="flat", h=36)
+        foot.addWidget(self.details_btn)
+        foot.addStretch(1)
+        self.continue_btn = btn("Continue", self._confirm, kind="primary",
+                                w=130, h=36)
+        self.continue_btn.setDefault(True)
+        foot.addWidget(self.continue_btn)
+        outer.addLayout(foot)
+
+    def _pick(self, mode):
+        self.mode = mode
+        for key, card in self.cards.items():
+            card.setChecked(key == mode)
+
+    def _toggle_details(self):
+        showing = not self.disclosure_box.isVisible()
+        self.disclosure_box.setVisible(showing)
+        self.details_btn.setText("Hide the list" if showing
+                                 else "What is contacted…")
+        self._fit()
+
+    def _fit(self):
+        layout = self.layout()
+        layout.activate()
+        self.setFixedHeight(layout.totalHeightForWidth(self.width()))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._fit()
+
+    def _confirm(self):
+        mode = self.mode
+        self.accept()
+        self.chosen.emit(mode)
+
+
 class SettingComboBox(QComboBox):
     """A drop-down that a wheel turn on the way past leaves alone (#363).
 
@@ -1512,6 +1704,9 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 2, 0, 0)
         outer.setSpacing(8)
         frame.addLayout(outer, 1)
+        # Banners (_banner) go here, under the top bar: the root layout is
+        # the rail beside the page, where a banner became a column.
+        self._outer = outer
 
         outer.addLayout(self._build_topbar())
 
@@ -4891,51 +5086,40 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.addStretch(1)
         v.addLayout(row)
-        self.centralWidget().layout().insertWidget(1, bar)
+        self._outer.insertWidget(1, bar)
         return bar, row
 
     def _show_network_notice(self):
-        """The first-run notice: what is contacted, before anything is.
+        """The first-run question: what is contacted, before anything is.
 
-        A strip, not a dialog: it names the choice without taking the
-        window, and PLAY stays where it is. Until it is answered the
-        launcher fetches nothing by itself.
+        A window-modal dialog over the launcher. Until it is answered the
+        launcher fetches nothing by itself; closing it without a choice
+        records nothing, loads only what the window needs to show the
+        versions (as Off does), and asks again at the next start.
         """
         if not _alive(self) or self.centralWidget() is None \
                 or _alive(getattr(self, "_network_notice", None)):
             return
-        fetched = ("So far only the Qt interface was downloaded (from "
-                   "files.pythonhosted.org). "
-                   if os.environ.get("BOL_BOOTSTRAP_FETCHED")
-                   else "Nothing has been contacted yet. ")
-        bar, row = self._banner(
-            f"Before {PRETTY} goes online. " + fetched
-            + "It can check GitHub for launcher updates and for a small "
-            "signed data file of fixes (new Minecraft builds, incident "
-            "notices). Installing Minecraft and signing in talk to Microsoft "
-            "and GitHub when you use them. " + netpolicy.NO_TELEMETRY
-            + " How should updates be checked?")
-        self._network_notice = bar
-        row.addWidget(btn("What is contacted…", self._show_network_details,
-                          kind="flat", h=30))
-        row.addWidget(btn("Off", lambda: self._choose_network_mode("off"),
-                          kind="flat", w=64, h=30,
-                          tip=netpolicy.MODE_HELP["off"]))
-        row.addWidget(btn("Only when I ask",
-                          lambda: self._choose_network_mode("ask"),
-                          kind="flat", h=30, tip=netpolicy.MODE_HELP["ask"]))
-        row.addWidget(btn("Automatic",
-                          lambda: self._choose_network_mode("auto"),
-                          kind="primary", w=112, h=30,
-                          tip=netpolicy.MODE_HELP["auto"]))
+        dlg = NetworkChoiceDialog(self, self.theme)
+        self._network_notice = dlg
+        dlg.chosen.connect(self._choose_network_mode)
+        dlg.rejected.connect(self._network_notice_dismissed)
+        dlg.open()
+
+    def _network_notice_dismissed(self):
+        self._network_notice = None
+        if not self._network_started:
+            self._start_network()
 
     def _choose_network_mode(self, mode):
         self._save_setting(netpolicy.SETTING, mode)
         feed.forget()
-        bar = getattr(self, "_network_notice", None)
-        if _alive(bar):
-            bar.setParent(None)
+        notice = getattr(self, "_network_notice", None)
         self._network_notice = None
+        if _alive(notice):
+            notice.blockSignals(True)
+            notice.accept()
+            notice.deleteLater()
         combo = getattr(self, "network_mode_combo", None)
         if _alive(combo):
             index = combo.findData(mode)
