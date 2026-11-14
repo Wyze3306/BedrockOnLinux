@@ -319,6 +319,39 @@ class TestVersionPicker:
             picker.search.setText("beta")
             assert _visible_rows(picker) == ["1.2.3  ·  BETA"]
 
+    def test_installed_builds_are_marked_and_keep_their_label(self, qapp):
+        """#376: the mark is drawn beside the label, never part of it --
+        the label is what a pick is found again by."""
+        from bol.gui import _InstalledMark
+        with mock.patch("bol.gui.QApplication.instance", return_value=qapp):
+            picker = VersionPicker(None)
+            picker.set_labels(["1.0.0", "1.1.0", "2.0.0"], "1.0.0",
+                              installed={"1.1.0"})
+            marks = {picker.list.item(i).text():
+                     bool(picker.list.item(i).data(_InstalledMark.ROLE))
+                     for i in range(picker.list.count())}
+            assert marks == {"1.0.0": False, "1.1.0": True, "2.0.0": False}
+            picker.resize(260, 320)
+            picker.grab()  # the delegate paints without a main window
+
+    def test_the_window_marks_what_is_on_disk_now(self, qapp):
+        """A build downloaded after the catalogue was loaded is marked."""
+        with headless_window() as win:
+            edition = {"id": "release"}
+            win.ui_state["versions"] = [
+                {"tag": "1.26.60.5", "beta": False, "edition": edition,
+                 "installed": False},
+                {"tag": "1.26.50.1", "beta": False, "edition": edition,
+                 "installed": True},
+            ]
+            win.ui_state["labels"] = ["26.60", "26.50"]
+            with mock.patch("bol.gui.installed_versions",
+                            return_value={"1.26.60.5"}):
+                assert win._installed_labels() == {"26.60"}
+            with mock.patch("bol.gui.installed_versions",
+                            side_effect=OSError("unreadable")):
+                assert win._installed_labels() == {"26.50"}
+
     def test_clearing_the_filter_brings_every_row_back(self, qapp):
         with mock.patch("bol.gui.QApplication.instance", return_value=qapp):
             picker = VersionPicker(None)

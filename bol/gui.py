@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QGridLayout, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QTabWidget, QTextBrowser, QTextEdit,
+    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QStyledItemDelegate, QTabWidget, QTextBrowser, QTextEdit,
     QVBoxLayout, QWidget,
 )
 
@@ -40,7 +40,7 @@ from .config import (
 from .relocation import migrate_data, paths_overlap, DIRS_TO_MOVE, FILES_TO_MOVE
 from .content import game_content_dir, import_content
 from .doctor import acknowledge_gpu_crash, gpu_crash_acknowledgement_status
-from .games import (installed_builds, list_editions,
+from .games import (installed_builds, installed_versions, list_editions,
                     list_versions, remove_build)
 from .gamesetup import do_setup
 from . import betterrtx, gpus
@@ -1080,6 +1080,30 @@ class EditionMenu(Popup):
 # Version picker
 # ======================================================================
 
+class _InstalledMark(QStyledItemDelegate):
+    """Draws "Installed" at the right of the rows that carry the mark (#376).
+
+    The row's text stays the version label alone: it is what a pick is
+    found again by, and what the filter matches.
+    """
+    TEXT = "Installed"
+    ROLE = Qt.UserRole + 1
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        if not index.data(self.ROLE):
+            return
+        theme = getattr(self.parent().window().parent(), "theme", None)
+        painter.save()
+        font = painter.font()
+        font.setPointSizeF(max(7.0, font.pointSizeF() * 0.85))
+        painter.setFont(font)
+        painter.setPen(QColor(getattr(theme, "green", "#43a047")))
+        painter.drawText(option.rect.adjusted(0, 0, -10, 0),
+                         Qt.AlignRight | Qt.AlignVCenter, self.TEXT)
+        painter.restore()
+
+
 class VersionPicker(Popup):
     picked = Signal(str)
     refresh_requested = Signal()
@@ -1105,14 +1129,21 @@ class VersionPicker(Popup):
         row.addWidget(self.refresh_btn)
         v.addLayout(row)
         self.list = QListWidget()
+        self.list.setItemDelegate(_InstalledMark(self.list))
         v.addWidget(self.list)
         self.search.textChanged.connect(self._filter)
         self.list.itemClicked.connect(lambda it: self.picked.emit(it.text()))
 
-    def set_labels(self, labels, current):
+    def set_labels(self, labels, current, installed=()):
+        """Fill the list; ``installed`` names the labels already on disk."""
+        installed = set(installed)
         self.list.clear()
         for lab in labels:
             it = QListWidgetItem(lab)
+            if lab in installed:
+                it.setData(_InstalledMark.ROLE, True)
+                it.setToolTip("Already downloaded: PLAY starts it without "
+                              "downloading anything.")
             self.list.addItem(it)
             if lab == current:
                 self.list.setCurrentItem(it)
@@ -2271,13 +2302,36 @@ class MainWindow(QMainWindow):
         self.version_popup.refresh_requested.connect(
             self._refresh_versions_from_picker)
 
+    def _installed_labels(self):
+        """The picker labels whose build is on disk right now (#376).
+
+        Read from the game folders rather than from the catalogue loaded at
+        startup, so a build downloaded since then is marked too.
+        """
+        on_disk = {}
+        marked = set()
+        for label, version in zip(self.ui_state.get("labels") or [],
+                                  self.ui_state.get("versions") or []):
+            edition_id = _version_edition_id(version)
+            if edition_id not in on_disk:
+                try:
+                    on_disk[edition_id] = installed_versions(edition_id)
+                except Exception:
+                    on_disk[edition_id] = None
+            builds = on_disk[edition_id]
+            if (version["tag"] in builds if builds is not None
+                    else version.get("installed")):
+                marked.add(label)
+        return marked
+
     def open_picker(self):
         labels = [l for l, v in zip(self.ui_state.get("labels") or [],
                                      self.ui_state.get("versions") or [])
                   if self._edition_matches(v)]
         if not labels:
             return
-        self.version_popup.set_labels(labels, self.ver_label.text())
+        self.version_popup.set_labels(labels, self.ver_label.text(),
+                                      self._installed_labels())
         self.version_popup.setFixedWidth(max(260, self.ver_field.width()))
         self.version_popup.show_above(self.ver_field)
 
@@ -2438,7 +2492,8 @@ class MainWindow(QMainWindow):
             current_label = current.text() if current else self.ver_label.text()
             open_labels = [l for l, v in zip(labels, versions)
                            if self._edition_matches(v)]
-            self.version_popup.set_labels(open_labels, current_label)
+            self.version_popup.set_labels(open_labels, current_label,
+                                          self._installed_labels())
         self.ver_label.setText(
             labels[self._saved_version_index(versions)])
         self._update_selected_chip()

@@ -206,6 +206,15 @@ def _installed_versions(edition_id):
             and _game_root(folder, exe) is not None}
 
 
+def installed_versions(edition_id):
+    """The builds of an edition that are on disk now, by version.
+
+    For a caller that marks them in a list: read from the folders each time,
+    so a build downloaded or removed since the catalogue was loaded shows.
+    """
+    return _installed_versions(edition_id)
+
+
 def _game_root(dest, exe=xodus.BEDROCK_EXE):
     """Folder of a complete installed build (exe + appxmanifest), else None
     (a bare exe with no manifest means a truncated install → reinstall).
