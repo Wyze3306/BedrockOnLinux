@@ -30,15 +30,75 @@ from .pe import apply_patch
 from .prefix import active_prefix
 from .util import asset_url, download, gh_releases, run
 
+# Where distributions keep the same Mozilla roots curl.se publishes: Debian
+# and Arch, Fedora, openSUSE, then the generic names.
+_SYSTEM_CA_BUNDLES = (
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/ca-bundle.pem",
+    "/var/lib/ca-certificates/ca-bundle.pem",
+    "/etc/ssl/cert.pem",
+)
+
+
+def _system_ca_bundle():
+    """A PEM bundle of root certificates already on this machine, or None."""
+    candidates = list(_SYSTEM_CA_BUNDLES)
+    try:
+        import ssl
+        candidates.insert(0, ssl.get_default_verify_paths().cafile)
+    except Exception:
+        pass
+    try:
+        import certifi
+        candidates.append(certifi.where())
+    except Exception:
+        pass
+    for path in candidates:
+        try:
+            path = Path(path) if path else None
+            # Real bundles hold over a hundred roots; a stub of a few hundred
+            # bytes would leave the game unable to reach anything.
+            if path and path.is_file() and path.stat().st_size > 50_000 \
+                    and b"BEGIN CERTIFICATE" in path.read_bytes()[:200_000]:
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def _ca_bundle():
+    """The CA bundle to give the game: curl.se's, else this machine's (#374).
+
+    curl.se is out of reach from some networks ("Connection reset by peer"
+    after every attempt), and that used to end the launch. The system's
+    bundle carries the same roots, so it stands in; it is not written to the
+    cache, so the download is tried again next time.
+    """
+    cacert = CACHE / "cacert.pem"
+    if cacert.exists():
+        return cacert
+    try:
+        download(CACERT_URL, cacert, "SSL certificates")
+        return cacert
+    except Exception as exc:
+        cacert.unlink(missing_ok=True)
+        fallback = _system_ca_bundle()
+        if fallback is None:
+            raise
+        warn(f"The certificate bundle could not be downloaded ({exc}); "
+             f"using this system's ({fallback}).")
+        return fallback
+
+
 def install_ca_bundle(game_dir: Path):
     """The CA bundle GDK-Proton looks for beside a game, at
     etc/ssl/certs/ca-bundle.crt. Only a file of certificates: unlike the
     libcurl swap below it changes nothing the game ships, so every title of
     the family gets it."""
     game_dir = Path(game_dir)
-    cacert = CACHE / "cacert.pem"
-    if not cacert.exists():
-        download(CACERT_URL, cacert, "SSL certificates")
+    cacert = _ca_bundle()
     for base in (game_dir, game_dir.parent):
         crt = base / "etc" / "ssl" / "certs" / "ca-bundle.crt"
         crt.parent.mkdir(parents=True, exist_ok=True)
@@ -556,14 +616,10 @@ def _install_openssl_xcurl(game_dir: Path):
     shutil.copy2(libcurl, game_dir / "xcurl_real.dll")
     for nm in ("XCurl.dll", "Xcurl.dll"):
         shutil.copy2(shim, game_dir / nm)
-    cacert = CACHE / "cacert.pem"
-    if not cacert.exists():
-        try:
-            download(CACERT_URL, cacert, "SSL certificates")
-        except Exception as e:
-            warn(f"cacert download failed: {e}")
-    if cacert.exists():
-        shutil.copy2(cacert, game_dir / "cacert.pem")
+    try:
+        shutil.copy2(_ca_bundle(), game_dir / "cacert.pem")
+    except Exception as e:
+        warn(f"No certificate bundle for the game's sign-in: {e}")
     ok("OpenSSL XCurl (CA-injecting shim) + deps installed "
        "(PlayFab Azure Front Door bypass)")
 

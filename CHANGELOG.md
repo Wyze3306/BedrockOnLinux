@@ -27,6 +27,11 @@
   network` prints it, and the README has it too. No telemetry or identifier
   is sent, to anyone.
 - **A release channel setting**: stable, or pre-releases as well.
+- **The version list shows what is already installed**
+  ([#376](https://github.com/Wyze3306/BedrockOnLinux/issues/376)). A build
+  on disk carries an *Installed* mark in the picker next to PLAY, read from
+  the game folders each time the list opens, so you can tell which versions
+  start at once and which would be downloaded.
 - **Report a problem.** A button at the foot of the menu, in Settings ▸
   Tools and on the error shown when a launch fails, and `bedrock-on-linux
   report` in a terminal. You write a title and a comment; the launcher adds
@@ -92,6 +97,12 @@
 
 ### Fixed
 
+- **A certificate download that fails no longer stops the launch**
+  ([#374](https://github.com/Wyze3306/BedrockOnLinux/issues/374)). On
+  networks where `curl.se` is out of reach, setup ended at "Download failed
+  after 5 attempts: https://curl.se/ca/cacert.pem". The launcher now gives
+  the game this system's own certificate bundle, which holds the same roots,
+  and tries the download again on a later launch.
 - Buttons on the Profiles page and in the profile menu were cut off ("ew
   Window", "ename") wherever the desktop's font was wider than the fixed
   widths they were given. Nothing there has a fixed width any more.
