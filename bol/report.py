@@ -47,11 +47,11 @@ from .config import (
     VERSION, WINEGDK_BUILD_REV, XODUS_DIR, XODUS_REV, XODUS_WEBVIEW_REV,
 )
 
-# The relay that files reports as issues, once one is deployed (docs/
-# report-relay.md). Empty: the browser is the only way out. A host named here
-# is listed by bol.netpolicy with every other host the launcher contacts, and
-# tests/test_netpolicy.py then requires the README to name it too.
-RELAY_URL = ""
+# The relay that files reports as issues (docs/report-relay.md). Empty: the
+# browser is the only way out. A host named here is listed by bol.netpolicy
+# with every other host the launcher contacts, and tests/test_netpolicy.py
+# then requires the README to name it too.
+RELAY_URL = "https://reports.linesia.net/v1/report"
 # One run's override, for a packager's own relay or a test: a URL, or "off".
 RELAY_ENV = "BOL_REPORT_RELAY"
 

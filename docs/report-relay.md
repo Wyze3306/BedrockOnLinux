@@ -141,8 +141,9 @@ report the path of least effort; the browser route alone would leave the
 logs optional. The relay's costs are bounded by what it is allowed to do,
 below.
 
-Until `RELAY_URL` in `bol/report.py` is set, the launcher uses the browser
-route and contacts no new host.
+`RELAY_URL` in `bol/report.py` names the deployed relay,
+`https://reports.linesia.net/v1/report`. With it empty, the launcher uses the
+browser route and contacts no new host.
 
 ## What the relay does, and refuses to do
 
@@ -178,7 +179,9 @@ whatever answers in its place) cannot hand it something else to open.
 
 ## Deploying the relay
 
-Nothing below has been done. Each step needs the maintainer.
+The project's relay runs at `reports.linesia.net` (deployed 2026-11-14).
+The steps below are how it was set up, and how to set up another. Each
+needs the maintainer.
 
 ### 1. A GitHub App
 

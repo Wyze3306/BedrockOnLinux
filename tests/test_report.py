@@ -285,10 +285,25 @@ class RelayChoiceTests(unittest.TestCase):
 
 class DisclosureTests(unittest.TestCase):
     def test_the_browser_route_is_on_the_list_of_hosts(self):
+        import importlib
         from bol import netpolicy
-        entries = [e for e in netpolicy.ENDPOINTS if e.group == "report"]
-        self.assertEqual([e.hosts for e in entries], [("github.com",)])
-        self.assertIn("Reporting a problem", netpolicy.disclosure_text())
+        try:
+            with mock.patch.object(report, "RELAY_URL", ""):
+                importlib.reload(netpolicy)
+                entries = [e for e in netpolicy.ENDPOINTS
+                           if e.group == "report"]
+                self.assertEqual([e.hosts for e in entries],
+                                 [("github.com",)])
+                self.assertIn("Reporting a problem",
+                              netpolicy.disclosure_text())
+        finally:
+            importlib.reload(netpolicy)
+
+    def test_the_project_relay_is_on_the_list_of_hosts(self):
+        from bol import netpolicy
+        hosts = [host for e in netpolicy.ENDPOINTS
+                 if e.group == "report" for host in e.hosts]
+        self.assertEqual(hosts, ["github.com", "reports.linesia.net"])
 
     def test_a_deployed_relay_is_listed_the_day_it_is_named(self):
         import importlib

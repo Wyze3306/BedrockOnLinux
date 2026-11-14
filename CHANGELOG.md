@@ -38,10 +38,11 @@
   tokens, and the names of your worlds, servers and profiles; a line that
   might still name you is dropped. The window shows exactly what will be
   sent, with a box to leave each part out, and names where it goes. Nothing
-  is sent before you press Send. For now Send opens GitHub's issue form in
-  your browser with the summary filled in and the full report saved to
-  attach; the relay that files it in one click is in the repository, not
-  yet deployed. See [docs/report-relay.md](docs/report-relay.md).
+  is sent before you press Send. Send files the issue in one click through
+  the project's report relay, `reports.linesia.net`, which keeps no copy and
+  does not log your address; GitHub's own issue form in your browser stays
+  available, and is the fallback when the relay cannot be reached. See
+  [docs/report-relay.md](docs/report-relay.md).
 - `bedrock-on-linux --version`.
 
 ### Changed

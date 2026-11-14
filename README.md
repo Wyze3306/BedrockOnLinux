@@ -177,6 +177,7 @@ launcher's name, like any download.
 | Hosts | Why | What is sent |
 |---|---|---|
 | `github.com` | The new-issue form of Wyze3306/BedrockOnLinux, filled in with your report, when no report relay is used. | Nothing by the launcher itself: your browser opens the form, and you submit it with your own GitHub account. |
+| `reports.linesia.net` | The BedrockOnLinux report relay, which files your report as a public issue on github.com/Wyze3306/BedrockOnLinux. It keeps no copy and does not log your address. | The report exactly as the window shows it before you send: your title and comment, system information and log excerpts, with names, paths, addresses, account details and tokens removed. Your IP address, like any web request. |
 
 The data file is how a fix reaches you without a new launcher release: new
 anchors when a Minecraft build rearranges its menus, a rebuilt downloader, a
