@@ -172,6 +172,12 @@ launcher's name, like any download.
 | `api.mcpedl.com`, `mcpedl.com`, `www.curseforge.com`, `levimc.org`, `bedrock.graphics` | The add-on catalogue, LeviLamina mods and BetterRTX presets you browse or install. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. Search words when you search. |
 | `feedback.minecraft.net`, `api.github.com` | The Minecraft and launcher changelogs, when you open them. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. |
 
+**Reporting a problem (only when you press Send)**
+
+| Hosts | Why | What is sent |
+|---|---|---|
+| `github.com` | The new-issue form of Wyze3306/BedrockOnLinux, filled in with your report, when no report relay is used. | Nothing by the launcher itself: your browser opens the form, and you submit it with your own GitHub account. |
+
 The data file is how a fix reaches you without a new launcher release: new
 anchors when a Minecraft build rearranges its menus, a rebuilt downloader, a
 notice when Microsoft's sign-in is down. It is signed, and the launcher only
@@ -193,10 +199,25 @@ If the game misbehaves after an update or a crash, `bedrock-on-linux repair`
 rebuilds the Windows environment without touching your worlds. Logs are one
 click away in **Settings**.
 
-Still stuck? Ask on [Discord](https://discord.gg/5YJq54Yhbu) or
-[open an issue](https://github.com/Wyze3306/BedrockOnLinux/issues) with your
-launcher version, your distribution, your GPU and the log, but never your
-account details.
+Still stuck? Press **Report** at the foot of the menu (or **Settings ▸ Tools
+▸ Report a problem**, or run `bedrock-on-linux report`). You write what goes
+wrong; the launcher adds what a diagnosis needs: its version and how it was
+installed, the engine and downloader revisions, your Minecraft build, your
+distribution, kernel, desktop, GPU and driver, the settings that change
+behaviour, and the end of the logs.
+
+Everything goes through one privacy pass first. Your user name and home
+folder, host name, gamertag and XUID, e-mail addresses, IP and MAC addresses,
+serial numbers, every token and anything shaped like one, and the names of
+your worlds, servers and profiles are removed or replaced, and a line that
+might still name you is dropped whole. The window shows exactly what will be
+sent, part by part, with a box to leave any part out, and names the host it
+goes to. Nothing is sent before you press Send, and what you send becomes a
+public issue. [`docs/report-relay.md`](docs/report-relay.md) has the details.
+
+You can also ask on [Discord](https://discord.gg/5YJq54Yhbu) or
+[open an issue](https://github.com/Wyze3306/BedrockOnLinux/issues) by hand,
+but never with your account details.
 
 ## Uninstalling
 

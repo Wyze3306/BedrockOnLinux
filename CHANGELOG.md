@@ -27,6 +27,21 @@
   network` prints it, and the README has it too. No telemetry or identifier
   is sent, to anyone.
 - **A release channel setting**: stable, or pre-releases as well.
+- **Report a problem.** A button at the foot of the menu, in Settings ▸
+  Tools and on the error shown when a launch fails, and `bedrock-on-linux
+  report` in a terminal. You write a title and a comment; the launcher adds
+  its version and install type, the pinned and installed components, your
+  Minecraft build, distribution, kernel, session, GPU and drivers, the
+  settings that change behaviour and the end of the logs. Every part goes
+  through one privacy pass that removes your user name and home folder,
+  host name, gamertag, XUID, e-mail, IP and MAC addresses, serial numbers,
+  tokens, and the names of your worlds, servers and profiles; a line that
+  might still name you is dropped. The window shows exactly what will be
+  sent, with a box to leave each part out, and names where it goes. Nothing
+  is sent before you press Send. For now Send opens GitHub's issue form in
+  your browser with the summary filled in and the full report saved to
+  attach; the relay that files it in one click is in the repository, not
+  yet deployed. See [docs/report-relay.md](docs/report-relay.md).
 - `bedrock-on-linux --version`.
 
 ### Changed
