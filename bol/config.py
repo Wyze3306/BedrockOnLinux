@@ -158,7 +158,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native24"
 # 2.5 GB on disk any more, nor its archive 863 MB.
 WINEGDK_ARCHIVE_SHA256 = "67be80852e20d74fb5d936de4350fd8b7406f1f0955f5f722bbd2ba38abd5f8c"
 # Build workflows verify this deterministic intermediate before reusing it.
-WINEGDK_PREFIX_SHA256 = "02fccb6a4e65ef7a8646b6752efe49473dbf3d89e2b1394ea1ae582ffc8371af"
+WINEGDK_PREFIX_SHA256 = "3abba830089fc7f2b788ab8228024fa8573c8530f7458c9e7ae45419dd9f9a58"
 
 SELF_REPO = WINEGDK_PREBUILT_REPO
 
