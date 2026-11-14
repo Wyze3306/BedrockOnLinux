@@ -1,0 +1,22 @@
+# TLS in front of the relay, with Caddy. Replace the host name with the one
+# the DNS record points at; Caddy obtains and renews the certificate itself.
+#
+# No access log on purpose: the relay promises not to keep addresses, and a
+# proxy log would keep them for it.
+
+reports.example.org {
+	# Only the two paths the relay has.
+	@relay path /v1/report /healthz
+	handle @relay {
+		request_body {
+			max_size 500KB
+		}
+		reverse_proxy 127.0.0.1:8787
+	}
+	handle {
+		respond 404
+	}
+	log {
+		output discard
+	}
+}
