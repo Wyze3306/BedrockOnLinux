@@ -1573,6 +1573,11 @@ class MainWindow(QMainWindow):
         window when Minecraft starts is a feature, and it is what supervises
         the session afterwards.
         """
+        # The report window owns two threads of its own and waits for them
+        # when it closes: close it before the window that parents it goes.
+        report_dialog = getattr(self, "_report_dialog", None)
+        if report_dialog is not None and _alive(report_dialog):
+            report_dialog.done(0)
         for worker in self._workers.values():
             if worker is not None and worker.isRunning():
                 _park_worker(worker)
@@ -1725,6 +1730,10 @@ class MainWindow(QMainWindow):
         ver_lbl = QLabel(f"v{VERSION}"); ver_lbl.setObjectName("Muted")
         foot.addWidget(ver_lbl)
         foot.addStretch(1)
+        foot.addWidget(btn("Report", self.open_report, kind="ghost-small",
+                           h=24, tip="Report a problem: send what is needed "
+                                     "to diagnose it, with nothing personal "
+                                     "in it"))
         foot.addWidget(btn("GitHub", self._open_github, kind="ghost-small",
                            h=24))
         v.addWidget(self.rail_foot)
@@ -3262,8 +3271,16 @@ class MainWindow(QMainWindow):
                                  title="Minecraft could not start",
                                  then=self._play_again_after_ack)
         else:
-            self.error_box("Minecraft could not start", message[:2000])
+            # With the way to report it one click away (see error_box).
+            self.error_box("Minecraft could not start", message[:2000],
+                           report=True)
         self._offer_pending_restart()
+
+    def open_report(self, title="", comment=""):
+        """The "Report a problem" window (bol.gui_report)."""
+        from .gui_report import open_report_dialog
+        return open_report_dialog(self, title=title or "",
+                                  comment=comment or "")
 
     def _play_again_after_ack(self):
         """The player pressed PLAY and answered Yes: carry on with PLAY.
@@ -4297,6 +4314,12 @@ class MainWindow(QMainWindow):
                 tip="Confirm the previous graphics-driver incident has been "
                     "checked, so PLAY is unblocked again.")
             maintenance.addWidget(self.gpu_ack_btn)
+        maintenance.addWidget(tool_row(
+            "Report a problem…", self.open_report,
+            tip="Send the launcher's developers what they need to diagnose "
+                "a problem: your description, system information and logs, "
+                "with everything personal removed. You see all of it "
+                "before anything is sent."))
         maintenance.addWidget(tool_row("Open logs folder",
                                    lambda: subprocess.Popen(["xdg-open", str(LOGS)],
                                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
@@ -5244,8 +5267,22 @@ class MainWindow(QMainWindow):
     def warn_box(self, title, message):
         self._box(QMessageBox.Warning, title, message).exec()
 
-    def error_box(self, title, message):
-        self._box(QMessageBox.Critical, title, message).exec()
+    def error_box(self, title, message, report=False):
+        """An error; with `report`, a button that opens "Report a problem"
+        with this error already in the comment, so a player who has no idea
+        what the message means still sends it."""
+        box = self._box(QMessageBox.Critical, title, message)
+        if not report:
+            box.exec()
+            return
+        report_button = box.addButton("Report a problem…",
+                                      QMessageBox.ActionRole)
+        box.setDefaultButton(box.addButton(QMessageBox.Ok))
+        box.exec()
+        if box.clickedButton() is report_button:
+            self.open_report(
+                title=title,
+                comment="The launcher showed this error:\n" + message[:1500])
 
     def question_box(self, title, message) -> bool:
         box = self._box(QMessageBox.Question, title, message)
