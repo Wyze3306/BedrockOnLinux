@@ -786,9 +786,12 @@ for arch in "${ARCHES[@]}"; do
     echo "!! WineGDK StorageFile runtime missing for $arch" >&2; exit 1; }
   has_text "$storage" "Microsoft.Windows.Storage.Pickers.FileOpenPicker" || {
     echo "!! WineGDK native FileOpenPicker class missing for $arch" >&2; exit 1; }
-  has_text "$storage" "PickSingleFileAsync" || {
+  # The two pick operations, by the name each gives its lock: a string of the
+  # code itself. The method names were only ever symbols, which a stripped
+  # module (native24) no longer carries.
+  has_text "$storage" ": file_picker_operation.cs" || {
     echo "!! WineGDK native single-file picker method missing for $arch" >&2; exit 1; }
-  has_text "$storage" "PickMultipleFilesAsync" || {
+  has_text "$storage" ": multi_file_picker_operation.cs" || {
     echo "!! WineGDK native multi-file picker method missing for $arch" >&2; exit 1; }
   has_file_picker_registration "$storage" || {
     echo "!! WineGDK native FileOpenPicker registration missing for $arch" >&2

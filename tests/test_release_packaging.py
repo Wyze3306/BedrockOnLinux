@@ -729,8 +729,8 @@ class EnginePackagingComplianceTests(unittest.TestCase):
             "xgameruntime.dll.threading",
             "windows.storage.dll",
             "Microsoft.Windows.Storage.Pickers.FileOpenPicker",
-            "PickSingleFileAsync",
-            "PickMultipleFilesAsync",
+            ": file_picker_operation.cs",
+            ": multi_file_picker_operation.cs",
             "GDK-Proton10-32.tar.gz",
             "1e80f4e714f877f42101d5775bd38ca0a15a38d304e24af1f15c6deec4ebac2d",
             "4c3e3faf5bcd86779e4a69677902dd8b36a16e1136a5901e616c36d8a02b68f6",
@@ -762,9 +762,10 @@ class EnginePackagingComplianceTests(unittest.TestCase):
         )
         class_marker = script.index(
             '"Microsoft.Windows.Storage.Pickers.FileOpenPicker"', module)
-        method_marker = script.index('"PickSingleFileAsync"', class_marker)
+        method_marker = script.index(
+            '": file_picker_operation.cs"', class_marker)
         multi_method_marker = script.index(
-            '"PickMultipleFilesAsync"', method_marker)
+            '": multi_file_picker_operation.cs"', method_marker)
         registration = script.index(
             'has_file_picker_registration "$storage"', method_marker)
         loop_end = script.index("\ndone", registration)
