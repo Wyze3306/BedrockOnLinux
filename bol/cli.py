@@ -398,6 +398,90 @@ def _cmd_update(a):
         info("Update skipped.")
 
 
+def _cmd_report(a, ask=input, out=print):
+    """Collect a problem report, show what is in it, and send it on a yes.
+
+    Nothing leaves before the confirmation: --preview and --output never
+    send, and without a terminal the command stops unless --yes was given.
+    """
+    from . import report as problem
+
+    info("Collecting system information and logs (nothing is sent yet) …")
+    report = problem.collect()
+    known = {piece.key.removeprefix("log:"): piece for piece in report.pieces}
+    for name in a.without or ():
+        piece = known.get(name)
+        if piece is None:
+            die(f"Unknown part '{name}'; this report has: "
+                + ", ".join(sorted(known)))
+        piece.included = False
+
+    title, comment = a.title, a.comment
+    if a.comment_file:
+        try:
+            comment = Path(a.comment_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            die(f"Cannot read {a.comment_file}: {exc}")
+    asking = IS_TTY and not (a.preview or a.output or a.yes)
+    if not title and asking:
+        title = ask("Title (one line, what goes wrong): ")
+    if comment is None and asking:
+        comment = ask("What happened, and what did you expect? ")
+    report.set_message(title or "", comment or "")
+
+    out("")
+    out("This report contains:")
+    for piece in report.pieces:
+        out(f"  [{'x' if piece.included else ' '}] "
+            f"{piece.key.removeprefix('log:'):<22} {piece.title} "
+            f"({len(piece.text):,} characters)")
+    removed = report.removed()
+    out("Removed before anything is shown or sent: "
+        + (removed or "nothing personal was found") + ".")
+    out("")
+    if a.preview:
+        out(report.full_text())
+        info("Preview only: nothing was sent.")
+        return
+    if a.output:
+        target = Path(a.output).expanduser()
+        try:
+            target.write_text(report.full_text(), encoding="utf-8")
+        except OSError as exc:
+            die(f"Cannot write {target}: {exc}")
+        ok(f"Report saved to {target}. Nothing was sent.")
+        return
+    if not report.title:
+        die("A report needs a title: --title \"what goes wrong\".")
+
+    relay = None if a.browser else problem.relay_url()
+    out(problem.destination() if relay else problem.destination(
+        {problem.RELAY_ENV: "off"}))
+    out(f"See all of it first with:  {APP} report --preview")
+    if not a.yes:
+        if not IS_TTY:
+            die("Nothing was sent: confirm with --yes, or run this in a "
+                "terminal.")
+        answer = ask("Send this report? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            info("Nothing was sent.")
+            return
+    if relay:
+        try:
+            ok("Report filed: " + problem.send(report, relay))
+            return
+        except problem.ReportError as exc:
+            warn(f"{exc} Falling back to the browser.")
+    path, url, opened = problem.open_in_browser(report)
+    ok(f"Full report saved to {path}")
+    if opened:
+        info("Your browser is opening GitHub's new-issue form with the "
+             "summary filled in. Attach that file there, then submit.")
+    else:
+        info("Open this address to file the issue, and attach that file:")
+        out(url)
+
+
 def main():
     p = argparse.ArgumentParser(prog=APP, description=f"{PRETTY} {VERSION}")
     # Also what an update runs once before it replaces anything (bol.update).
@@ -531,6 +615,27 @@ def main():
     np.add_argument("mode", nargs="?", choices=("auto", "ask", "off"),
                     help="auto: check at startup; ask: only on request; "
                          "off: never")
+
+    rp = sub.add_parser(
+        "report",
+        help="report a problem: system information and logs, with personal "
+             "data removed, filed as an issue once you confirm")
+    rp.add_argument("--title", help="one line saying what goes wrong")
+    rp.add_argument("--comment", help="what happened and what you expected")
+    rp.add_argument("--comment-file", metavar="FILE",
+                    help="read the comment from a file")
+    rp.add_argument("--without", action="append", metavar="PART",
+                    help="leave a part out, by the name the list shows "
+                         "(settings, minecraft.log, …); repeatable")
+    rp.add_argument("--preview", action="store_true",
+                    help="print everything that would be sent, send nothing")
+    rp.add_argument("--output", metavar="FILE",
+                    help="save the full report to a file, send nothing")
+    rp.add_argument("--browser", action="store_true",
+                    help="open GitHub's issue form in your browser instead "
+                         "of sending through the report relay")
+    rp.add_argument("--yes", action="store_true",
+                    help="send without asking for confirmation")
 
     sub.add_parser("changelog", help="display the launcher's release changelog history")
 
@@ -670,6 +775,8 @@ def main():
             _cmd_update(a)
         elif a.cmd == "network":
             _cmd_network(a)
+        elif a.cmd == "report":
+            _cmd_report(a)
         elif a.cmd == "import":
             cmd_import(a.files)
         elif a.cmd == "repair":
@@ -712,5 +819,6 @@ def main():
             # terminal with a sign-in it cannot start.
             info(f"Sign in with:  {APP} store-login")
         if a.cmd == "play":
+            info(f"Report it, logs included, with:  {APP} report")
             _report_launch_failure(str(exc))
         sys.exit(1)
