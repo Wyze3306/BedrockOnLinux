@@ -365,8 +365,9 @@ class ContentDetails(QDialog):
         self.files_layout.addWidget(loading)
         outer.addWidget(self.files_host)
 
-        self.text = QTextBrowser()
-        self.text.setOpenExternalLinks(True)
+        from .gui import _guard_links  # noqa: PLC0415 - avoids a cycle
+        # The description is the project author's HTML: web links only.
+        self.text = _guard_links(QTextBrowser())
         palette = self.text.palette()
         palette.setColor(QPalette.Text, QColor(theme.fg))
         palette.setColor(QPalette.Base, QColor(theme.card))

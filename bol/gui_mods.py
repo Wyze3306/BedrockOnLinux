@@ -423,8 +423,9 @@ class ModDetails(QDialog):
         self.info.setObjectName("Muted")
         self.info.setWordWrap(True)
         outer.addWidget(self.info)
-        self.readme = QTextBrowser()
-        self.readme.setOpenExternalLinks(True)
+        from .gui import _guard_links  # noqa: PLC0415 - avoids a cycle
+        # The README is the mod author's, off the network: web links only.
+        self.readme = _guard_links(QTextBrowser())
         theme = page.win.theme
         palette = self.readme.palette()
         palette.setColor(QPalette.Text, QColor(theme.fg))
@@ -1372,7 +1373,10 @@ class ModsPage(QFrame):
                          stderr=subprocess.DEVNULL)
 
     def open_url(self, url):
-        self.open_path(url)
+        from .gui import _web_link  # noqa: PLC0415 - avoids a cycle
+        # The mod's own links come from its page: web links only (#379).
+        if _web_link(url):
+            self.open_path(url)
 
     def sizeHint(self):
         return QSize(960, 640)

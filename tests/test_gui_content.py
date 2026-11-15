@@ -226,6 +226,9 @@ class ContentPageTests(unittest.TestCase):
             self.assertIn("Installed Cool", page.op_label.text())
             self.assertTrue(page._cards[0].badge.isVisibleTo(page._cards[0]))
             self.assertTrue(dialog.cf_button.isVisibleTo(dialog))
+            # The description is the author's HTML: web links only (#379).
+            self.assertFalse(dialog.text.openExternalLinks())
+            self.assertFalse(dialog.text.openLinks())
             dialog.close()
 
     def test_a_failed_install_is_reported(self):

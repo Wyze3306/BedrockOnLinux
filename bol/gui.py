@@ -23,7 +23,7 @@ from PySide6.QtCore import (
     QObject, QPoint, QPointF, QRect, QSize, QSocketNotifier, Qt, QThread, QTimer, Signal,
     Slot,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QGridLayout, QHBoxLayout, QInputDialog, QLabel,
@@ -73,6 +73,47 @@ except ImportError:  # pragma: no cover - shiboken6 ships alongside PySide6
 # scale of its own and the byte counts stay in Python, where they fit. Fine
 # enough for a bar: one step is a tenth of a percent.
 BAR_STEPS = 1000
+
+
+# The only link schemes a changelog may open. The text comes off the network
+# (feedback.minecraft.net articles, GitHub release notes), and a QTextBrowser
+# left to open its own links hands any scheme to the desktop -- file:, smb:,
+# ssh:, steam: and whatever else has a handler (#379).
+_LINK_SCHEMES = ("http", "https")
+
+
+def _web_link(url) -> bool:
+    """True if ``url`` (a str or QUrl) is an http(s) link with a host."""
+    text = url.toString() if hasattr(url, "toString") else str(url or "")
+    m = re.match(r"\s*([A-Za-z][A-Za-z0-9+.-]*)://([^/?#\s]+)", text)
+    return bool(m) and m.group(1).lower() in _LINK_SCHEMES
+
+
+def _href(url) -> str:
+    """``url`` quoted for an href attribute, or "" if it is not a web link."""
+    return html.escape(str(url), quote=True) if url and _web_link(url) else ""
+
+
+def _open_web_link(url) -> bool:
+    """Open an http(s) ``url`` in the browser; refuse every other scheme."""
+    if not _web_link(url):
+        warn(f"Not opening a non-web link from the changelog: "
+             f"{url.toString() if hasattr(url, 'toString') else url}")
+        return False
+    return bool(QDesktopServices.openUrl(url))
+
+
+def _guard_links(view):
+    """Route a QTextBrowser's link clicks through _open_web_link().
+
+    setOpenLinks(False) is the half that is easy to miss: without it the
+    browser follows the link itself with setSource(), which would show a
+    file: URL's contents in the changelog.
+    """
+    view.setOpenExternalLinks(False)
+    view.setOpenLinks(False)
+    view.anchorClicked.connect(_open_web_link)
+    return view
 
 
 def _alive(widget) -> bool:
@@ -4806,10 +4847,8 @@ class MainWindow(QMainWindow):
 
         self.changelog_tabs = QTabWidget()
         outer.addWidget(self.changelog_tabs, 1)
-        self.game_changelog_view = QTextBrowser()
-        self.game_changelog_view.setOpenExternalLinks(True)
-        self.launcher_changelog_view = QTextBrowser()
-        self.launcher_changelog_view.setOpenExternalLinks(True)
+        self.game_changelog_view = _guard_links(QTextBrowser())
+        self.launcher_changelog_view = _guard_links(QTextBrowser())
         self.changelog_tabs.addTab(self.game_changelog_view, "Game")
         self.changelog_tabs.addTab(self.launcher_changelog_view, "Launcher")
         return page
@@ -4978,7 +5017,13 @@ class MainWindow(QMainWindow):
         text = html.escape(text or "")
         text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
         text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
-        text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
+        # Only web links become live; anything else keeps its text. The URL
+        # is already escaped with the rest of the text above.
+        text = re.sub(
+            r"\[([^\]]+)\]\(([^)]+)\)",
+            lambda m: (f'<a href="{m.group(2)}">{m.group(1)}</a>'
+                       if _web_link(html.unescape(m.group(2))) else m.group(1)),
+            text)
         lines = []
         in_list = False
         for line in text.split("\n"):
@@ -5016,7 +5061,7 @@ class MainWindow(QMainWindow):
             name = rel.get("name")
             date = (rel.get("published_at") or "").split("T")[0]
             body = (rel.get("body") or "").strip()
-            url = rel.get("html_url")
+            url = _href(rel.get("html_url"))
             title = f"{tag} — {name}" if name and name != tag else tag
             title_html = f'<a href="{url}">{html.escape(title)}</a>' if url else html.escape(title)
             parts.append(f"<h2 class='release-title'>{title_html}</h2>")
@@ -5051,7 +5096,7 @@ class MainWindow(QMainWindow):
             title = format_display_version(title, is_beta)
             date = (art.get("updated_at") or "").split("T")[0]
             body = art.get("body") or ""
-            url = art.get("html_url")
+            url = _href(art.get("html_url"))
             title_html = f'<a href="{url}">{html.escape(title)}</a>' if url else html.escape(title)
             parts.append(f"<h2 class='release-title'>{title_html}</h2>")
             parts.append(f"<div class='release-date'>{date}</div>")

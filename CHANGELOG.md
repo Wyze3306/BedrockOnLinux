@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Three hardening gaps around the Store sign-in and the changelog.** A
+  link in either changelog tab now opens only if it is http or https: the
+  text comes off the network, and a `file:`, `smb:`, `ssh:` or `steam:` link
+  used to go straight to the desktop's handler for it. The Store keyring,
+  which holds the device credentials and the account's Passport session, is
+  now 0600: Xodus writes it 0644, so the sign-in runs under a 0077 umask and
+  an existing keyring is tightened the next time the launcher runs Xodus.
+  A `XODUS_LOG` set in the shell no longer reaches xodus-cli, which at trace
+  level logs decrypted token exchanges into `logs/store-*.log`;
+  `BOL_XODUS_LOG` turns its logging on, capped at debug (#379).
+
 ## 3.0.0 — 2026-11-14 (pre-release)
 
 A pre-release of the next major version. Add-ons, maps and texture packs

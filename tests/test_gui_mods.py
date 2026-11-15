@@ -163,6 +163,10 @@ class ModsPageTests(unittest.TestCase):
             text = details.readme.toPlainText()
             self.assertIn("Makes everything fast.", text)
             self.assertNotIn("badge", text)
+            # The README is the author's: its links go through the web-only
+            # filter, not straight to the desktop (#379).
+            self.assertFalse(details.readme.openExternalLinks())
+            self.assertFalse(details.readme.openLinks())
             details.close()
 
 
