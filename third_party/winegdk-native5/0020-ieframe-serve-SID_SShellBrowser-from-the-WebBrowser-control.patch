@@ -1,0 +1,57 @@
+From: BedrockOnLinux contributors
+Subject: [PATCH] ieframe: serve SID_SShellBrowser from the WebBrowser control
+ and give its window
+
+OneAuth, which signs in Minecraft Education, asks the WebBrowser control
+for QueryService(SID_SShellBrowser, IID_IOleWindow) and hooks the thread
+of the window it gets back. The control answered E_NOINTERFACE and
+IShellBrowser::GetWindow returned E_NOTIMPL, so every sign-in ended on
+"Something went wrong [9zj22]" right after the e-mail address.
+---
+ dlls/ieframe/shellbrowser.c | 14 ++++++++++++--
+ dlls/ieframe/webbrowser.c   |  7 +++++++
+ 2 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ieframe/shellbrowser.c b/dlls/ieframe/shellbrowser.c
+index e2c4c451741..f38e2241e75 100644
+--- a/dlls/ieframe/shellbrowser.c
++++ b/dlls/ieframe/shellbrowser.c
+@@ -112,8 +112,18 @@ static HRESULT WINAPI ShellBrowser_GetWindow(
+         HWND *phwnd)
+ {
+     ShellBrowser *This = impl_from_IShellBrowser(iface);
+-    FIXME("%p %p\n", This, phwnd);
+-    return E_NOTIMPL;
++
++    TRACE("%p %p\n", This, phwnd);
++
++    if(!phwnd)
++        return E_POINTER;
++
++    *phwnd = NULL;
++    if(!This->doc_host)
++        return E_FAIL;
++
++    *phwnd = This->doc_host->frame_hwnd ? This->doc_host->frame_hwnd : This->doc_host->hwnd;
++    return *phwnd ? S_OK : E_FAIL;
+ }
+ 
+ static HRESULT WINAPI ShellBrowser_ContextSensitiveHelp(
+diff --git a/dlls/ieframe/webbrowser.c b/dlls/ieframe/webbrowser.c
+index 857287f6311..2349ac38986 100644
+--- a/dlls/ieframe/webbrowser.c
++++ b/dlls/ieframe/webbrowser.c
+@@ -1218,6 +1218,13 @@ static HRESULT STDMETHODCALLTYPE WBServiceProvider_QueryService(IServiceProvider
+         return E_FAIL;
+     }
+ 
++    /* The control is its own shell browser, as it is to the document it hosts.
++     * OneAuth asks for it here to learn the window of the browser. */
++    if(IsEqualGUID(&SID_SShellBrowser, guidService)) {
++        TRACE("(%p)->(SID_SShellBrowser %s %p)\n", This, debugstr_guid(riid), ppv);
++        return IServiceProvider_QueryService(&This->doc_host.IServiceProvider_iface, guidService, riid, ppv);
++    }
++
+     FIXME("(%p)->(%s, %s %p)\n", This, debugstr_guid(guidService), debugstr_guid(riid), ppv);
+     *ppv = NULL;
+     return E_NOINTERFACE;

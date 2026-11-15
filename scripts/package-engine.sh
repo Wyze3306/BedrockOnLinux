@@ -364,6 +364,7 @@ WINEGDK_NATIVE_PROVENANCE_FILES=(
   0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch
   0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch
   0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch
+  0020-ieframe-serve-SID_SShellBrowser-from-the-WebBrowser-control.patch
 )
 
 verify_sha256() {
@@ -416,10 +417,10 @@ verify_winegdk_source_provenance() {
     "ee0543f11737a11f5edec389967bb41482c7f5eda3807c24d171dd6bf6301274" \
     "WineGDK r12 source delta"
   verify_sha256 "$native_root/README.md" \
-    "8f84d8a2084bb0eb7bf0eb669c7b13acc66dc4fa356dbd445a85dba779bbe4f6" \
+    "4413fceb6f16fbb2c6b75fee9ca6a393cbcebe67de200e7e81602ce0559f743c" \
     "WineGDK native5 source-delta README"
   verify_sha256 "$native_root/SOURCE-SHA256SUMS" \
-    "aaf05bc46d254c997c7eb5dc94c317cf59da5deffc47691a80155d5b30a55919" \
+    "e57757381892620d207d5228a098e4fabfc813851801067648c3c6651a6834ba" \
     "WineGDK native5 source hash lock"
   verify_sha256 \
     "$native_root/0001-winegdk-native5-Xbox-and-file-picker-runtime.patch" \
@@ -497,6 +498,10 @@ verify_winegdk_source_provenance() {
     "$native_root/0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch" \
     "8e5c60b1eb3e9494abab7ff61f3e4cc8eed1f1d73a31623d76d07f24a35086fb" \
     "WineGDK jscript call flags"
+  verify_sha256 \
+    "$native_root/0020-ieframe-serve-SID_SShellBrowser-from-the-WebBrowser-control.patch" \
+    "b53e95a2d11125744c5abd25ad60c53d32b35adae0c451b4ff85b47b94e4c215" \
+    "WineGDK ieframe shell browser window"
 }
 
 has_marker() {
@@ -1001,6 +1006,7 @@ for relative_root, names in (
         "native5/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch",
         "native5/0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch",
         "native5/0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch",
+        "native5/0020-ieframe-serve-SID_SShellBrowser-from-the-WebBrowser-control.patch",
     )),
     (gdk_proton_provenance_root, ("provenance.env",)),
 ):

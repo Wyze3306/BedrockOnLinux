@@ -184,6 +184,9 @@ offered this version: download it from this release to try it.
   off in the game's memory, so the account signs in through the game's own
   window. It only does so after checking the bytes of a build it knows
   (1.26.33.0), and it cannot reach the game inside the Flatpak (#351).
+  Engine native27 fixes what came next: the sign-in window asked Wine's
+  Internet Explorer for its own window, got nothing, and stopped on
+  "Something went wrong [9zj22]" (WineGDK patch 0020).
 
 - **"Could not initialise the Wine prefix" says why.** The dialog only
   pointed at a log file. It now gives what wineboot did (timed out, exited

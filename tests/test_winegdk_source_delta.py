@@ -83,10 +83,14 @@ CALL_FLAGS_PATCH = (
     DELTA
     / "0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch"
 )
+SHELL_BROWSER_PATCH = (
+    DELTA / "0020-ieframe-serve-SID_SShellBrowser-from-the-WebBrowser-control.patch"
+)
 # The follow-ups after 0013. They were first applied around the manifest so
 # that native22 kept verifying; native23 pins every file they change.
 LATE_PATCHES = (FSYNC_PATCH, VM_COUNTERS_PATCH, TIME_ZONE_PATCH,
-                GAME_EVENT_PATCH, INTL_PATCH, CALL_FLAGS_PATCH)
+                GAME_EVENT_PATCH, INTL_PATCH, CALL_FLAGS_PATCH,
+                SHELL_BROWSER_PATCH)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -94,6 +98,8 @@ CHANGED_FILES = {
     "dlls/combase/dcom.idl",
     "dlls/combase/marshal.c",
     "dlls/combase/stubmanager.c",
+    "dlls/ieframe/shellbrowser.c",
+    "dlls/ieframe/webbrowser.c",
     "dlls/jscript/Makefile.in",
     "dlls/jscript/dispex.c",
     "dlls/jscript/global.c",
@@ -1092,6 +1098,25 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
                 self.assertEqual(
                     digest,
                     re.search(r'^readonly VENDORED_CALL_FLAGS_PATCH_SHA256="([^"]+)"',
+                              script.read_text(), re.MULTILINE).group(1))
+        self.assertIn(digest, PACKAGER.read_text())
+
+    def test_webbrowser_gives_oneauth_its_window(self):
+        # #351: OneAuth asks the WebBrowser control for SID_SShellBrowser and
+        # its window right after the e-mail address; both failed and sign-in
+        # ended on "Something went wrong [9zj22]".
+        additions = self._additions(SHELL_BROWSER_PATCH)
+        self.assertIn("IsEqualGUID(&SID_SShellBrowser, guidService)", additions)
+        self.assertIn("*phwnd = This->doc_host->frame_hwnd", additions)
+        self.assertEqual(self._changed_files(SHELL_BROWSER_PATCH),
+                         {"dlls/ieframe/shellbrowser.c",
+                          "dlls/ieframe/webbrowser.c"})
+        digest = hashlib.sha256(SHELL_BROWSER_PATCH.read_bytes()).hexdigest()
+        for script in (SCRIPT, CONTAINER_SCRIPT):
+            with self.subTest(script=script.name):
+                self.assertEqual(
+                    digest,
+                    re.search(r'^readonly VENDORED_SHELL_BROWSER_PATCH_SHA256="([^"]+)"',
                               script.read_text(), re.MULTILINE).group(1))
         self.assertIn(digest, PACKAGER.read_text())
 

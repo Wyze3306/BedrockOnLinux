@@ -61,8 +61,10 @@ readonly VENDORED_INTL_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0018-jsc
 readonly VENDORED_INTL_PATCH_SHA256="154f48790e2a8eecd970438cda3caf3bfea5e0b72f5012f2dd0379d3e49de61a"
 readonly VENDORED_CALL_FLAGS_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch"
 readonly VENDORED_CALL_FLAGS_PATCH_SHA256="8e5c60b1eb3e9494abab7ff61f3e4cc8eed1f1d73a31623d76d07f24a35086fb"
+readonly VENDORED_SHELL_BROWSER_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0020-ieframe-serve-SID_SShellBrowser-from-the-WebBrowser-control.patch"
+readonly VENDORED_SHELL_BROWSER_PATCH_SHA256="b53e95a2d11125744c5abd25ad60c53d32b35adae0c451b4ff85b47b94e4c215"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
-readonly SOURCE_SHA256SUMS_SHA256="aaf05bc46d254c997c7eb5dc94c317cf59da5deffc47691a80155d5b30a55919"
+readonly SOURCE_SHA256SUMS_SHA256="e57757381892620d207d5228a098e4fabfc813851801067648c3c6651a6834ba"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
 readonly GLIBC_CEILING="2.31"
@@ -641,6 +643,11 @@ fi
 [[ "$(sha256sum "$VENDORED_CALL_FLAGS_PATCH" | cut -d' ' -f1)" == \
     "$VENDORED_CALL_FLAGS_PATCH_SHA256" ]] ||
   die "vendored jscript call flags patch SHA-256 mismatch"
+[[ -f "$VENDORED_SHELL_BROWSER_PATCH" ]] ||
+  die "vendored ieframe shell browser patch is missing"
+[[ "$(sha256sum "$VENDORED_SHELL_BROWSER_PATCH" | cut -d' ' -f1)" == \
+    "$VENDORED_SHELL_BROWSER_PATCH_SHA256" ]] ||
+  die "vendored ieframe shell browser patch SHA-256 mismatch"
 [[ "$SOURCE_DATE_EPOCH" == "$EXPECTED_SOURCE_DATE_EPOCH" ]] ||
   die "WineGDK source timestamp changed: $SOURCE_DATE_EPOCH"
 
@@ -700,6 +707,7 @@ vendored_time_zone_patch_sha256=$VENDORED_TIME_ZONE_PATCH_SHA256
 vendored_game_event_patch_sha256=$VENDORED_GAME_EVENT_PATCH_SHA256
 vendored_intl_patch_sha256=$VENDORED_INTL_PATCH_SHA256
 vendored_call_flags_patch_sha256=$VENDORED_CALL_FLAGS_PATCH_SHA256
+vendored_shell_browser_patch_sha256=$VENDORED_SHELL_BROWSER_PATCH_SHA256
 source_sha256sums_sha256=$SOURCE_SHA256SUMS_SHA256
 source_date_epoch=$SOURCE_DATE_EPOCH
 debian_suite=$DEBIAN_SUITE
@@ -822,6 +830,11 @@ git -C "$WORK_ROOT/source" apply --check "$VENDORED_CALL_FLAGS_PATCH" ||
   die "vendored jscript call flags patch does not apply"
 git -C "$WORK_ROOT/source" apply "$VENDORED_CALL_FLAGS_PATCH" ||
   die "could not apply vendored jscript call flags patch"
+printf '==> Applying the ieframe shell browser window fix\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_SHELL_BROWSER_PATCH" ||
+  die "vendored ieframe shell browser patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_SHELL_BROWSER_PATCH" ||
+  die "could not apply vendored ieframe shell browser patch"
 [[ -f "$SOURCE_SHA256SUMS" ]] || die "WineGDK source hash manifest is missing"
 [[ "$(sha256sum "$SOURCE_SHA256SUMS" | cut -d' ' -f1)" == \
     "$SOURCE_SHA256SUMS_SHA256" ]] ||

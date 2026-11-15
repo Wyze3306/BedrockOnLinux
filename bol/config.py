@@ -100,13 +100,13 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 # match the reviewed pins below.
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
 # The commit alone does not identify vendored follow-up patches.
-WINEGDK_SOURCE_MANIFEST_SHA256 = "aaf05bc46d254c997c7eb5dc94c317cf59da5deffc47691a80155d5b30a55919"
+WINEGDK_SOURCE_MANIFEST_SHA256 = "e57757381892620d207d5228a098e4fabfc813851801067648c3c6651a6834ba"
 # How the WineGDK prefix is built from that source, when not the way it first
 # was: it is part of what the bytes are, so it is part of the name of the
 # release that holds them (scripts/winegdk-release-tag.sh). "stripped"
 # installs Wine's modules without their debugging sections.
 WINEGDK_PREFIX_RECIPE = "stripped"
-WINEGDK_BUILD_REV = "wow64-archs-native26"
+WINEGDK_BUILD_REV = "wow64-archs-native27"
 # native22 carries the ntdll loader patches the Microsoft Store packages need:
 # 0007 maps the main image from a descriptor, 0008 from a path so it survives
 # the Steam Linux Runtime container. Their game executable stays encrypted on
@@ -164,6 +164,10 @@ WINEGDK_BUILD_REV = "wow64-archs-native26"
 # native26 makes jscript call a method on the first use of an mshtml object
 # instead of returning it (0019): the Office sign-in page Education opens
 # first drew no form, because Knockout's first createElement got a function.
+#
+# native27 lets ieframe's WebBrowser control give OneAuth its window through
+# SID_SShellBrowser (0020): Education's sign-in stopped on "Something went
+# wrong [9zj22]" right after the e-mail address.
 WINEGDK_ARCHIVE_SHA256 = "fba82bf839d21eb013e0f1830eff57e5316b08cc6b6de2acf3a6c3ddb4a5715c"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "83efa0fd6afd23a96fc90f04adae8ae8e38cacddf41739964091ebbfb7b373ae"

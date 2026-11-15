@@ -204,9 +204,9 @@ rather than behind a new configure check, and the server protocol files that
 builders also refuse a wineserver that lacks the fallback.
 
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
-native5 delta and its follow-ups through `0019`. The Bullseye builder applies
+native5 delta and its follow-ups through `0020`. The Bullseye builder applies
 the reviewed r12 and native patches when the target commit is unavailable,
-always applies `0002` through `0019`, then verifies the complete resulting
+always applies `0002` through `0020`, then verifies the complete resulting
 source tree; the container builder does the same on the target commit. Each
 patch is also pinned by its own SHA-256 in both builders and in the
 packager. `0014` to `0017` were first applied around the manifest, so that the
@@ -267,3 +267,11 @@ and the Office sign-in page Minecraft Education opens first
 (issue #351). A getter takes no arguments, so the change leaves every
 argument-less case upstream tests as it was. native26 is the first engine
 built with it.
+
+`0020` lets the WebBrowser control answer
+`QueryService(SID_SShellBrowser, ...)` itself, through the shell browser its
+document already gets, and makes `IShellBrowser::GetWindow` return the
+browser's window instead of `E_NOTIMPL`. OneAuth, which signs Minecraft
+Education in, asks for that window right after the e-mail address, to hook
+the browser's thread. Both calls failed, and sign-in ended on "Something went
+wrong [9zj22]" (issue #351). native27 is the first engine built with it.
