@@ -162,7 +162,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native25"
 # account page it opens stayed an empty card without it (#351).
 WINEGDK_ARCHIVE_SHA256 = "06f87bcda4ccf139efc05fa943c3f5110aa9bbea08c4a8e2ebaafedaa818ef7f"
 # Build workflows verify this deterministic intermediate before reusing it.
-WINEGDK_PREFIX_SHA256 = "3abba830089fc7f2b788ab8228024fa8573c8530f7458c9e7ae45419dd9f9a58"
+WINEGDK_PREFIX_SHA256 = "c0f4cdeb89b0f07b13b38838f323f360a1cebd406671f35ffd68aa22cc7ba615"
 
 SELF_REPO = WINEGDK_PREBUILT_REPO
 
