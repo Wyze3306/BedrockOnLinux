@@ -143,6 +143,14 @@ ENDPOINTS = (
         "BedrockOnLinux server browser is on. Refreshed at most twice a "
         "day."),
     Endpoint(
+        "content", ("the servers of the community list",),
+        "One RakNet status request per server (UDP), the one the game "
+        "itself sends to show a server's player count. No account, no "
+        "identifier.",
+        "How many players each server has online, at each launch while "
+        "the BedrockOnLinux server browser is on, so the Servers tab can "
+        "sort them and mark the ones that are down."),
+    Endpoint(
         "content", ("feedback.minecraft.net", "api.github.com"),
         _PLAIN_GET,
         "The Minecraft and launcher changelogs, when you open them."),

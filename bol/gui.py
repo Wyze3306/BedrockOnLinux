@@ -3720,12 +3720,12 @@ class MainWindow(QMainWindow):
         browser_row = self._switch(
             "BedrockOnLinux server browser",
             self.settings.get("server_browser", True),
-            "Redraws the game's Servers tab as three sections, for mouse and "
-            "controller alike: your favorite servers, the partner and "
-            "featured servers, and every server of the community list "
-            "github.com/Wyze3306/bedrock-servers-list, searchable by name, "
-            "address, category or keyword. Off shows the game's own tab. "
-            "Takes effect at the next PLAY.")
+            "Redraws the game's Servers tab as one page of tiles, for mouse "
+            "and controller alike: your servers, the partners, the most "
+            "played ones and every server of the community list "
+            "github.com/Wyze3306/bedrock-servers-list, each joined in one "
+            "press and searchable by name, address, category or keyword. "
+            "Off shows the game's own tab. Takes effect at the next PLAY.")
         browser_row.toggled.connect(
             lambda on: self._save_setting("server_browser", on))
         in_game.addWidget(browser_row)

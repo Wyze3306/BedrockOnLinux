@@ -8,19 +8,22 @@
 // only use those placeholders, its own bol_* names and plain JavaScript:
 // every local starts with bol_ so it can never shadow a minified name.
 //
-// The data (catalogue, settings, strings) is the __bolServerBrowser global
-// the launcher writes on the bundle's first line at every launch. With it
-// missing or switched off, every entry point below falls back to vanilla.
+// The data (catalogue, live player counts, settings, strings) is the
+// __bolServerBrowser global the launcher writes on the bundle's first line.
+// With it missing or switched off, the vanilla tab shows.
 //
-// Three sections, one side menu: the player's own servers ("favorites"),
-// the partner and featured servers, and the community list. A catalogue
-// server has no id in the game until it is added to the player's list, so
-// its details pane is drawn here, and "Play" adds it first and then joins
-// through the game's own online-play warning route, as "Add and play" does.
+// One page, built like a game store: a spotlight at the top describing the
+// tile that has focus, a search bar, then rows of big tiles (the player's
+// own servers, the partners, the most played ones, one row per category,
+// then everything). Pressing a tile joins it: a catalogue server is first
+// added to the player's own list, since the game only joins servers it
+// knows, then joined through the game's own online-play warning route.
 
-var bol_state = {section: "", query: "", cat: "", lang: "", shown: 0,
-                 picker: ""};
-var bol_PAGE = 40;
+var bol_state = {query: "", lang: "", open: {}};
+var bol_ROW = 8;
+var bol_PAGE = 24;
+var bol_ctx = {act: null, load: null, direct: null, router: null,
+               toast: null};
 
 function bol_data() {
   return typeof __bolServerBrowser !== "undefined" && __bolServerBrowser
@@ -29,19 +32,6 @@ function bol_data() {
 function bol_on() {
   var bol_d = bol_data();
   return !!(bol_d && bol_d.on);
-}
-function bol_isCat(bol_id) {
-  return typeof bol_id === "string" && bol_id.indexOf("bol-") === 0;
-}
-function bol_isCatRoute(bol_id) {
-  return bol_on() && bol_isCat(bol_id);
-}
-// The list items' own "selected" test: by route for a catalogue server, since
-// the game's details then hold whatever it loaded in the background.
-function bol_selected(bol_v, bol_nd, bol_r) {
-  var bol_id = bol_r && bol_r.id;
-  if (bol_isCatRoute(bol_id)) return bol_v === bol_id;
-  return bol_v === bol_nd.networkDetails.id;
 }
 function bol_t(bol_key, bol_args) {
   var bol_d = bol_data(), bol_s = bol_d && bol_d.strings || {};
@@ -67,68 +57,378 @@ function bol_servers() {
   var bol_d = bol_data();
   return bol_d && bol_d.servers || [];
 }
-function bol_server(bol_id) {
-  var bol_all = bol_servers();
-  for (var bol_i = 0; bol_i < bol_all.length; bol_i++)
-    if (bol_all[bol_i].i === bol_id) return bol_all[bol_i];
-  return null;
-}
-// What a search matches: name and address first, then the categories,
-// country, language and the description.
+// How well a catalogue server answers a search: the name weighs most, then
+// the address and categories, then the description. 0 = no match.
 function bol_score(bol_s, bol_ws) {
   if (!bol_ws.length) return 1;
-  if (!bol_s._head) {
-    bol_s._head = bol_fold(bol_s.n + " " + bol_s.a);
-    bol_s._body = bol_fold((bol_s.t || []).join(" ") + " " + (bol_s.c || "")
-                           + " " + (bol_s.l || "") + " " + (bol_s.d || ""));
-  }
-  var bol_score = 0;
+  var bol_name = bol_fold(bol_s.n), bol_addr = bol_fold(bol_s.a);
+  var bol_tags = bol_fold((bol_s.t || []).join(" ") + " " + (bol_s.ln || "")
+                          + " " + (bol_s.l || "") + " " + (bol_s.c || ""));
+  var bol_desc = bol_fold(bol_s.d), bol_total = 0;
   for (var bol_i = 0; bol_i < bol_ws.length; bol_i++) {
-    if (bol_s._head.indexOf(bol_ws[bol_i]) >= 0) bol_score += 3;
-    else if (bol_s._body.indexOf(bol_ws[bol_i]) >= 0) bol_score += 1;
-    else return 0;
+    var bol_w = bol_ws[bol_i], bol_best = 0;
+    if (bol_name.indexOf(bol_w) === 0) bol_best = 8;
+    else if (bol_name.indexOf(bol_w) >= 0) bol_best = 6;
+    else if (bol_addr.indexOf(bol_w) >= 0) bol_best = 4;
+    else if (bol_tags.indexOf(bol_w) >= 0) bol_best = 3;
+    else if (bol_desc.indexOf(bol_w) >= 0) bol_best = 1;
+    if (!bol_best) return 0;
+    bol_total += bol_best;
   }
-  return bol_score;
+  return bol_total;
 }
 function bol_nameMatches(bol_name, bol_ws) {
-  var bol_f = bol_fold(bol_name);
-  return bol_ws.every(function (bol_w) { return bol_f.indexOf(bol_w) >= 0; });
+  var bol_n = bol_fold(bol_name);
+  return bol_ws.every(function (bol_w) { return bol_n.indexOf(bol_w) >= 0; });
 }
-// The player's servers by folded name, which is all the list carries: an
-// entry added from the catalogue keeps the catalogue's name.
+function bol_compact(bol_n) {
+  if (bol_n >= 10000) return Math.round(bol_n / 1000) + "k";
+  if (bol_n >= 1000) return (Math.round(bol_n / 100) / 10) + "k";
+  return String(bol_n);
+}
+// Most played first; servers that did not answer the last ping last.
+function bol_byPlayers(bol_a, bol_b) {
+  var bol_x = bol_a.s, bol_y = bol_b.s;
+  var bol_ox = bol_x && bol_x.off ? 1 : 0, bol_oy = bol_y && bol_y.off ? 1 : 0;
+  if (bol_ox !== bol_oy) return bol_ox - bol_oy;
+  var bol_px = bol_x && bol_x.on || 0, bol_py = bol_y && bol_y.on || 0;
+  if (bol_px !== bol_py) return bol_py - bol_px;
+  return bol_a.o - bol_b.o;
+}
+
+// --------------------------------------------------------------------------
+// Cards: one shape for a catalogue server, one of the player's own and a
+// featured one of the game, so every row draws and joins them alike.
+
 function bol_favIndex(bol_favs) {
-  var bol_ix = {};
-  (bol_favs || []).forEach(function (bol_f) {
-    bol_ix[bol_fold(bol_f.name)] = bol_f.id;
+  var bol_out = {};
+  bol_favs.forEach(function (bol_f) {
+    bol_out[bol_fold(bol_f.name)] = bol_f.id;
   });
-  return bol_ix;
+  return bol_out;
 }
-function bol_subtitle(bol_s) {
-  var bol_bits = (bol_s.t || []).slice(0, 2);
-  if (bol_s.l) bol_bits.push(String(bol_s.l).toUpperCase());
-  return bol_bits.join(" · ");
+// The game's id of a catalogue server already in the player's list: the
+// launcher read that list's addresses (the game only hands out names).
+function bol_favIdOf(bol_s, bol_byName) {
+  var bol_d = bol_data(), bol_mine = bol_d && bol_d.mine || {};
+  var bol_name = bol_mine[String(bol_s.a).toLowerCase() + ":" + bol_s.p];
+  if (bol_name != null && bol_byName[bol_fold(bol_name)] != null)
+    return bol_byName[bol_fold(bol_name)];
+  var bol_id = bol_byName[bol_fold(bol_s.n)];
+  return bol_id != null ? bol_id : null;
 }
-function bol_catalogue(bol_st, bol_favs) {
-  var bol_ws = bol_words(bol_st.query), bol_ix = bol_favIndex(bol_favs);
-  var bol_out = [];
-  bol_servers().forEach(function (bol_s, bol_n) {
-    if (bol_st.cat && (bol_s.t || []).indexOf(bol_st.cat) < 0) return;
-    if (bol_st.lang && bol_s.l !== bol_st.lang) return;
-    var bol_sc = bol_score(bol_s, bol_ws);
-    if (bol_sc > 0) bol_out.push({s: bol_s, sc: bol_sc, n: bol_n});
-  });
-  bol_out.sort(function (bol_a, bol_b) {
-    return (bol_b.s.pt ? 1 : 0) - (bol_a.s.pt ? 1 : 0)
-      || bol_b.sc - bol_a.sc || bol_a.n - bol_b.n;
-  });
-  return bol_out.map(function (bol_e) {
-    var bol_fav = bol_ix[bol_fold(bol_e.s.n)] != null;
-    return {label: (bol_fav ? "★ " : "") + bol_e.s.n,
-            value: bol_e.s.i, type: __KD__.External,
-            message: bol_subtitle(bol_e.s)};
-  });
+// A server's message of the day, unless it is a game string key the UI
+// never translated ("progressScreen.message.locating").
+function bol_motd(bol_m) {
+  bol_m = String(bol_m == null ? "" : bol_m);
+  return /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/.test(bol_m) ? "" : bol_m;
 }
-// The live lists as plain data, one snapshot per engine update.
+function bol_cards(bol_snap) {
+  var bol_byName = bol_favIndex(bol_snap.favs), bol_catById = {};
+  var bol_cat = bol_servers().map(function (bol_s, bol_i) {
+    var bol_id = bol_favIdOf(bol_s, bol_byName);
+    var bol_c = {k: bol_s.i, kind: bol_id != null ? "mine" : "cat",
+                 id: bol_id, n: bol_s.n, s: bol_s, o: bol_i,
+                 img: bol_s.img || "", banner: !!bol_s.img,
+                 ih: bol_s.ih || 12.8, fav: bol_id != null};
+    if (bol_id != null) bol_catById[bol_id] = bol_c;
+    return bol_c;
+  });
+  var bol_mine = bol_snap.favs.map(function (bol_f, bol_i) {
+    return bol_catById[bol_f.id] || {
+      k: "x" + bol_f.id, kind: "mine", id: bol_f.id, n: bol_f.name,
+      motd: bol_motd(bol_f.motd), o: bol_i, fav: true, s: null};
+  });
+  function bol_game(bol_list, bol_kind) {
+    return bol_list.map(function (bol_e, bol_i) {
+      return {k: bol_kind + bol_e.id, kind: bol_kind, id: bol_e.id,
+              n: bol_e.name, motd: bol_motd(bol_e.motd),
+              img: bol_e.image || "",
+              cover: !!bol_e.image, o: bol_i, s: null,
+              fav: bol_kind === "mine"};
+    });
+  }
+  return {cat: bol_cat, mine: bol_mine,
+          partners: bol_game(bol_snap.partners, "mine")
+            .concat(bol_game(bol_snap.featured, "tp"))
+            .concat(bol_game(bol_snap.creators, "tp"))};
+}
+
+// --------------------------------------------------------------------------
+// Joining and the player's list.
+
+function bol_say(bol_text) {
+  if (bol_ctx.toast) bol_ctx.toast(bol_text);
+}
+// Joining as the game's own details pane does: straight away when the
+// player has turned the safety warning off, through the game's warning
+// screen otherwise. The details of the server are loaded first either way,
+// as the game's tab always has them loaded by the time anyone presses Play.
+function bol_join(bol_kind, bol_id) {
+  if (bol_ctx.load) bol_ctx.load(bol_id, bol_kind);
+  if (bol_ctx.direct && bol_ctx.direct(bol_kind, bol_id)) return;
+  bol_ctx.router.push("/online-play-warning/" + __JU__(bol_kind) + "/"
+                      + bol_id);
+}
+function bol_add(bol_s) {
+  var bol_r = bol_ctx.act("add", bol_s);
+  if (bol_r && bol_r.error == null && bol_r.id != null) return bol_r.id;
+  bol_say(bol_r && bol_r.error === 6 ? bol_t("alreadyAdded")
+                                     : bol_t("addFailed"));
+  return null;
+}
+function bol_play(bol_c) {
+  if (!bol_c || !bol_ctx.router) return;
+  if (bol_c.kind === "tp") {
+    bol_join(__KD__.ThirdParty, bol_c.id);
+    return;
+  }
+  var bol_id = bol_c.id;
+  if (bol_id == null && bol_c.s) bol_id = bol_add(bol_c.s);
+  if (bol_id != null) bol_join(__KD__.External, bol_id);
+}
+function bol_toggleFav(bol_c) {
+  if (!bol_c || !bol_ctx.act || bol_c.kind === "tp") return;
+  if (bol_c.id != null) {
+    var bol_r = bol_ctx.act("remove", null, bol_c.id);
+    bol_say(bol_r && bol_r.error != null ? bol_t("removeFailed")
+                                         : bol_t("removed", [bol_c.n]));
+  } else if (bol_c.s && bol_add(bol_c.s) != null) {
+    bol_say(bol_t("added", [bol_c.n]));
+  }
+}
+
+// --------------------------------------------------------------------------
+// The spotlight follows focus through a tiny store, so that moving between
+// tiles redraws the spotlight alone, never the hundred tiles.
+
+var bol_spot = {v: null, ls: []};
+function bol_spotSet(bol_v) {
+  if (bol_spot.v === bol_v) return;
+  bol_spot.v = bol_v;
+  bol_spot.ls.slice().forEach(function (bol_f) { bol_f(bol_v); });
+}
+function bol_useSpot() {
+  var bol_s = __R__.useState(bol_spot.v);
+  __R__.useEffect(function () {
+    var bol_f = function (bol_v) { bol_s[1](bol_v); };
+    bol_spot.ls.push(bol_f);
+    return function () {
+      var bol_i = bol_spot.ls.indexOf(bol_f);
+      if (bol_i >= 0) bol_spot.ls.splice(bol_i, 1);
+    };
+  }, []);
+  return bol_s[0];
+}
+
+// --------------------------------------------------------------------------
+// Looks.
+
+var bol_WHITE = "#ffffff", bol_DIM = "#b1b2b5", bol_GREEN = "#6cc349";
+var bol_PALETTES = [
+  ["#3a6f2a", "#1d3a14"], ["#8a2b2b", "#3d1111"], ["#2a5d8a", "#11283d"],
+  ["#6b3a8a", "#2c163b"], ["#8a6a2b", "#3d2c11"], ["#2b8a7d", "#113d37"],
+  ["#8a2b6a", "#3d112d"], ["#4a4f8a", "#1d1f3d"], ["#5d6b2b", "#283011"],
+  ["#8a4a2b", "#3d1e11"]];
+var bol_TAG_COLORS = {pvp: 1, skyblock: 2, factions: 3, prison: 7,
+                      minigames: 4, bedwars: 6, survival: 0, smp: 0,
+                      roleplay: 6, creative: 5, oneblock: 2, parkour: 8,
+                      anarchy: 9, earth: 5, modded: 7, hardcore: 1};
+function bol_palette(bol_c) {
+  var bol_tags = bol_c.s && bol_c.s.t || [];
+  for (var bol_i = 0; bol_i < bol_tags.length; bol_i++) {
+    var bol_k = bol_fold(bol_tags[bol_i]).replace(/[^a-z]/g, "");
+    if (bol_TAG_COLORS[bol_k] != null)
+      return bol_PALETTES[bol_TAG_COLORS[bol_k]];
+  }
+  var bol_h = 0, bol_n = String(bol_c.n);
+  for (var bol_j = 0; bol_j < bol_n.length; bol_j++)
+    bol_h = (bol_h * 31 + bol_n.charCodeAt(bol_j)) % 1000;
+  return bol_PALETTES[bol_h % bol_PALETTES.length];
+}
+function bol_div(bol_style, bol_kids) {
+  return __R__.createElement.apply(null,
+    ["div", {style: bol_style}].concat(bol_kids || []));
+}
+function bol_text(bol_value, bol_style) {
+  return __R__.createElement("div", {style: bol_style}, bol_value);
+}
+function bol_line(bol_value, bol_size, bol_color, bol_extra) {
+  var bol_st = {fontSize: bol_size, color: bol_color, whiteSpace: "nowrap",
+                overflow: "hidden", textOverflow: "ellipsis"};
+  for (var bol_k in bol_extra || {}) bol_st[bol_k] = bol_extra[bol_k];
+  return bol_text(bol_value, bol_st);
+}
+// "● 1.2k online", "Offline", or the categories.
+function bol_status(bol_c, bol_size) {
+  var bol_s = bol_c.s;
+  if (bol_s && bol_s.on != null) {
+    return bol_div({display: "flex", flexDirection: "row",
+                    alignItems: "center", flexShrink: 0}, [
+      bol_div({width: "0.9rem", height: "0.9rem", borderRadius: "50%",
+               backgroundColor: bol_GREEN, marginRight: "0.7rem",
+               flexShrink: 0}),
+      bol_line(bol_t("online", [bol_compact(bol_s.on)]), bol_size,
+               bol_GREEN)]);
+  }
+  if (bol_s && bol_s.off) return bol_line(bol_t("offline"), bol_size, bol_DIM);
+  var bol_bits = bol_s ? (bol_s.t || []).slice(0, 2) : [];
+  if (bol_s && bol_s.l) bol_bits.push(bol_s.l.toUpperCase());
+  return bol_line(bol_bits.length ? bol_bits.join(" · ")
+                  : (bol_c.motd || bol_t("server")), bol_size, bol_DIM);
+}
+
+// The picture of a card: the game's own artwork when it has some, else the
+// server's banner on its category's colours, else its name on them.
+function bol_Art(bol_p) {
+  var bol_c = bol_p.card, bol_h = __R__.createElement;
+  var bol_pal = bol_palette(bol_c);
+  var bol_box = {height: bol_p.height, overflow: "hidden", display: "flex",
+                 flexDirection: "column", justifyContent: "center",
+                 backgroundImage: "linear-gradient(160deg, " + bol_pal[0]
+                   + " 0%, " + bol_pal[1] + " 100%)",
+                 backgroundColor: bol_pal[1]};
+  // The game's featured servers come with a square icon: whole, centred.
+  if (bol_c.cover && bol_c.img) {
+    bol_box.alignItems = "center";
+    return bol_div(bol_box, [
+      bol_h(__IMAGE__, {src: bol_c.img, height: bol_p.height,
+                        width: bol_p.height})]);
+  }
+  if (bol_c.banner && bol_c.img)
+    return bol_div(bol_box, [bol_div({padding: "0 0.8rem"}, [
+      bol_h(__IMAGE__, {src: bol_c.img, paddingTopPercentage: bol_c.ih})])]);
+  return bol_div(bol_box, [
+    bol_text(bol_c.n, {fontSize: bol_p.big || "2.5rem", color: bol_WHITE,
+                       textAlign: "center", padding: "0 1rem",
+                       overflow: "hidden", maxHeight: "100%"})]);
+}
+
+// --------------------------------------------------------------------------
+// A tile. Memoised: a new search or list update redraws only the tiles
+// whose card changed.
+
+function bol_TileView(bol_p) {
+  var bol_c = bol_p.card, bol_R = __R__, bol_h = bol_R.createElement;
+  var bol_ref = bol_R.useRef(bol_c);
+  bol_ref.current = bol_c;
+  var bol_onClick = bol_R.useCallback(function () {
+    bol_play(bol_ref.current);
+  }, []);
+  var bol_onFocus = bol_R.useCallback(function (bol_f) {
+    if (bol_f) bol_spotSet(bol_ref.current);
+  }, []);
+  var bol_onFav = bol_R.useCallback(function () {
+    bol_toggleFav(bol_ref.current);
+  }, []);
+  return bol_div({width: "25%", padding: "0.6rem"}, [
+    bol_h(__PANEL__, {compact: true, focusable: true, role: "neutral",
+                      onClick: bol_onClick, onFocusChanged: bol_onFocus,
+                      onHoverChanged: bol_onFocus,
+                      onClickSecondary: bol_onFav,
+                      narrationText: bol_c.n, inputLegend: bol_t("play")},
+      bol_h(bol_Art, {card: bol_c, height: "13rem"}),
+      bol_div({padding: "0.8rem 1.1rem 1rem"}, [
+        bol_line((bol_c.fav ? "★ " : "") + bol_c.n, "1.9rem",
+                 bol_WHITE, {marginBottom: "0.4rem"}),
+        bol_status(bol_c, "1.5rem")]))]);
+}
+var bol_Tile = __R__.memo(bol_TileView, function (bol_a, bol_b) {
+  var bol_x = bol_a.card, bol_y = bol_b.card;
+  return bol_x.k === bol_y.k && bol_x.fav === bol_y.fav
+    && bol_x.id === bol_y.id && bol_x.n === bol_y.n;
+});
+
+// The last tile of a row that has more: "See all (42)" / "Show more".
+function bol_MoreTile(bol_p) {
+  var bol_h = __R__.createElement;
+  return bol_div({width: "25%", padding: "0.6rem"}, [
+    bol_h(__PANEL__, {compact: true, focusable: true, role: "neutral",
+                      onClick: bol_p.onClick, narrationText: bol_p.label,
+                      inputLegend: bol_p.label},
+      bol_div({height: "17.2rem", display: "flex", flexDirection: "column",
+               justifyContent: "center", alignItems: "center"}, [
+        bol_text("+" + bol_p.count, {fontSize: "3.6rem", color: bol_WHITE}),
+        bol_text(bol_p.label, {fontSize: "1.7rem", color: bol_DIM,
+                               marginTop: "0.6rem"})]))]);
+}
+
+function bol_Row(bol_p) {
+  var bol_h = __R__.createElement, bol_cards = bol_p.cards;
+  var bol_limit = bol_p.limit, bol_kids = [];
+  var bol_shown = bol_cards.length > bol_limit ? bol_limit - 1 : bol_limit;
+  bol_cards.slice(0, bol_shown).forEach(function (bol_c) {
+    bol_kids.push(bol_h(bol_Tile, {key: bol_c.k, card: bol_c}));
+  });
+  if (bol_cards.length > bol_shown)
+    bol_kids.push(bol_h(bol_MoreTile, {
+      key: "more", count: bol_cards.length - bol_shown,
+      label: bol_limit <= bol_ROW ? bol_t("seeAll") : bol_t("showMore"),
+      onClick: bol_p.onMore}));
+  return bol_div({marginBottom: "1.8rem"}, [
+    bol_div({display: "flex", flexDirection: "row", alignItems: "flex-end",
+             padding: "0 0.6rem 0.4rem"}, [
+      bol_line(bol_p.title, "2.3rem", bol_WHITE, {flexShrink: 0}),
+      bol_line(bol_p.hint || "", "1.6rem", bol_DIM,
+               {marginLeft: "1.2rem", flexShrink: 1})]),
+    bol_div({display: "flex", flexDirection: "row", flexWrap: "wrap"},
+            bol_kids)]);
+}
+
+// --------------------------------------------------------------------------
+// The spotlight.
+
+function bol_Spotlight(bol_p) {
+  var bol_h = __R__.createElement;
+  var bol_c = bol_useSpot() || bol_p.fallback;
+  if (!bol_c) return bol_div({height: "23rem", flexShrink: 0});
+  // The focused card as the list stands now: favourite since, or removed.
+  bol_c = bol_p.byKey[bol_c.k] || bol_c;
+  var bol_s = bol_c.s, bol_meta = [];
+  if (bol_s && bol_s.ln) bol_meta.push(bol_s.ln);
+  if (bol_s && bol_s.t && bol_s.t.length)
+    bol_meta.push(bol_s.t.slice(0, 3).join(", "));
+  if (bol_s && bol_s.v) bol_meta.push(bol_t("version", [bol_s.v]));
+  var bol_desc = bol_s ? (bol_s.d || bol_s.motd || "") : (bol_c.motd || "");
+  var bol_addr = bol_s ? bol_s.a + (bol_s.p !== 19132 ? ":" + bol_s.p : "")
+                       : "";
+  var bol_buttons = [
+    bol_div({width: "18rem", marginRight: "1rem", flexShrink: 0}, [
+      bol_h(__BUTTON__, {variant: "hero", inputLegend: bol_t("play"),
+                         onClick: function () { bol_play(bol_c); }},
+            bol_t("play"))])];
+  if (bol_c.kind !== "tp")
+    bol_buttons.push(bol_div({width: "26rem", flexShrink: 0}, [
+      bol_h(__BUTTON__, {variant: "secondary",
+                         inputLegend: bol_c.fav ? bol_t("unfavorite")
+                                                : bol_t("favorite"),
+                         onClick: function () { bol_toggleFav(bol_c); }},
+            bol_c.fav ? bol_t("unfavorite") : bol_t("favorite"))]));
+  return bol_div({display: "flex", flexDirection: "row", height: "23rem",
+                  flexShrink: 0, backgroundColor: "rgba(0,0,0,0.6)",
+                  border: "0.2rem solid #1e1e1f", margin: "0 0.6rem 1rem"}, [
+    bol_div({width: "38%", flexShrink: 0}, [
+      bol_h(bol_Art, {card: bol_c, height: "22.6rem", big: "4rem"})]),
+    bol_div({flexGrow: 1, flexBasis: 0, padding: "1.2rem 1.8rem",
+             display: "flex", flexDirection: "column", overflow: "hidden"}, [
+      bol_line((bol_c.fav ? "★ " : "") + bol_c.n, "3.2rem", bol_WHITE),
+      bol_div({display: "flex", flexDirection: "row", alignItems: "center",
+               marginTop: "0.5rem"}, [
+        bol_status(bol_c, "1.7rem"),
+        bol_line(bol_meta.join("  ·  "), "1.7rem", bol_DIM,
+                 {marginLeft: "1.6rem", flexShrink: 1})]),
+      bol_text(bol_desc, {fontSize: "1.6rem", color: bol_DIM,
+                          marginTop: "0.8rem", flexGrow: 1, flexBasis: 0,
+                          overflow: "hidden"}),
+      bol_div({display: "flex", flexDirection: "row", alignItems: "center",
+               marginTop: "0.8rem"}, bol_buttons.concat([
+        bol_line(bol_addr, "1.6rem", bol_DIM,
+                 {marginLeft: "1.6rem", flexShrink: 1})]))])]);
+}
+
+// --------------------------------------------------------------------------
+// The page.
+
 function bol_snapshot(bol_x, bol_tp) {
   var bol_ext = Array.from(bol_x.externalServerWorlds);
   var bol_partners = [];
@@ -154,262 +454,12 @@ function bol_snapshot(bol_x, bol_tp) {
     creators: bol_exp(bol_tp.creatorExperiences)
   };
 }
-function bol_option(bol_value, bol_label, bol_count) {
-  return {label: bol_label, value: "bolopt-" + bol_value,
-          type: __KD__.External,
-          message: bol_count == null ? "" : bol_t("count", [bol_count])};
-}
 
-// --------------------------------------------------------------------------
-// Small wrappers, so that every hook sits at the top of its own component.
-
-function bol_Text(bol_p) {
-  return __R__.createElement("fast-text", {text: __WRAP__(bol_p.text)});
-}
-function bol_List(bol_p) {
-  var bol_items = __WRAP__(bol_p.items), bol_pick = bol_p.onSelect;
-  var bol_render = __R__.useCallback(function (bol_o) {
-    return __R__.createElement(__ITEM__, {item: bol_o.item,
-                                          onSelectServer: bol_pick});
-  }, [bol_pick]);
-  return __R__.createElement(__XJ__.ItemList, {items: bol_items,
-                                               renderItem: bol_render});
-}
-function bol_Section(bol_p) {
-  var bol_h = __R__.createElement;
-  return bol_h(__R__.Fragment, null,
-    bol_h(__XJ__.Divider, {label: bol_h(bol_Text, {text: bol_p.label})}),
-    bol_h(bol_List, {items: bol_p.items, onSelect: bol_p.onSelect}));
-}
-function bol_Note(bol_p) {
-  var bol_h = __R__.createElement;
-  return bol_h(__XJ__.Item, null,
-    bol_h("div", {style: {padding: "0.5rem 0.25rem"}},
-      bol_h(__BODY__, null, bol_p.text)));
-}
-// A row of buttons sharing the width: the section tabs, the filters.
-function bol_Row(bol_p) {
-  var bol_h = __R__.createElement;
-  return bol_h(__XJ__.Item, null,
-    bol_h("div", {style: {display: "flex", flexDirection: "row"}},
-      bol_p.buttons.map(function (bol_b, bol_i) {
-        return bol_h("div", {key: bol_b.key || String(bol_i),
-                             style: {flexGrow: 1, flexBasis: 0,
-                                     marginLeft: bol_i ? "0.25rem" : 0}},
-          bol_h(__BUTTON__, {onClick: bol_b.onClick,
-                             variant: bol_b.active ? "primary" : "secondary",
-                             inputLegend: bol_b.legend || bol_b.label},
-                bol_b.label));
-      })));
-}
-
-// --------------------------------------------------------------------------
-// The side menu.
-
-function bol_Side(bol_p) {
+function bol_Hub(bol_p) {
   var bol_ext = __USF__(__EXT__), bol_tp = __USF__(__TP__);
   var bol_snap = __UFM__(function (bol_x, bol_y) {
     return bol_snapshot(bol_x, bol_y);
   }, [], [bol_ext, bol_tp]);
-  var bol_router = __ROUTER__();
-  var bol_h = __R__.createElement;
-  return bol_h(__UNWRAP__, {data: bol_snap}, function (bol_s) {
-    return bol_h(bol_SideView, {snap: bol_s, router: bol_router,
-                                loading: bol_p.loading,
-                                prefix: bol_p.routePrefix || "/play"});
-  });
-}
-
-function bol_SideView(bol_p) {
-  var bol_R = __R__, bol_h = bol_R.createElement, bol_snap = bol_p.snap;
-  var bol_init = bol_state.section
-    || (bol_snap.favs.length ? "fav" : "all");
-  var bol_sec = bol_R.useState(bol_init);
-  var bol_query = bol_R.useState(bol_state.query);
-  var bol_cat = bol_R.useState(bol_state.cat);
-  var bol_lang = bol_R.useState(bol_state.lang);
-  var bol_shown = bol_R.useState(bol_state.shown || bol_PAGE);
-  var bol_picker = bol_R.useState(bol_state.picker);
-  var bol_field = __UFS__(bol_state.query);
-  function bol_set(bol_hook, bol_key) {
-    return function (bol_v) { bol_state[bol_key] = bol_v; bol_hook[1](bol_v); };
-  }
-  var bol_setSec = bol_set(bol_sec, "section");
-  var bol_setQuery = bol_set(bol_query, "query");
-  var bol_setCat = bol_set(bol_cat, "cat");
-  var bol_setLang = bol_set(bol_lang, "lang");
-  var bol_setShown = bol_set(bol_shown, "shown");
-  var bol_setPicker = bol_set(bol_picker, "picker");
-  var bol_prefix = bol_p.prefix, bol_router = bol_p.router;
-  var bol_onType = bol_R.useCallback(function (bol_v) {
-    bol_field[1](bol_v);
-    bol_setQuery(String(bol_v == null ? "" : bol_v));
-    bol_setShown(bol_PAGE);
-  }, []);
-  var bol_select = bol_R.useCallback(function (bol_value, bol_type) {
-    var bol_v = String(bol_value);
-    if (bol_v.indexOf("bolopt-") === 0) {
-      var bol_opt = bol_v.slice(7);
-      if (bol_state.picker === "cat") bol_setCat(bol_opt === "*" ? "" : bol_opt);
-      else bol_setLang(bol_opt === "*" ? "" : bol_opt);
-      bol_setShown(bol_PAGE);
-      bol_setPicker("");
-      return;
-    }
-    var bol_kind = bol_isCat(bol_v) ? __KD__.External : bol_type;
-    bol_router.replace(bol_prefix + "/servers/" + bol_v + "/"
-                       + __JU__(bol_kind));
-  }, [bol_router, bol_prefix]);
-
-  var bol_st = {query: bol_query[0], cat: bol_cat[0], lang: bol_lang[0]};
-  var bol_ws = bol_words(bol_st.query);
-  // A partner is one of the player's own entries drawn as a featured tile:
-  // the item's bolType routes it as the external server it is (the partner
-  // patch reads it in the list item).
-  function bol_mine(bol_list, bol_kind, bol_route) {
-    return bol_list.filter(function (bol_e) {
-      return bol_nameMatches(bol_e.name, bol_ws);
-    }).map(function (bol_e) {
-      return {label: bol_e.name, value: bol_e.id, type: bol_kind,
-              bolType: bol_route, message: bol_e.motd || "",
-              image: bol_e.image};
-    });
-  }
-  var bol_favs = bol_mine(bol_snap.favs, __KD__.External);
-  var bol_partners = bol_mine(bol_snap.partners, __KD__.ThirdParty,
-                              __KD__.External);
-  var bol_featured = bol_mine(bol_snap.featured, __KD__.ThirdParty);
-  var bol_creators = bol_mine(bol_snap.creators, __KD__.ThirdParty);
-  var bol_cata = bol_catalogue(bol_st, bol_snap.favs);
-  var bol_partnerCount = bol_partners.length + bol_featured.length
-    + bol_creators.length;
-
-  var bol_kids = [];
-  bol_kids.push(bol_h(bol_Row, {key: "tabs", buttons: [
-    {key: "fav", label: bol_t("tabFavorites", [bol_favs.length]),
-     active: bol_sec[0] === "fav",
-     onClick: function () { bol_setPicker(""); bol_setSec("fav"); }},
-    {key: "partners", label: bol_t("tabPartners", [bol_partnerCount]),
-     active: bol_sec[0] === "partners",
-     onClick: function () { bol_setPicker(""); bol_setSec("partners"); }},
-    {key: "all", label: bol_t("tabAll", [bol_cata.length]),
-     active: bol_sec[0] === "all",
-     onClick: function () { bol_setPicker(""); bol_setSec("all"); }}
-  ]}));
-  bol_kids.push(bol_h(__XJ__.Item, {key: "search"},
-    bol_h(__TEXTFIELD__, {label: bol_t("search"), value: bol_field[0],
-                          onChange: bol_onType,
-                          placeholder: bol_t("searchPlaceholder")})));
-
-  if (bol_sec[0] === "fav") {
-    bol_kids.push(bol_h(__XJ__.Item, {key: "add"},
-      bol_h(__BUTTON__, {onClick: function () {
-        bol_router.push(bol_prefix + "/servers/add");
-      }, Icon: __ICONS__.Plus, inputLegend: bol_t("addServer"),
-         variant: "secondary"}, bol_t("addServer"))));
-    if (bol_favs.length)
-      bol_kids.push(bol_h(bol_Section, {key: "favs", items: bol_favs,
-        label: bol_t("yourServers", [bol_favs.length]),
-        onSelect: bol_select}));
-    else
-      bol_kids.push(bol_h(bol_Note, {key: "nofav", text: bol_ws.length
-        ? bol_t("noMatch") : bol_t("noFavorites")}));
-  } else if (bol_sec[0] === "partners") {
-    if (bol_partners.length)
-      bol_kids.push(bol_h(bol_Section, {key: "bolp", items: bol_partners,
-        label: bol_t("bolPartners"), onSelect: bol_select}));
-    if (bol_featured.length)
-      bol_kids.push(bol_h(bol_Section, {key: "feat", items: bol_featured,
-        label: bol_t("featured", [bol_featured.length]),
-        onSelect: bol_select}));
-    if (bol_creators.length)
-      bol_kids.push(bol_h(bol_Section, {key: "crea", items: bol_creators,
-        label: bol_t("creators", [bol_creators.length]),
-        onSelect: bol_select}));
-    if (!bol_partnerCount)
-      bol_kids.push(bol_h(bol_Note, {key: "nopart", text: bol_ws.length
-        ? bol_t("noMatch") : bol_t("noPartners")}));
-  } else if (bol_picker[0]) {
-    var bol_isCatPicker = bol_picker[0] === "cat";
-    var bol_d = bol_data() || {};
-    var bol_opts = [bol_option("*", bol_isCatPicker ? bol_t("allCategories")
-                                                    : bol_t("allLanguages"))];
-    (bol_isCatPicker ? bol_d.cats : bol_d.langs || []).forEach(function (bol_o) {
-      bol_opts.push(bol_option(bol_o[0], bol_isCatPicker ? bol_o[0]
-                               : bol_o[2] || bol_o[0], bol_o[1]));
-    });
-    bol_kids.push(bol_h(bol_Row, {key: "back", buttons: [
-      {key: "back", label: bol_t("back"),
-       onClick: function () { bol_setPicker(""); }}]}));
-    bol_kids.push(bol_h(bol_Section, {key: "opts", items: bol_opts,
-      label: bol_isCatPicker ? bol_t("category") : bol_t("language"),
-      onSelect: bol_select}));
-  } else {
-    var bol_langName = bol_st.lang;
-    ((bol_data() || {}).langs || []).forEach(function (bol_o) {
-      if (bol_o[0] === bol_st.lang) bol_langName = bol_o[2] || bol_o[0];
-    });
-    bol_kids.push(bol_h(bol_Row, {key: "filters", buttons: [
-      {key: "cat", label: bol_st.cat || bol_t("allCategories"),
-       legend: bol_t("category"), active: !!bol_st.cat,
-       onClick: function () { bol_setPicker("cat"); }},
-      {key: "lang", label: bol_langName || bol_t("allLanguages"),
-       legend: bol_t("language"), active: !!bol_st.lang,
-       onClick: function () { bol_setPicker("lang"); }}
-    ]}));
-    if (!bol_servers().length)
-      bol_kids.push(bol_h(bol_Note, {key: "nolist",
-                                     text: bol_t("listUnavailable")}));
-    else if (!bol_cata.length)
-      bol_kids.push(bol_h(bol_Note, {key: "nores", text: bol_t("noMatch")}));
-    else {
-      var bol_n = Math.min(bol_shown[0], bol_cata.length);
-      bol_kids.push(bol_h(bol_Section, {key: "cata",
-        items: bol_cata.slice(0, bol_n),
-        label: bol_t("servers", [bol_cata.length]), onSelect: bol_select}));
-      if (bol_n < bol_cata.length)
-        bol_kids.push(bol_h(bol_Row, {key: "more", buttons: [
-          {key: "more", label: bol_t("showMore", [bol_n, bol_cata.length]),
-           onClick: function () { bol_setShown(bol_n + bol_PAGE); }}]}));
-    }
-  }
-  bol_kids.push(bol_h(__SPACER__, {key: "end", size: 4}));
-
-  var bol_role = "neutralAlpha60";
-  return bol_h(__THEME__, {role: bol_role},
-    bol_h(__NARRATION__, {text: bol_t("narrationContext")},
-      bol_h.apply(null, [__XJ__, {
-        spacingAroundSideMenu: bol_h(__SPACER__, {size: 2}),
-        loading: bol_p.loading,
-        gamepadAlias: __ALIAS__.SERVER_SIDE_MENU,
-        delegateFocusByAlias: "remember",
-        role: bol_role}].concat(bol_kids))));
-}
-
-// --------------------------------------------------------------------------
-// The details pane: a catalogue server's own, the game's for anything else.
-
-function bol_Details(bol_p) {
-  var bol_route = __ROUTE__(), bol_h = __R__.createElement;
-  var bol_id = __UFM__(function (bol_r) {
-    var bol_v = bol_r && bol_r.id;
-    return bol_isCatRoute(bol_v) ? bol_v : "";
-  }, [], [bol_route]);
-  return bol_h(__UNWRAP__, {data: bol_id}, function (bol_v) {
-    return bol_v
-      ? bol_h(bol_CatDetails, {key: bol_v, id: bol_v,
-                               scrollViewRef: bol_p.scrollViewRef})
-      : bol_h(__DETAILS__, bol_p);
-  });
-}
-
-function bol_CatDetails(bol_p) {
-  var bol_ext = __USF__(__EXT__), bol_h = __R__.createElement;
-  var bol_favs = __UFM__(function (bol_x) {
-    return Array.from(bol_x.externalServerWorlds).map(function (bol_e) {
-      return {id: bol_e.id, name: bol_e.name};
-    });
-  }, [], [bol_ext]);
   // Writes go through the live list object, as the game's own form does:
   // it answers null on success and an error code otherwise.
   var bol_act = __UFC__(function (bol_x) {
@@ -420,92 +470,197 @@ function bol_CatDetails(bol_p) {
       return {error: bol_err, id: bol_x.addedServerId};
     };
   }, [], [bol_ext]);
-  var bol_router = __ROUTER__();
-  return bol_h(__UNWRAP__, {data: bol_favs}, function (bol_list) {
-    return bol_h(bol_CatView, {id: bol_p.id, favs: bol_list, act: bol_act,
-                               router: bol_router,
-                               scrollViewRef: bol_p.scrollViewRef});
+  var bol_det = __USF__(__DET__);
+  bol_ctx.load = __UFC__(function (bol_v) {
+    return function (bol_id, bol_kind) {
+      bol_v.loadNetworkWorldDetails(String(bol_id), bol_kind);
+    };
+  }, [], [bol_det]);
+  var bol_joiner = __USF__(__JOINER__), bol_opts = __USF__(__NOTIF__);
+  bol_ctx.direct = __UFC__(function (bol_j, bol_o) {
+    return function (bol_kind, bol_id) {
+      var bol_ext = bol_kind === __KD__.External;
+      if (bol_ext ? !bol_o.doNotShowMultiplayerIpSafetyWarning
+                  : !bol_o.doNotShowMultiplayerOnlineSafetyWarning)
+        return false;
+      if (bol_ext) bol_j.joinExternalServer(String(bol_id));
+      else bol_j.joinThirdPartyServer(String(bol_id));
+      return true;
+    };
+  }, [], [bol_joiner, bol_opts]);
+  bol_ctx.act = bol_act;
+  bol_ctx.router = __ROUTER__();
+  return __R__.createElement(__UNWRAP__, {data: bol_snap}, function (bol_s) {
+    return __R__.createElement(bol_HubView, {snap: bol_s,
+                                             prefix: bol_p.routePrefix});
   });
 }
 
-function bol_CatView(bol_p) {
-  var bol_R = __R__, bol_h = bol_R.createElement;
-  var bol_s = bol_server(bol_p.id);
-  var bol_msg = bol_R.useState("");
-  if (!bol_s)
-    return bol_h("div", {style: {padding: "1rem"}},
-      bol_h(__BODY__, null, bol_t("listUnavailable")));
-  var bol_favId = bol_favIndex(bol_p.favs)[bol_fold(bol_s.n)];
-  var bol_isFav = bol_favId != null;
-  function bol_add() {
-    var bol_r = bol_p.act("add", bol_s);
-    if (bol_r.error != null) {
-      bol_msg[1](bol_t(bol_r.error === 6 ? "alreadyAdded" : "addFailed"));
-      return null;
-    }
-    return bol_r.id;
-  }
-  function bol_play() {
-    var bol_id = bol_isFav ? bol_favId : bol_add();
-    if (bol_id == null) return;
-    bol_p.router.push("/online-play-warning/" + __JU__(__KD__.External) + "/"
-                      + bol_id);
-  }
-  function bol_toggle() {
-    if (bol_isFav) {
-      var bol_r = bol_p.act("remove", bol_s, bol_favId);
-      bol_msg[1](bol_r.error != null ? bol_t("removeFailed") : "");
-    } else if (bol_add() != null) bol_msg[1](bol_t("added"));
-  }
-  var bol_meta = [bol_s.a + (bol_s.p !== 19132 ? ":" + bol_s.p : "")];
-  if (bol_s.ln || bol_s.l) bol_meta.push(bol_s.ln || bol_s.l);
-  if (bol_s.c) bol_meta.push(bol_s.c);
-  if (bol_s.v) bol_meta.push(bol_t("version", [bol_s.v]));
-  var bol_links = [];
-  if (bol_s.w) bol_links.push(bol_s.w);
-  if (bol_s.dc) bol_links.push(bol_s.dc);
-  var bol_gap = bol_h(__SPACER__, {size: 2});
+function bol_langChoices() {
+  var bol_d = bol_data(), bol_out = [""];
+  (bol_d && bol_d.langs || []).slice(0, 8).forEach(function (bol_l) {
+    bol_out.push(bol_l[0]);
+  });
+  return bol_out;
+}
+// A language's name, alone ("French") or inside a sentence ("français").
+function bol_langName(bol_code, bol_inSentence) {
+  if (!bol_code) return bol_t("allLanguages");
+  var bol_d = bol_data(), bol_l = (bol_d && bol_d.langs || []).filter(
+    function (bol_x) { return bol_x[0] === bol_code; })[0];
+  if (!bol_l) return bol_code.toUpperCase();
+  return bol_inSentence && bol_l[3] ? bol_l[3] : bol_l[2];
+}
 
-  var bol_body = [
-    bol_s.img ? bol_h("div", {key: "img", style: {width: "100%"}},
-      bol_h(__IMAGE__, {src: bol_s.img, paddingTopPercentage: bol_s.ih || 25}))
-      : null,
-    bol_h(__PANEL__, {key: "head", role: "neutral80"},
-      bol_h(__HEADING__, null, bol_s.n),
-      bol_h(__SPACER__, {size: 1}),
-      bol_h(__BODY__, null, bol_meta.join(" · ")),
-      (bol_s.t || []).length
-        ? bol_h(__BODY__, null, bol_s.t.join(" · ")) : null,
-      bol_gap,
-      bol_h("div", {style: {display: "flex", flexDirection: "row"}},
-        bol_h("div", {style: {flexGrow: 2, flexBasis: 0}},
-          bol_h(__BUTTON__, {variant: "hero", horizontal: true,
-                             delayedClick: true, onClick: bol_play,
-                             inputLegend: bol_t("play"),
-                             gamepadAlias: __ALIAS__.SERVER_DESCRIPTION},
-                bol_t("play"))),
-        bol_h("div", {style: {flexGrow: 1, flexBasis: 0,
-                              marginLeft: "0.5rem"}},
-          bol_h(__BUTTON__, {variant: "secondary", onClick: bol_toggle,
-                             inputLegend: bol_isFav ? bol_t("unfavorite")
-                                                    : bol_t("favorite")},
-                bol_isFav ? bol_t("unfavorite") : bol_t("favorite")))),
-      bol_msg[0] ? bol_h(__BODY__, null, bol_msg[0]) : null),
-    bol_h(__PANEL__, {key: "desc", focusable: true, role: "neutral80",
-                      narrationText: bol_s.n + " . " + (bol_s.d || "")},
-      bol_h(__HEADING__, null, bol_t("about")),
-      bol_gap,
-      bol_h(__BODY__, null, bol_s.d || bol_t("noDescription"))),
-    bol_links.length ? bol_h(__PANEL__, {key: "links", role: "neutral80"},
-      bol_h(__HEADING__, null, bol_t("links")),
-      bol_gap,
-      bol_links.map(function (bol_l) {
-        return bol_h(__BODY__, {key: bol_l}, bol_l);
-      })) : null,
-    bol_h(__PANEL__, {key: "src", role: "neutral80"},
-      bol_h(__BODY__, null, bol_t("source")))
-  ];
-  return bol_h.apply(null, [__SCROLL__, {
-    loading: false, innerRef: bol_p.scrollViewRef, floating: false,
-    alwaysVisibleChildren: bol_h(__SPACER__, {size: 2})}].concat(bol_body));
+// The rows, from the cards and the search/language filters.
+function bol_rowsFor(bol_all, bol_ws, bol_lg) {
+  var bol_d = bol_data() || {}, bol_out = [];
+  function bol_row(bol_key, bol_title, bol_cards, bol_hint) {
+    if (bol_cards.length)
+      bol_out.push({key: bol_key, title: bol_title, cards: bol_cards,
+                    hint: bol_hint || ""});
+  }
+  var bol_inLang = function (bol_c) {
+    return !bol_lg || (bol_c.s && bol_c.s.l === bol_lg);
+  };
+  var bol_cat = bol_all.cat.filter(bol_inLang);
+  if (bol_ws.length) {
+    var bol_hits = [];
+    bol_all.mine.concat(bol_all.partners).forEach(function (bol_c) {
+      if (!bol_c.s && bol_nameMatches(bol_c.n, bol_ws))
+        bol_hits.push({c: bol_c, sc: 9});
+    });
+    bol_cat.forEach(function (bol_c) {
+      var bol_sc = bol_score(bol_c.s, bol_ws);
+      if (bol_sc > 0) bol_hits.push({c: bol_c, sc: bol_sc});
+    });
+    // Relevance first, but a server that is down never above one that is up.
+    bol_hits.sort(function (bol_a, bol_b) {
+      var bol_da = bol_a.c.s && bol_a.c.s.off ? 1 : 0;
+      var bol_db = bol_b.c.s && bol_b.c.s.off ? 1 : 0;
+      return bol_da - bol_db || bol_b.sc - bol_a.sc
+        || bol_byPlayers(bol_a.c, bol_b.c);
+    });
+    var bol_found = bol_hits.map(function (bol_x) { return bol_x.c; });
+    bol_row("results", bol_t("results"), bol_found,
+            bol_t("count", [bol_found.length]));
+    return bol_out;
+  }
+  var bol_live = bol_cat.filter(function (bol_c) { return !bol_c.s.off; })
+    .sort(bol_byPlayers);
+  bol_row("mine", bol_t("myServers"), bol_all.mine.filter(bol_inLang),
+          bol_t("myServersHint"));
+  if (!bol_lg) bol_row("partners", bol_t("partners"), bol_all.partners);
+  var bol_ui = bol_d.ui || "en";
+  if (!bol_lg && bol_ui !== "en")
+    bol_row("local", bol_t("popularIn", [bol_langName(bol_ui, true)]),
+            bol_live.filter(function (bol_c) { return bol_c.s.l === bol_ui; }));
+  bol_row("popular", bol_lg ? bol_t("popularIn", [bol_langName(bol_lg, true)])
+                            : bol_t("popular"), bol_live,
+          bol_d.pinged ? bol_t("pingedHint") : "");
+  (bol_d.cats || []).slice(0, 6).forEach(function (bol_cg) {
+    bol_row("cat-" + bol_cg[0], bol_cg[0], bol_live.filter(function (bol_c) {
+      return (bol_c.s.t || []).indexOf(bol_cg[0]) >= 0;
+    }));
+  });
+  var bol_every = bol_cat.slice().sort(bol_byPlayers);
+  bol_row("all", bol_t("everyServer"), bol_every,
+          bol_t("count", [bol_every.length]));
+  return bol_out;
+}
+
+function bol_HubView(bol_p) {
+  var bol_R = __R__, bol_h = bol_R.createElement;
+  var bol_rootRef = bol_R.useRef(null);
+  var bol_query = bol_R.useState(bol_state.query);
+  var bol_lang = bol_R.useState(bol_state.lang);
+  var bol_open = bol_R.useState(bol_state.open);
+  var bol_msg = bol_R.useState("");
+  var bol_field = __UFS__(bol_state.query);
+  bol_ctx.toast = bol_msg[1];
+  bol_R.useEffect(function () {
+    if (!bol_msg[0]) return undefined;
+    var bol_timer = setTimeout(function () { bol_msg[1](""); }, 4000);
+    return function () { clearTimeout(bol_timer); };
+  }, [bol_msg[0]]);
+  var bol_onType = bol_R.useCallback(function (bol_v) {
+    bol_field[1](bol_v);
+    bol_state.query = String(bol_v == null ? "" : bol_v);
+    bol_query[1](bol_state.query);
+  }, []);
+  var bol_all = bol_R.useMemo(function () { return bol_cards(bol_p.snap); },
+                              [bol_p.snap]);
+  var bol_ws = bol_words(bol_query[0]);
+  var bol_rows = bol_rowsFor(bol_all, bol_ws, bol_lang[0]).map(
+    function (bol_r) {
+      var bol_limit = bol_open[0][bol_r.key] || bol_ROW;
+      return bol_h(bol_Row, {
+        key: bol_r.key, title: bol_r.title, hint: bol_r.hint,
+        cards: bol_r.cards, limit: bol_limit,
+        onMore: function () {
+          var bol_next = {};
+          for (var bol_k in bol_state.open)
+            bol_next[bol_k] = bol_state.open[bol_k];
+          bol_next[bol_r.key] = bol_limit <= bol_ROW ? bol_PAGE
+                                                     : bol_limit + bol_PAGE;
+          bol_state.open = bol_next;
+          bol_open[1](bol_next);
+        }});
+    });
+  if (!bol_rows.length)
+    bol_rows.push(bol_text(bol_ws.length ? bol_t("noMatch")
+                                         : bol_t("listUnavailable"),
+                           {fontSize: "2rem", color: bol_DIM,
+                            padding: "2rem 0.6rem"}));
+
+  var bol_byKey = bol_R.useMemo(function () {
+    var bol_m = {};
+    bol_all.cat.concat(bol_all.mine, bol_all.partners).forEach(
+      function (bol_c) { bol_m[bol_c.k] = bol_c; });
+    return bol_m;
+  }, [bol_all]);
+  var bol_fallback = bol_all.partners[0] || bol_all.mine[0]
+    || bol_all.cat.slice().sort(bol_byPlayers)[0] || null;
+  var bol_langs = bol_langChoices();
+  var bol_cycleLang = function () {
+    var bol_i = bol_langs.indexOf(bol_lang[0]);
+    bol_state.lang = bol_langs[(bol_i + 1) % bol_langs.length];
+    bol_lang[1](bol_state.lang);
+  };
+  var bol_toolbar = bol_div({display: "flex", flexDirection: "row",
+                             alignItems: "flex-end", flexShrink: 0,
+                             margin: "0 0.6rem 1.2rem"}, [
+    bol_div({flexGrow: 2, flexBasis: 0}, [
+      bol_h(__TEXTFIELD__, {label: bol_t("search"), value: bol_field[0],
+                            placeholder: bol_t("searchPlaceholder"),
+                            onChange: bol_onType})]),
+    bol_div({width: "26rem", marginLeft: "1rem"}, [
+      bol_h(__BUTTON__, {variant: bol_lang[0] ? "primary" : "secondary",
+                         inputLegend: bol_t("language"),
+                         onClick: bol_cycleLang},
+            bol_langName(bol_lang[0]))]),
+    bol_div({width: "28rem", marginLeft: "1rem"}, [
+      bol_h(__BUTTON__, {variant: "secondary", Icon: __ICONS__.Plus,
+                         inputLegend: bol_t("addServer"),
+                         onClick: function () {
+                           bol_ctx.router.push((bol_p.prefix || "/play")
+                                               + "/servers/add");
+                         }}, bol_t("addServer"))])]);
+  return bol_h("div", {ref: bol_rootRef,
+                       style: {display: "flex", flexDirection: "column",
+                               height: "100%", padding: "1rem 2rem 0"}},
+    bol_h(__FOCUS__, {containerRef: bol_rootRef,
+                      delegateFocusFromMemory: true},
+      bol_h(bol_Spotlight, {fallback: bol_fallback, byKey: bol_byKey}),
+      bol_toolbar,
+      bol_msg[0] ? bol_line(bol_msg[0], "1.7rem", bol_GREEN,
+                            {margin: "0 0.6rem 0.8rem", flexShrink: 0})
+                 : null,
+      bol_h(__LEGEND__, {options: {button: __KEYS__.Y,
+                                   inputLegend: "\u2605 " + bol_t("myServers")},
+                         onClick: function () { bol_toggleFav(bol_spot.v); }}),
+      bol_div({flexGrow: 1, flexShrink: 1, flexBasis: 0,
+               display: "flex", flexDirection: "column"}, [
+        bol_h.apply(null, [__SCROLL__, {loading: false}].concat(bol_rows)
+                    .concat([bol_div({height: "2rem"})]))])));
 }

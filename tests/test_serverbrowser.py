@@ -24,7 +24,8 @@ NODE = shutil.which("node")
 
 _DIRECT = (
     'const vM=oi("vanilla.externalServerWorldList"),'
-    'bD=oi("vanilla.thirdPartyWorldList"),VM=oi("vanilla.networkWorldDetails");'
+    'bD=oi("vanilla.thirdPartyWorldList"),VM=oi("vanilla.networkWorldDetails"),'
+    'QM=oi("vanilla.networkWorldJoiner"),JM=oi("vanilla.notificationOptions");'
     'function Ale({label:e,value:n,image:a,subtitle:r}){const c=Q(null!=r?r:""),'
     's=Q(null!=a?a:"");return t.createElement(XJ.ListItem,{value:n},c,s)}'
     'function Mle({item:e,onSelectServer:n}){const a=Fo(VM),'
@@ -85,6 +86,8 @@ _DIRECT = (
     '{noWrap:!0},t.createElement(Fle,{loading:d,routePrefix:e,'
     'showFeaturedServers:n,showCreatorServers:a}),t.createElement(xoe,'
     '{loading:d,scrollViewRef:c,routePrefix:e})))}'
+    'function JX({onClick:e}){return t.createElement(lf,{'
+    'options:{button:ye.Y,inputLegend:C(".viewXboxProfile")},onClick:e})}'
     'function Noe(){const a=ele();return t.createElement(Po,{data:a},'
     'a=>{switch(a){case"banned":return null}})}'
 )
@@ -154,7 +157,7 @@ class Payload(unittest.TestCase):
     def test_language_names_and_strings_follow_the_game(self):
         p = sb.build_payload(self.entries, ui=sb.ui_language("fr_FR"))
         self.assertEqual(p["strings"]["play"], "Jouer")
-        self.assertIn(["fr", 11, "Français"], p["langs"])
+        self.assertIn(["fr", 11, "Français", "français"], p["langs"])
         p = sb.build_payload(self.entries, ui=sb.ui_language("ja_JP"))
         self.assertEqual(p["strings"]["play"], "Play")
         self.assertEqual(set(sb.STRINGS["fr"]), set(sb.STRINGS["en"]))
@@ -268,15 +271,14 @@ class BundlePatch(unittest.TestCase):
 
     def test_direct_shape_names(self):
         names = sb._discover(_DIRECT)
-        expect = {"R": "t", "FOCUS": "Lm", "ALIAS": "Ole", "SIDE": "Fle",
-                  "DETAILS": "xoe", "UFM": "k", "UFC": "J", "ROUTE": "j",
-                  "JU": "jU", "KD": "kD", "EXT": "vM", "TP": "bD",
-                  "USF": "Fo", "UNWRAP": "Po", "XJ": "XJ", "BUTTON": "Cg",
-                  "ICONS": "HL", "ITEM": "Mle", "SPACER": "Ud",
-                  "THEME": "Pl", "NARRATION": "of", "ROUTER": "_",
-                  "PANEL": "Zf", "HEADING": "ng", "BODY": "ag",
-                  "IMAGE": "Bm", "SCROLL": "qp", "TEXTFIELD": "wz",
-                  "UFS": "nt", "WRAP": "Q"}
+        expect = {"R": "t", "FOCUS": "Lm", "SIDE": "Fle", "DETAILS": "xoe",
+                  "UFM": "k", "UFC": "J", "JU": "jU", "KD": "kD",
+                  "EXT": "vM", "TP": "bD", "DET": "VM", "JOINER": "QM",
+                  "NOTIF": "JM", "USF": "Fo",
+                  "UNWRAP": "Po", "BUTTON": "Cg", "ICONS": "HL",
+                  "ROUTER": "_", "PANEL": "Zf", "IMAGE": "Bm", "SCROLL": "qp",
+                  "TEXTFIELD": "wz", "UFS": "nt", "LEGEND": "lf",
+                  "KEYS": "ye", "_prefix": "e"}
         self.assertEqual({k: names[k] for k in expect}, expect)
 
     def test_wrapped_shape_names(self):
@@ -285,19 +287,18 @@ class BundlePatch(unittest.TestCase):
         self.assertEqual(names["USF"], "(0,r.useSharedFacet)")
         self.assertEqual(names["UNWRAP"], "r.Unwrap")
         self.assertEqual(names["R"], "n")
-        self.assertEqual(names["WRAP"], "(0,r.useFacetWrap)")
+        self.assertEqual(names["LEGEND"], "lf")
 
     def test_the_tab_switches_on_the_global(self):
         for bundle in (_DIRECT, _wrapped(_DIRECT)):
             out = self._patched(bundle)
-            self.assertIn(".createElement(bol_on()?bol_Side:Fle,{", out)
-            self.assertIn(".createElement(bol_on()?bol_Details:xoe,{", out)
-            self.assertIn("e=>null==e||bol_isCatRoute(e.id)?void 0:e.id",
-                          out)
-            self.assertIn("(e,t,bol_r)=>bol_selected(e,t,bol_r)", out)
-            self.assertEqual(out.count("function bol_SideView("), 1)
+            R = sb._discover(bundle)["R"]
+            self.assertIn("return " + "bol_on()?" + R
+                          + ".createElement(bol_Hub,{routePrefix:e}):"
+                          + R + ".createElement(Lm,{containerRef:c,", out)
+            self.assertEqual(out.count("function bol_HubView("), 1)
             # Pasted next to the tab, in its scope; no placeholder left.
-            self.assertLess(out.index("function bol_Side("),
+            self.assertLess(out.index("function bol_Hub("),
                             out.index("function Ooe("))
             self.assertNotRegex(out, r"__[A-Z]+__")
             self.assertNotIn("// ", out[out.index("var bol_state"):
@@ -313,8 +314,7 @@ class BundlePatch(unittest.TestCase):
         for broken in (_DIRECT.replace("Icon:HL.Plus", "Icon:HL.Add"),
                        _DIRECT.replace('"vanilla.thirdPartyWorldList"',
                                        '"vanilla.thirdPartyWorlds"'),
-                       _DIRECT.replace("e===t.networkDetails.id",
-                                       "t.networkDetails.id===e"),
+                       _DIRECT.replace("button:ye.Y", "button:ye.X"),
                        _DIRECT.replace(".serverNameLabel", ".nameLabel")):
             self.assertEqual(sb.patch_body(broken), (broken, "lost"))
 
@@ -325,6 +325,98 @@ class BundlePatch(unittest.TestCase):
             r = subprocess.run([NODE, "--check", "-"], input=out,
                                capture_output=True, text=True, timeout=60)
             self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class Ping(unittest.TestCase):
+    @staticmethod
+    def _pong(text):
+        body = text.encode()
+        return (b"\x1c" + b"\0" * 16 + sb._RAKNET_MAGIC
+                + len(body).to_bytes(2, "big") + body)
+
+    def test_a_pong_gives_the_player_counts(self):
+        self.assertEqual(sb.parse_pong(self._pong(
+            "MCPE;My server;800;1.26.60;17;100;123;Sub;Survival;1;19132;")),
+            {"o": 17, "m": 100})
+        self.assertIsNone(sb.parse_pong(self._pong("MCPE;broken")))
+        self.assertIsNone(sb.parse_pong(b"\x1c" + b"\0" * 40))
+        self.assertIsNone(sb.parse_pong(self._pong(
+            "MCPE;x;1;1;many;100")))
+
+    def test_answers_are_matched_to_every_name_of_an_address(self):
+        pong = self._pong("MCPE;m;800;1.26;3;20;1;s;Survival;")
+
+        class Sock:
+            def __init__(self):
+                self.sent, self.inbox = [], []
+            def setblocking(self, flag):
+                pass
+            def sendto(self, packet, address):
+                self.sent.append(address)
+                if address == ("10.0.0.1", 19132):
+                    self.inbox.append((pong, address))
+            def recvfrom(self, size):
+                self._r.recv(1)
+                return self.inbox.pop(0)
+            def fileno(self):
+                return self._r.fileno()
+        sock = Sock()
+        import socket as real
+        a, b = real.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        sock._r = a
+        b.send(b"x")  # select() then sees the fake socket readable once
+        names = {"a.example.org": "10.0.0.1", "b.example.org": "10.0.0.1",
+                 "down.example.org": "10.0.0.2", "gone.example.org": None}
+        got = sb.ping_servers(
+            [("A.example.org", 19132), ("b.example.org", 19132),
+             ("down.example.org", 19132), ("gone.example.org", 19132)],
+            timeout=0.5, resolve=names.get, sock=sock)
+        self.assertEqual(got, {"a.example.org:19132": {"o": 3, "m": 20},
+                               "b.example.org:19132": {"o": 3, "m": 20}})
+        self.assertEqual(sorted(sock.sent), [("10.0.0.1", 19132),
+                                             ("10.0.0.2", 19132)])
+
+    def test_status_reaches_the_payload_and_its_cache_expires(self):
+        cache = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, cache)
+        sb.save_status({"play1.example.org:19132": {"o": 5, "m": 50}},
+                       cache, now=1000)
+        status = sb.cached_status(cache, now=1000 + 60)
+        self.assertIsNone(sb.cached_status(cache, now=1000 + 2 * 86400))
+        p = sb.build_payload(sb._valid_entries(_entries()), status=status)
+        by = {s["n"]: s for s in p["servers"]}
+        self.assertEqual((by["Server 1"]["on"], by["Server 1"]["mx"]),
+                         (5, 50))
+        self.assertEqual(by["Server 2"]["off"], 1)
+        self.assertTrue(p["pinged"])
+        p = sb.build_payload(sb._valid_entries(_entries()))
+        self.assertFalse(any("off" in s for s in p["servers"]))
+        self.assertFalse(p["pinged"])
+
+
+class PlayerServers(unittest.TestCase):
+    def test_every_account_list_is_read_by_address(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        one, two = root / "1", root / "2"
+        one.mkdir()
+        two.mkdir()
+        (one / "external_servers.txt").write_text(
+            "1:Linesia SkyFaction:play.linesia.net:19132:1791021913\n"
+            "2:Odd: name:Play.Example.org:19133:1\nbroken line\n")
+        (two / "external_servers.txt").write_text("")
+        self.assertEqual(sb.player_servers([one, two, root / "none"]), {
+            "play.linesia.net:19132": "Linesia SkyFaction",
+            "play.example.org:19133": "Odd: name"})
+
+    def test_the_language_falls_back_to_the_locale(self):
+        self.assertEqual(sb.ui_language("", {"LANG": "fr_FR.UTF-8"}), "fr")
+        self.assertEqual(sb.ui_language("", {"LC_ALL": "C",
+                                             "LANG": "fr_CA.UTF-8"}), "fr")
+        self.assertEqual(sb.ui_language("en_US", {"LANG": "fr_FR"}), "en")
+        self.assertEqual(sb.ui_language("", {}), "en")
 
 
 class Branding(unittest.TestCase):
@@ -347,7 +439,7 @@ class Branding(unittest.TestCase):
         head, _, body = first.partition("\n")
         self.assertTrue(head.startswith("var __bolPartnerList="))
         self.assertIn('var __bolServerBrowser={"on":true', head)
-        self.assertIn("function bol_SideView(", body)
+        self.assertIn("function bol_HubView(", body)
         self.assertTrue((js.parent / (js.name + ".bol-orig")).is_file())
 
         off = sb.build_payload([], on=False)
@@ -361,7 +453,22 @@ class Branding(unittest.TestCase):
     def test_no_payload_keeps_the_partner_patch_alone(self):
         game, js = self._game(_DIRECT)
         self.assertTrue(branding.feature_partner_servers(game))
-        self.assertNotIn("bol_SideView", js.read_text(encoding="utf-8"))
+        self.assertNotIn("bol_HubView", js.read_text(encoding="utf-8"))
+
+    def test_the_ping_rewrites_the_global_alone(self):
+        game, js = self._game(_DIRECT)
+        entries = sb._valid_entries(_entries())
+        branding.feature_partner_servers(game,
+                                         browser=sb.build_payload(entries))
+        before = js.read_text(encoding="utf-8").partition("\n")
+        live = sb.build_payload(entries, status={
+            "play1.example.org:19132": {"o": 9, "m": 10}})
+        self.assertTrue(sb.rewrite_runtime(js, live))
+        after = js.read_text(encoding="utf-8").partition("\n")
+        self.assertEqual(after[2], before[2])
+        self.assertTrue(after[0].startswith("var __bolPartnerList="))
+        self.assertIn('"on":9', after[0])
+        self.assertEqual(after[0].count("__bolServerBrowser="), 1)
 
     def test_a_tab_the_browser_cannot_read_keeps_the_partners(self):
         game, js = self._game(_DIRECT.replace(".serverNameLabel", ".x"))
@@ -374,13 +481,13 @@ class Branding(unittest.TestCase):
 
 @unittest.skipUnless(NODE, "node is not installed")
 class TabLogic(unittest.TestCase):
-    """The tab's search and lists, run in Node against the real template."""
+    """The page's cards, rows and search, run in Node on the real template."""
 
     def _run(self, payload, expr):
         names = {k: "S_" + k for k in sb._PLACEHOLDERS}
-        names["KD"] = "S_KD"
         code = sb._render(sb._template(), names)
         script = ("var S_KD={External:1,ThirdParty:2};"
+                  "var S_R={memo:function(f){return f;}};"
                   + sb.runtime_line(payload) + code
                   + ";process.stdout.write(JSON.stringify(" + expr + "))")
         r = subprocess.run([NODE, "-"], input=script, capture_output=True,
@@ -391,51 +498,80 @@ class TabLogic(unittest.TestCase):
     def setUp(self):
         entries = sb._valid_entries(_entries())
         entries[4]["description"] = "Un serveur Créatif très calme"
-        self.payload = sb.build_payload(entries,
-                                        partner_hosts=["play.linesia.net"])
+        status = {f"play{i}.example.org:19132": {"o": i * 10, "m": 500}
+                  for i in range(0, 30, 2)}
+        status["play.linesia.net:19132"] = {"o": 1000, "m": 2000}
+        self.payload = sb.build_payload(
+            entries, ui="fr", partner_hosts=["play.linesia.net"],
+            status=status,
+            mine={"play3.example.org:19132": "My third"})
+        self.snap = ('{favs:[{id:5,name:"My third"},{id:6,name:"Elsewhere",'
+                     'motd:"progressScreen.message.locating"}],'
+                     'partners:[],featured:[{id:"h",name:"Hive",'
+                     'image:"hive.png"}],creators:[]}')
 
-    def test_partners_come_first_then_the_list_order(self):
-        got = self._run(self.payload,
-                        'bol_catalogue({query:"",cat:"",lang:""},[])')
-        self.assertEqual(len(got), 31)
-        self.assertEqual(got[0]["label"], "Linesia")
-        self.assertEqual(got[0]["message"], "Factions · FR")
+    def rows(self, query="", lang=""):
+        return self._run(self.payload, (
+            'bol_rowsFor(bol_cards(%s),bol_words(%s),%s).map(function(r){'
+            'return [r.key,r.title,r.cards.map(function(c){return c.n})]})'
+            % (self.snap, json.dumps(query), json.dumps(lang))))
+
+    def test_rows_in_order_with_the_most_played_first(self):
+        rows = self.rows()
+        keys = [r[0] for r in rows]
+        self.assertEqual(keys[:4], ["mine", "partners", "local", "popular"])
+        self.assertEqual(keys[-1], "all")
+        self.assertIn("cat-Factions", keys)
+        mine = rows[0][2]
+        self.assertEqual(mine, ["Server 3", "Elsewhere"])
+        self.assertEqual(rows[1][2], ["Hive"])
+        self.assertEqual(rows[2][1], "Les plus joués en français")
+        self.assertEqual(rows[2][2][:3], ["Linesia", "Server 24",
+                                          "Server 18"])
+        popular = rows[3][2]
+        self.assertEqual(popular[:2], ["Linesia", "Server 28"])
+        self.assertNotIn("Server 1", popular)  # down: not featured
+        every = rows[-1][2]
+        self.assertEqual(len(every), 31)
+        self.assertEqual(every[-1], "Server 29")  # down ones last
 
     def test_search_by_address_category_and_folded_keyword(self):
-        q = 'bol_catalogue({query:%s,cat:"",lang:""},[])'
-        got = self._run(self.payload, q % '"play7.example"')
-        self.assertEqual([g["label"] for g in got], ["Server 7"])
-        got = self._run(self.payload, q % '"creatif"')
-        self.assertEqual([g["label"] for g in got], ["Server 4"])
-        got = self._run(self.payload, q % '"skyblock 1"')
-        self.assertEqual([g["label"] for g in got],
-                         ["Server %d" % i for i in (1, 11, 13, 15, 17, 19,
-                                                     21)])
+        def names(q):
+            return self.rows(q)[0][2]
+        self.assertEqual(names("play7.example"), ["Server 7"])
+        self.assertEqual(names("creatif"), ["Server 4"])
+        self.assertEqual(names("elsew"), ["Elsewhere"])
+        self.assertEqual(self.rows("nothing at all"), [])
+        # Equally relevant: the ones that answered the ping first.
+        found = names("number")
+        self.assertEqual(found[:2], ["Server 28", "Server 26"])
+        self.assertEqual(found[-1], "Server 29")
 
-    def test_filters_and_favorite_marks(self):
-        got = self._run(self.payload, 'bol_catalogue({query:"",'
-                        'cat:"Skyblock",lang:"fr"},[{id:5,name:"server 3"}])')
-        self.assertEqual([g["label"] for g in got],
-                         ["★ Server 3", "Server 9", "Server 15",
-                          "Server 21", "Server 27"])
+    def test_language_filter(self):
+        rows = {r[0]: r for r in self.rows(lang="en")}
+        self.assertNotIn("partners", rows)
+        self.assertNotIn("mine", rows)  # both of the player's are not English
+        self.assertEqual(rows["popular"][1], "Les plus joués en anglais")
+        for _, _, names in rows.values():
+            for n in names:
+                self.assertNotEqual(int(n.split()[1]) % 3, 0, n)
 
-    def test_snapshot_moves_partners_out_of_favorites(self):
+    def test_cards_know_the_players_servers(self):
         got = self._run(self.payload, (
-            'bol_snapshot({externalServerWorlds:[{id:1,name:"Mine"}]},'
-            '{featuredExperiences:[{id:"f",name:"Hive",msgOfTheDay:"m",'
-            'image:"i"}],creatorExperiences:null})'))
-        self.assertEqual(got["favs"], [{"id": 1, "name": "Mine"}])
-        self.assertEqual(got["featured"][0]["name"], "Hive")
-        self.assertEqual(got["creators"], [])
+            'bol_cards(%s).cat.filter(function(c){return c.fav})'
+            '.map(function(c){return [c.n,c.id,c.kind]})' % self.snap))
+        self.assertEqual(got, [["Server 3", 5, "mine"]])
+        got = self._run(self.payload, (
+            'bol_cards(%s).mine.map(function(c){return c.motd||""})'
+            % self.snap))
+        self.assertEqual(got[1], "")  # an untranslated key is not shown
 
-    def test_strings_and_routes(self):
-        got = self._run(self.payload, '[bol_t("showMore",[40,659]),'
-                        'bol_isCatRoute("bol-x"),bol_isCatRoute("12"),'
-                        'bol_selected("bol-x",{networkDetails:{id:"f"}},'
-                        '{id:"bol-x"}),bol_selected("f",{networkDetails:'
-                        '{id:"f"}},{id:"bol-x"})]')
-        self.assertEqual(got, ["Show more (40 of 659)", True, False, True,
-                               False])
+    def test_strings_and_counts(self):
+        got = self._run(self.payload, '[bol_t("online",[bol_compact(1234)]),'
+                        'bol_compact(20452),bol_langName("fr"),'
+                        'bol_langName("fr",true),bol_langName("")]')
+        self.assertEqual(got, ["1.2k en ligne", "20k", "Français",
+                               "français", "Toutes les langues"])
 
 
 if __name__ == "__main__":

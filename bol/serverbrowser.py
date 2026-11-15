@@ -1,30 +1,38 @@
-"""BedrockOnLinux's own Servers tab: favorites, partners, every server.
+"""BedrockOnLinux's own Servers tab: one page of tiles, every server.
 
 The game's Servers tab lists the player's own servers next to Microsoft's
-featured ones. With the ``server_browser`` setting on (the default) the side
-menu of that tab is replaced by three sections the player switches between,
-by mouse or controller alike:
+featured ones, one name per line. With the ``server_browser`` setting on
+(the default) it becomes a page built like a game store, for the mouse and
+the controller alike:
 
-* **Favorites** -- the player's own server list, the one the game keeps in
-  ``external_servers.txt``, with the game's own "Add server" form for any
-  address that is not in the community list;
-* **Partners** -- BedrockOnLinux's partner servers, then Microsoft's featured
-  and creator servers;
-* **All** -- the community list github.com/Wyze3306/bedrock-servers-list,
-  searchable by name, address, category or any word of a description, and
-  filtered by category and language.
+* a spotlight at the top describing the tile that has focus (artwork,
+  players online, categories, description, address) with Play and Add to
+  my servers;
+* a search bar (name, address, category or any word of a description) and
+  a language choice;
+* rows of tiles: the player's own servers (the game's
+  ``external_servers.txt``), the partner and featured servers, the most
+  played servers in the game's language and overall, one row per category,
+  then every server of the community list
+  github.com/Wyze3306/bedrock-servers-list.
 
-A server of the community list gets its own details pane (banner, address,
-categories, description) with "Play", which adds it to the player's list and
-joins through the game's online-play warning exactly as the game's "Add and
-play" does, and "Add to favorites".
+A tile joins its server in one press. A server of the community list is
+first added to the player's own list, since the game only joins servers it
+knows, then joined the way the game's own details pane does: straight away
+when the player has turned the safety warning off, through the game's
+warning screen otherwise.
+
+The player counts come from the RakNet status ping every Bedrock server
+answers, sent to the whole list in the background at each launch: the page
+shows the last answers, and the bundle's first line takes the new ones when
+they arrive, usually before the game reaches its menu.
 
 How it gets there: bol/hbui/serverbrowser.js holds the React components,
 written against placeholders. ``_discover`` reads, from anchors the Servers
 tab cannot drop without being rewritten, the minified name each build gives
-the components and hooks they use, and the components are pasted into the
-bundle's own scope next to the vanilla tab. The vanilla tab then draws them
-instead of its own side menu and details pane, but only while the
+the components, hooks and engine facets they use, and the components are
+pasted into the bundle's own scope next to the vanilla tab. The vanilla tab
+then draws the page instead of its own two panes, but only while the
 ``__bolServerBrowser`` global on the bundle's first line says so: switching
 the setting off rewrites that line alone, and the game is back to its own
 tab without the bundle being restored.
@@ -64,7 +72,7 @@ _ASSET_PREFIX = "bol-srv-"
 _DESCRIPTION_CHARS = 1500
 
 # Marks a bundle carrying the components, and is the global they read.
-MARK = "bol_SideView"
+MARK = "bol_HubView"
 GLOBAL = "__bolServerBrowser"
 
 # A tag every entry carries says nothing: the list's importer once stamped
@@ -78,87 +86,72 @@ _MIN_CATEGORY = 3
 
 STRINGS = {
     "en": {
-        "tabFavorites": "Favorites ({0})",
-        "tabPartners": "Partners ({0})",
-        "tabAll": "All ({0})",
         "search": "Search",
         "searchPlaceholder": "Name, address, category or keyword",
-        "addServer": "Add a server",
-        "yourServers": "Your servers ({0})",
-        "noFavorites": "No favorites yet. Add a server by its address, or "
-                       "open one under All and choose Add to favorites.",
-        "noMatch": "No server matches this search.",
-        "bolPartners": "BedrockOnLinux partners",
-        "featured": "Featured servers ({0})",
-        "creators": "Creator servers ({0})",
-        "noPartners": "The featured servers have not loaded yet.",
-        "allCategories": "All categories",
-        "allLanguages": "All languages",
-        "category": "Category",
         "language": "Language",
+        "allLanguages": "All languages",
+        "addServer": "Add a server",
+        "myServers": "My servers",
+        "myServersHint": "The ones you added or played",
+        "partners": "Partners",
+        "popular": "Most played",
+        "popularIn": "Most played in {0}",
+        "pingedHint": "Players online at launch",
+        "everyServer": "Every server",
+        "results": "Results",
         "count": "{0} servers",
-        "back": "Back",
-        "servers": "Servers ({0})",
-        "showMore": "Show more ({0} of {1})",
+        "seeAll": "See all",
+        "showMore": "Show more",
+        "noMatch": "No server matches this search.",
         "listUnavailable": "The server list could not be downloaded. "
                            "It is fetched again at the next launch.",
-        "narrationContext": "Servers",
+        "online": "{0} online",
+        "offline": "Offline",
+        "server": "Server",
         "play": "Play",
-        "favorite": "Add to favorites",
-        "unfavorite": "Remove from favorites",
-        "added": "Added to your favorites.",
+        "favorite": "Add to my servers",
+        "unfavorite": "Remove from my servers",
+        "added": "{0} is now in your servers.",
+        "removed": "{0} was removed from your servers.",
         "alreadyAdded": "This address is already in your servers under "
                         "another name.",
         "addFailed": "This server could not be added.",
         "removeFailed": "This server could not be removed.",
         "version": "Version {0}",
-        "about": "About",
-        "noDescription": "This server has no description.",
-        "links": "Links",
-        "source": "From the community list "
-                  "github.com/Wyze3306/bedrock-servers-list",
     },
     "fr": {
-        "tabFavorites": "Favoris ({0})",
-        "tabPartners": "Partenaires ({0})",
-        "tabAll": "Tous ({0})",
         "search": "Rechercher",
         "searchPlaceholder": "Nom, adresse, catégorie ou mot-clé",
-        "addServer": "Ajouter un serveur",
-        "yourServers": "Vos serveurs ({0})",
-        "noFavorites": "Aucun favori pour l'instant. Ajoutez un serveur par "
-                       "son adresse, ou ouvrez-en un dans Tous et choisissez "
-                       "Ajouter aux favoris.",
-        "noMatch": "Aucun serveur ne correspond à cette recherche.",
-        "bolPartners": "Partenaires BedrockOnLinux",
-        "featured": "Serveurs en vedette ({0})",
-        "creators": "Serveurs de créateurs ({0})",
-        "noPartners": "Les serveurs en vedette ne sont pas encore chargés.",
-        "allCategories": "Toutes les catégories",
-        "allLanguages": "Toutes les langues",
-        "category": "Catégorie",
         "language": "Langue",
+        "allLanguages": "Toutes les langues",
+        "addServer": "Ajouter un serveur",
+        "myServers": "Mes serveurs",
+        "myServersHint": "Ceux que vous avez ajoutés ou joués",
+        "partners": "Partenaires",
+        "popular": "Les plus joués",
+        "popularIn": "Les plus joués en {0}",
+        "pingedHint": "Joueurs en ligne au lancement",
+        "everyServer": "Tous les serveurs",
+        "results": "Résultats",
         "count": "{0} serveurs",
-        "back": "Retour",
-        "servers": "Serveurs ({0})",
-        "showMore": "Afficher plus ({0} sur {1})",
+        "seeAll": "Tout voir",
+        "showMore": "Afficher plus",
+        "noMatch": "Aucun serveur ne correspond à cette recherche.",
         "listUnavailable": "La liste des serveurs n'a pas pu être "
                            "téléchargée. Nouvel essai au prochain lancement.",
-        "narrationContext": "Serveurs",
+        "online": "{0} en ligne",
+        "offline": "Hors ligne",
+        "server": "Serveur",
         "play": "Jouer",
-        "favorite": "Ajouter aux favoris",
-        "unfavorite": "Retirer des favoris",
-        "added": "Ajouté à vos favoris.",
+        "favorite": "Ajouter à mes serveurs",
+        "unfavorite": "Retirer de mes serveurs",
+        "added": "{0} est maintenant dans vos serveurs.",
+        "removed": "{0} a été retiré de vos serveurs.",
         "alreadyAdded": "Cette adresse est déjà dans vos serveurs sous un "
                         "autre nom.",
         "addFailed": "Ce serveur n'a pas pu être ajouté.",
         "removeFailed": "Ce serveur n'a pas pu être retiré.",
         "version": "Version {0}",
-        "about": "Présentation",
-        "noDescription": "Ce serveur n'a pas de description.",
-        "links": "Liens",
-        "source": "Issu de la liste communautaire "
-                  "github.com/Wyze3306/bedrock-servers-list",
     },
 }
 
@@ -190,9 +183,22 @@ def enabled(settings):
     return bool(settings.get(SETTING, True))
 
 
-def ui_language(game_language):
-    """The tab's language for the game's ``game_language`` (``fr_FR``)."""
+def ui_language(game_language, environ=None):
+    """The tab's language for the game's ``game_language`` (``fr_FR``).
+
+    The game leaves the setting empty until the player picks a language,
+    and then follows the system's, which under Wine is the launcher's
+    locale: LC_ALL, then LC_MESSAGES, then LANG.
+    """
     code = str(game_language or "").split("_")[0].lower()
+    if not code:
+        import os
+        env = os.environ if environ is None else environ
+        for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+            value = str(env.get(var) or "")
+            if value and value not in ("C", "POSIX"):
+                code = value.split(".")[0].split("_")[0].lower()
+                break
     return code if code in STRINGS else "en"
 
 
@@ -363,6 +369,202 @@ def prefetch_images(entries, cache=LIST_CACHE):
 
 
 # --------------------------------------------------------------------------
+# Who is online: the RakNet "unconnected ping" every Bedrock server answers
+# (the game's own LAN and server-list pings), sent once per launch.
+
+_RAKNET_MAGIC = bytes.fromhex("00ffff00fefefefefdfdfdfd12345678")
+_STATUS_FILE = "status.json"
+_STATUS_TTL = 24 * 3600
+_PING_TIMEOUT = 2.5
+_RESOLVE_WORKERS = 48
+
+
+def _target_key(host, port):
+    return f"{str(host).strip().lower()}:{int(port)}"
+
+
+def _ping_packet(stamp):
+    return (b"\x01" + struct.pack(">q", stamp) + _RAKNET_MAGIC
+            + struct.pack(">q", 0x424F4C))
+
+
+def parse_pong(blob):
+    """{"o": online, "m": max} from an unconnected pong, or None."""
+    if len(blob) < 35 or blob[0] != 0x1C or blob[17:33] != _RAKNET_MAGIC:
+        return None
+    size = struct.unpack(">H", blob[33:35])[0]
+    fields = blob[35:35 + size].decode("utf-8", "replace").split(";")
+    if len(fields) < 6 or fields[0] not in ("MCPE", "MCEE"):
+        return None
+    try:
+        online, most = int(fields[4]), int(fields[5])
+    except ValueError:
+        return None
+    if online < 0 or most < 0:
+        return None
+    return {"o": online, "m": most}
+
+
+def _resolve(host):
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_INET,
+                                   socket.SOCK_DGRAM)
+    except (OSError, UnicodeError):
+        return None
+    return infos[0][4][0] if infos else None
+
+
+def ping_servers(targets, timeout=_PING_TIMEOUT, resolve=_resolve,
+                 sock=None):
+    """{"host:port": {"o", "m"}} for every target that answered in time.
+
+    ``targets`` is an iterable of (host, port). One UDP socket, one packet
+    per server; names are resolved in parallel first. Never raises: no
+    network means an empty answer.
+    """
+    import socket
+    from concurrent.futures import ThreadPoolExecutor, wait
+    targets = {(_target_key(h, p), str(h).strip().lower(), int(p))
+               for h, p in targets}
+    if not targets:
+        return {}
+    deadline = time.monotonic() + timeout
+    hosts = sorted({h for _, h, _ in targets})
+    pool = ThreadPoolExecutor(max_workers=_RESOLVE_WORKERS,
+                              thread_name_prefix="bol-resolve")
+    futures = {h: pool.submit(resolve, h) for h in hosts}
+    wait(futures.values(), timeout=max(0.1, timeout * 0.6))
+    pool.shutdown(wait=False, cancel_futures=True)
+    addresses = {}
+    for key, host, port in targets:
+        f = futures[host]
+        ip = f.result() if f.done() and not f.cancelled() else None
+        if ip:
+            addresses.setdefault((ip, port), []).append(key)
+    out = {}
+    own = sock is None
+    try:
+        if own:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setblocking(False)
+        packet = _ping_packet(int(time.monotonic() * 1000))
+        for address in addresses:
+            try:
+                sock.sendto(packet, address)
+            except OSError:
+                continue
+        import select
+        while len(out) < len(targets):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            ready, _, _ = select.select([sock], [], [], left)
+            if not ready:
+                break
+            try:
+                blob, address = sock.recvfrom(2048)
+            except OSError:
+                continue
+            pong = parse_pong(blob)
+            if pong:
+                for key in addresses.get((address[0], address[1]), ()):
+                    out[key] = pong
+    except OSError:
+        pass
+    finally:
+        if own and sock is not None:
+            sock.close()
+    return out
+
+
+def ping_targets(entries, mine=None):
+    out = []
+    for e in entries:
+        try:
+            out.append((str(e["ip"]).strip(), int(e.get("port") or 19132)))
+        except (KeyError, TypeError, ValueError):
+            continue
+    for key in mine or {}:
+        host, _, port = key.rpartition(":")
+        if host and port.isdigit():
+            out.append((host, int(port)))
+    return out
+
+
+def cached_status(cache=LIST_CACHE, now=None):
+    """The last ping's answers, or None when there is none from today."""
+    now = time.time() if now is None else now
+    try:
+        data = json.loads((Path(cache) / _STATUS_FILE).read_text("utf-8"))
+        if now - float(data["t"]) > _STATUS_TTL:
+            return None
+        status = data["s"]
+        return status if isinstance(status, dict) else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def save_status(status, cache=LIST_CACHE, now=None):
+    path = Path(cache) / _STATUS_FILE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps({"t": time.time() if now is None else now,
+                                   "s": status}), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def refresh_status(targets, on_done=None, cache=LIST_CACHE):
+    """Ping in a daemon thread, save the answers, then ``on_done(status)``.
+
+    PLAY never waits on it: the game takes far longer to reach its menu than
+    the ping takes, and ``on_done`` rewrites the bundle's first line in time
+    in the usual case. Otherwise the counts saved here show next launch.
+    """
+    def run():
+        status = ping_servers(targets)
+        if not status:  # offline: keep the last counts rather than none
+            return
+        save_status(status, cache)
+        if on_done is not None:
+            try:
+                on_done(status)
+            except Exception as e:  # cosmetic: a stale count at worst
+                warn(f"Could not show the live player counts: {e}")
+    t = threading.Thread(target=run, name="bol-server-ping", daemon=True)
+    t.start()
+    return t
+
+
+# --------------------------------------------------------------------------
+# The player's own list, which the game hands the UI by name only: its
+# addresses tell which catalogue servers the player already has.
+
+def player_servers(data_dirs):
+    """{"host:port": name} from every ``external_servers.txt`` given."""
+    out = {}
+    for folder in data_dirs:
+        try:
+            text = (Path(folder) / "external_servers.txt").read_text(
+                encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            # id:name:host:port:timestamp -- a name may hold colons.
+            parts = line.strip().split(":")
+            if len(parts) < 5 or not parts[-2].isdigit():
+                continue
+            name = ":".join(parts[1:-3]).strip()
+            host = parts[-3].strip()
+            if name and host:
+                out[_target_key(host, parts[-2])] = name
+    return out
+
+
+# --------------------------------------------------------------------------
 # What the injected tab reads
 
 
@@ -371,12 +573,20 @@ def _language_name(code, ui):
     return names.get(code) or names.get(code.split("-")[0]) or code.upper()
 
 
+def _language_in_sentence(name, ui):
+    # "Most played in French", but "Les plus joués en français".
+    return name.lower() if ui == "fr" else name
+
+
 def build_payload(entries, *, on=True, ui="en", images=None,
-                  partner_hosts=()):
+                  partner_hosts=(), status=None, mine=None):
     """The ``__bolServerBrowser`` object: settings, strings, servers.
 
     ``images`` maps a server's slug to the asset name its banner was copied
-    under, with its height as a percentage of its width.
+    under, with its height as a percentage of its width. ``status`` is
+    ``ping_servers``' answer ({"host:port": {"o", "m"}}), None when no ping
+    ran: then nobody is shown offline. ``mine`` maps the player's own
+    servers' "host:port" to the name they gave them.
     """
     images = images or {}
     total = len(entries) or 1
@@ -422,6 +632,12 @@ def build_payload(entries, *, on=True, ui="en", images=None,
             s["img"], s["ih"] = images[slug]
         if s["a"].lower() in partner_hosts:
             s["pt"] = 1
+        if status is not None:
+            live = status.get(_target_key(s["a"], port))
+            if live:
+                s["on"], s["mx"] = live["o"], live["m"]
+            else:
+                s["off"] = 1
         servers.append(s)
     cats = sorted(((t, n) for t, n in counts.items()
                    if t not in noise and n >= _MIN_CATEGORY),
@@ -431,10 +647,15 @@ def build_payload(entries, *, on=True, ui="en", images=None,
     strings.update(STRINGS.get(ui, {}))
     return {
         "on": bool(on),
+        "ui": ui,
         "strings": strings,
         "servers": servers,
         "cats": [[t, n] for t, n in cats],
-        "langs": [[c, n, _language_name(c, ui)] for c, n in lang_list],
+        "langs": [[c, n, _language_name(c, ui),
+                   _language_in_sentence(_language_name(c, ui), ui)]
+                  for c, n in lang_list],
+        "mine": dict(mine or {}),
+        "pinged": status is not None,
     }
 
 
@@ -444,6 +665,33 @@ def runtime_line(payload):
     # Inside a <script>-less bundle "</" is harmless, but U+2028/9 and a
     # stray newline are not: ensure_ascii escapes both.
     return "var " + GLOBAL + "=" + text + ";"
+
+
+def rewrite_runtime(js, payload):
+    """Swap the global on a patched bundle's first line; True if done.
+
+    Written to a temporary file and renamed over the bundle, so the game
+    reading it at that moment sees the old file or the new one, whole.
+    """
+    js = Path(js)
+    try:
+        data = js.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    head, sep, body = data.partition("\n")
+    at = head.find("var " + GLOBAL + "=")
+    if at == -1 or MARK not in body:
+        return False
+    new = head[:at] + runtime_line(payload) + sep + body
+    if new == data:
+        return True
+    try:
+        tmp = js.with_name(js.name + ".bol-tmp")
+        tmp.write_text(new, encoding="utf-8")
+        tmp.replace(js)
+    except OSError:
+        return False
+    return True
 
 
 def install_images(hbui, entries, cache=LIST_CACHE):
@@ -600,13 +848,13 @@ def _discover(data):
     names["UFC"] = _one(r"=(" + _HOOK + r")\(\(?" + _N + r"=>\(" + _N + ","
                         + _N + r"\)=>\{" + _N + r"\.loadNetworkWorldDetails",
                         tab_text)
-    m = re.search(r"(" + _N + r")=(" + _N + r")\(\)," + _N + r"="
-                  + _HOOK + r"\(\(?e=>null==e\?void 0:e\.id", tab_text)
-    names["ROUTE"] = m.group(2) if m else None
     m = re.search(r"===(" + _N + r")\((" + _N + r")\.External\)\?", tab_text)
     names["JU"], names["KD"] = (m.group(1), m.group(2)) if m else (None, None)
     names["EXT"] = _facet_def(data, "externalServerWorldList")
     names["TP"] = _facet_def(data, "thirdPartyWorldList")
+    names["DET"] = _facet_def(data, "networkWorldDetails")
+    names["JOINER"] = _facet_def(data, "networkWorldJoiner")
+    names["NOTIF"] = _facet_def(data, "notificationOptions")
     if names["EXT"]:
         names["USF"] = _one(r"=(" + _HOOK + r")\(" + re.escape(names["EXT"])
                             + r"\)", tab_text)
@@ -619,18 +867,9 @@ def _discover(data):
     _, side = _function_named(data, names["SIDE"])
     if not side:
         return None
-    names["XJ"] = _one(ce + r"(" + _N + r"),\{spacingAroundSideMenu:", side)
     m = re.search(ce + r"(" + _N + r"),\{onClick:" + _N + r",Icon:(" + _N
                   + r")\.Plus,inputLegend:", side)
     names["BUTTON"], names["ICONS"] = (m.group(1), m.group(2)) if m else (
-        None, None)
-    names["ITEM"] = _one(ce + r"(" + _N + r"),\{item:" + _N
-                         + r",onSelectServer:", side)
-    names["SPACER"] = _one(ce + r"(" + _N + r"),\{size:4\}\)", side)
-    m = re.search(r"return " + ce + r"(" + _N + r"),\{role:" + _N + r"\},"
-                  + ce + r"(" + _N + r"),\{text:" + _N
-                  + r'\("\.context"\)\}', side)
-    names["THEME"], names["NARRATION"] = (m.group(1), m.group(2)) if m else (
         None, None)
     router_var = _one(r"(" + _N + r")\.push\(`\$\{" + _N
                       + r"\}/servers/add`\)", side)
@@ -641,11 +880,6 @@ def _discover(data):
     # The details layout of a featured server, for the catalogue's own.
     names["PANEL"] = _one(ce + r"(" + _N + r"),\{focusable:!0,"
                           r'role:"neutral80",narrationText:', data)
-    m = re.search(ce + r"(" + _N + r"),null," + _N
-                  + r'\("\.ServerDescription\.title"\)\),' + ce + _N
-                  + r",\{size:2\}\)," + ce + r"(" + _N + r"),null,", data)
-    names["HEADING"], names["BODY"] = (m.group(1), m.group(2)) if m else (
-        None, None)
     names["IMAGE"] = _one(ce + r"(" + _N + r"),\{aspectRatio:" + _N
                           + r'\.AspectRatio\["10:3"\]', data)
     _, details = _function_named(data, names["DETAILS"])
@@ -663,11 +897,14 @@ def _discover(data):
         states = re.findall(r"\[" + re.escape(field.group(2)) + r","
                             + _N + r"\]=(" + _HOOK + r")\(", before)
         names["UFS"] = states[-1] if states else None
-    if names.get("ITEM"):
-        _, item = _function_named(data, names["ITEM"])
-        if item:
-            names["WRAP"] = _wrap_hook(data, names["ITEM"], item)
-    if not all(names.get(k) for k in _PLACEHOLDERS):
+    # The game's gamepad shortcut: a button, its legend, its callback.
+    m = re.search(ce + r"(" + _N + r"),\{options:\{button:(" + _N
+                  + r")\.Y,inputLegend:", data)
+    names["LEGEND"], names["KEYS"] = (m.group(1), m.group(2)) if m else (
+        None, None)
+    m = re.search(r"\{routePrefix:(" + _N + r')="/play",', tab_text)
+    names["_prefix"] = m.group(1) if m else None
+    if not names["_prefix"] or not all(names.get(k) for k in _PLACEHOLDERS):
         return None
     names["_tab_start"] = tab.start()
     names["_tab"] = tab_text
@@ -675,34 +912,12 @@ def _discover(data):
     return names
 
 
-def _wrap_hook(data, item_name, item_text):
-    """useFacetWrap: the list item's image line wraps a plain prop with it."""
-    # The item renders a "rich" row component that wraps its optional props:
-    # `c=Q(null!=r?r:"")`.
-    inner = _one(r"\.createElement\((" + _N + r"),\{label:" + _N
-                 + r",value:" + _N + r",image:", item_text)
-    if not inner:
-        return None
-    _, row = _function_named(data, inner)
-    if not row:
-        return None
-    return _one(r"=(" + _HOOK + r")\(null!=" + _N + r"\?" + _N + r':""\)',
-                row)
-
-
 _PLACEHOLDERS = (
-    "R", "FOCUS", "ALIAS", "SIDE", "DETAILS", "UFM", "UFC", "ROUTE", "JU",
-    "KD", "EXT", "TP", "USF", "UNWRAP", "XJ", "BUTTON", "ICONS", "ITEM",
-    "SPACER", "THEME", "NARRATION", "ROUTER", "PANEL", "HEADING", "BODY",
-    "IMAGE", "SCROLL", "TEXTFIELD", "UFS", "WRAP",
+    "R", "FOCUS", "SIDE", "DETAILS", "UFM", "UFC", "JU", "KD", "EXT", "TP",
+    "DET", "JOINER", "NOTIF",
+    "USF", "UNWRAP", "BUTTON", "ICONS", "ROUTER", "PANEL", "IMAGE", "SCROLL",
+    "TEXTFIELD", "UFS", "LEGEND", "KEYS",
 )
-
-# The list item's "selected" test, which also has to know a catalogue
-# server, whose id the game never loads.
-_ITEM_SELECTED = re.compile(
-    r"(\(?)\(e,t\)=>e===t\.networkDetails\.id(\)?,\[\],\[" + _N + "," + _N
-    + r")\]")
-_ROUTE_ID = "e=>null==e?void 0:e.id"
 
 
 def _render(template, names):
@@ -712,10 +927,12 @@ def _render(template, names):
 
 
 def patch_body(data):
-    """Add the components to a bundle body; ``(text, status)``.
+    """Add the page to a bundle body; ``(text, status)``.
 
     The status is "applied", "already", "missing" (no Servers tab in this
     bundle) or "lost" (this build's tab no longer matches; left untouched).
+    The vanilla tab draws the page instead of its own two panes while the
+    global says the browser is on.
     """
     if MARK in data:
         return data, "already"
@@ -725,33 +942,16 @@ def patch_body(data):
     if not names:
         return data, "lost"
     tab_start, tab = names["_tab_start"], names["_tab"]
-    R = names["R"]
-    new_tab = tab
-    for comp, repl in ((names["SIDE"], "bol_Side"),
-                       (names["DETAILS"], "bol_Details")):
-        old = R + ".createElement(" + comp + ",{"
-        if new_tab.count(old) != 1:
-            return data, "lost"
-        new_tab = new_tab.replace(
-            old, R + ".createElement(bol_on()?" + repl + ":" + comp + ",{")
-    if new_tab.count(_ROUTE_ID) != 1:
+    anchors = list(_TAB_ANCHOR.finditer(tab))
+    if len(anchors) != 1:
         return data, "lost"
-    new_tab = new_tab.replace(
-        _ROUTE_ID, "e=>null==e||bol_isCatRoute(e.id)?void 0:e.id")
-    item_start, item = _function_named(data, names["ITEM"])
-    if item_start is None or item_start > tab_start:
-        return data, "lost"
-    sel = _ITEM_SELECTED.findall(item)
-    if len(sel) != 1:
-        return data, "lost"
-    new_item = _ITEM_SELECTED.sub(
-        lambda m: (m.group(1) + "(e,t,bol_r)=>bol_selected(e,t,bol_r)"
-                   + m.group(2) + "," + names["ROUTE"] + "()]"), item)
+    at = anchors[0].start()
+    new_tab = (tab[:at] + "bol_on()?" + names["R"]
+               + ".createElement(bol_Hub,{routePrefix:" + names["_prefix"]
+               + "}):" + tab[at:])
     try:
         code = _render(_template(), names)
     except (OSError, KeyError):
         return data, "lost"
-    out = (data[:item_start] + new_item
-           + data[item_start + len(item):tab_start]
-           + code + new_tab + data[tab_start + len(tab):])
+    out = data[:tab_start] + code + new_tab + data[tab_start + len(tab):]
     return out, "applied"

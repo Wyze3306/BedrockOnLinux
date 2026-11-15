@@ -171,6 +171,7 @@ launcher's name, like any download.
 |---|---|---|
 | `api.mcpedl.com`, `mcpedl.com`, `www.curseforge.com`, `levimc.org`, `bedrock.graphics` | The add-on catalogue, LeviLamina mods and BetterRTX presets you browse or install. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. Search words when you search. |
 | `raw.githubusercontent.com`, `minecraftpocket-servers.com` | The community server list (Wyze3306/bedrock-servers-list) and its server banners, shown in the game's Servers tab while the BedrockOnLinux server browser is on. Refreshed at most twice a day. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. |
+| `the servers of the community list` | How many players each server has online, at each launch while the BedrockOnLinux server browser is on, so the Servers tab can sort them and mark the ones that are down. | One RakNet status request per server (UDP), the one the game itself sends to show a server's player count. No account, no identifier. |
 | `feedback.minecraft.net`, `api.github.com` | The Minecraft and launcher changelogs, when you open them. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. |
 
 **Reporting a problem (only when you press Send)**

@@ -480,18 +480,45 @@ def _game_language():
         return ""
 
 
+def _player_servers():
+    """The player's own servers by address, from every account's list."""
+    try:
+        from .perfcheck import find_game_data_dirs
+        from .prefix import active_prefix
+        return serverbrowser.player_servers(
+            find_game_data_dirs(active_prefix()))
+    except Exception:  # only matches catalogue servers to the player's
+        return {}
+
+
 def server_browser_payload(game_dir, settings):
-    """This launch's ``__bolServerBrowser``: the list, banners, strings."""
+    """This launch's ``__bolServerBrowser``: the list, banners, strings.
+
+    The player counts are the last ping's; a fresh one starts here, and the
+    bundle's first line takes its answers when it comes back.
+    """
     on = serverbrowser.enabled(settings)
     entries = serverbrowser.fetch_list() if on else []
-    images = {}
+    hbui = Path(game_dir) / HBUI_REL
+    images, mine = {}, {}
     if entries:
-        images = serverbrowser.install_images(Path(game_dir) / HBUI_REL,
-                                              entries)
+        images = serverbrowser.install_images(hbui, entries)
         serverbrowser.prefetch_images(entries)
+        mine = _player_servers()
+    args = dict(on=on, ui=serverbrowser.ui_language(_game_language()),
+                images=images, partner_hosts=[p["host"] for p in PARTNERS],
+                mine=mine)
+    if entries:
+        def show(status):
+            payload = serverbrowser.build_payload(entries, status=status,
+                                                  **args)
+            for js in sorted(hbui.glob("index-*.js")):
+                serverbrowser.rewrite_runtime(js, payload)
+        serverbrowser.refresh_status(
+            serverbrowser.ping_targets(entries, mine), on_done=show)
     return serverbrowser.build_payload(
-        entries, on=on, ui=serverbrowser.ui_language(_game_language()),
-        images=images, partner_hosts=[p["host"] for p in PARTNERS])
+        entries, status=serverbrowser.cached_status() if entries else None,
+        **args)
 
 
 def apply_branding(game_dir, settings=None):
