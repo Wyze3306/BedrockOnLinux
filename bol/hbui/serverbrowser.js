@@ -37,9 +37,49 @@ function bol_on() {
   var bol_d = bol_data();
   return !!(bol_d && bol_d.on);
 }
+// The game's current language, as the tab's text code ("fr", "zh-TW"):
+// the one it was launched in until the game's locale says otherwise.
+var bol_cur = "";
+function bol_uiNow() {
+  return bol_cur || (bol_data() || {}).ui || "en";
+}
+// A locale of the game ("fr_FR", "zh_TW") as one of the tab's languages.
+function bol_uiOf(bol_locale) {
+  var bol_d = bol_data() || {}, bol_all = bol_d.i18n || {};
+  if (!bol_locale) return bol_d.ui || "en";
+  var bol_parts = String(bol_locale).replace("-", "_").split("_");
+  var bol_code = bol_parts[0].toLowerCase();
+  var bol_region = (bol_parts[1] || "").toUpperCase();
+  if (bol_code === "zh" && /^(TW|HK|MO)$/.test(bol_region))
+    bol_code = "zh-TW";
+  return bol_all[bol_code] ? bol_code : "en";
+}
+// Switch the tab's text, fonts and partners' text to another language.
+function bol_localize(bol_code) {
+  bol_cur = bol_code;
+  bol_TEN = bol_fonts("Minecraft Ten v2");
+  bol_SEVEN = bol_fonts("Minecraft Seven v2");
+  ((bol_data() || {}).partners || []).forEach(function (bol_pt) {
+    var bol_tr = bol_pt.tr || {};
+    var bol_x = bol_tr[bol_code] || bol_tr.en;
+    if (!bol_x) return;
+    bol_pt.d = bol_x.d;
+    bol_pt.news = bol_x.news;
+    (bol_pt.acts || []).forEach(function (bol_a, bol_i) {
+      var bol_y = bol_x.acts[bol_i] || (bol_tr.en || {acts: []}).acts[bol_i];
+      if (bol_y) {
+        bol_a.st = bol_y[0];
+        bol_a.d = bol_y[1];
+      }
+    });
+  });
+}
 function bol_t(bol_key, bol_args) {
-  var bol_d = bol_data(), bol_s = bol_d && bol_d.strings || {};
-  var bol_out = String(bol_s[bol_key] != null ? bol_s[bol_key] : bol_key);
+  var bol_d = bol_data() || {}, bol_all = bol_d.i18n || {};
+  var bol_s = bol_all[bol_uiNow()] || bol_d.strings || {};
+  var bol_en = bol_all.en || {};
+  var bol_out = String(bol_s[bol_key] != null ? bol_s[bol_key]
+                       : bol_en[bol_key] != null ? bol_en[bol_key] : bol_key);
   (bol_args || []).forEach(function (bol_a, bol_i) {
     bol_out = bol_out.split("{" + bol_i + "}").join(String(bol_a));
   });
@@ -362,8 +402,22 @@ function bol_featStep(bol_det, bol_ids, bol_now) {
 var bol_WHITE = "#ffffff", bol_DIM = "#b1b2b5", bol_GREEN = "#6cc349";
 var bol_INK = "#1e1e1f", bol_STONE = "#48494a", bol_LIP = "#313233";
 var bol_GOLD = "#ffc72c", bol_RED = "#f26b6b", bol_GRASS = "#3c8527";
-var bol_TEN = "\"Minecraft Ten v2\", \"Noto Sans\"";
-var bol_SEVEN = "\"Minecraft Seven v2\", \"Noto Sans\"";
+// The game's Minecraft fonts draw Latin letters only: the Noto fonts it
+// ships carry every other script, the one of the game's language first
+// (one Han character is drawn differently in Japanese and in Chinese).
+function bol_fonts(bol_first) {
+  var bol_ui = bol_uiNow();
+  var bol_cjk = {ja: ["JP"], ko: ["KR"], zh: ["SC"], "zh-TW": ["TC"]}[bol_ui]
+    || [];
+  ["SC", "TC", "JP", "KR"].forEach(function (bol_x) {
+    if (bol_cjk.indexOf(bol_x) < 0) bol_cjk.push(bol_x);
+  });
+  return ["\"" + bol_first + "\"", "\"Noto Sans\""].concat(
+    bol_cjk.map(function (bol_x) { return "\"Noto Sans " + bol_x + "\""; }))
+    .join(", ");
+}
+var bol_TEN = bol_fonts("Minecraft Ten v2");
+var bol_SEVEN = bol_fonts("Minecraft Seven v2");
 var bol_SHADOW = "0.2rem 0.2rem 0 rgba(0,0,0,0.5)";
 var bol_PALETTES = [
   ["#3a6f2a", "#1d3a14"], ["#8a2b2b", "#3d1111"], ["#2a5d8a", "#11283d"],
@@ -729,7 +783,7 @@ function bol_Spotlight(bol_p) {
   // The focused card as the list stands now: favourite since, or removed.
   bol_c = bol_p.byKey[bol_c.k] || bol_c;
   var bol_s = bol_c.s, bol_meta = [];
-  if (bol_s && bol_s.ln) bol_meta.push(bol_s.ln);
+  if (bol_s && bol_s.l) bol_meta.push(bol_langName(bol_s.l));
   if (bol_s && bol_s.t && bol_s.t.length)
     bol_meta.push(bol_s.t.slice(0, 3).join(", "));
   if (bol_s && bol_s.v) bol_meta.push(bol_t("version", [bol_s.v]));
@@ -1029,7 +1083,7 @@ function bol_Details(bol_p) {
   // grow a box for a wrapped flex line, which then covers what follows.
   var bol_chips = [], bol_tags = [];
   if (bol_pt) bol_chips.push(bol_partnerChip("1.4rem"));
-  if (bol_s && bol_s.ln) bol_chips.push(bol_chip(bol_s.ln));
+  if (bol_s && bol_s.l) bol_chips.push(bol_chip(bol_langName(bol_s.l)));
   if (bol_s && bol_s.v) bol_chips.push(bol_chip(bol_t("version", [bol_s.v])));
   (bol_s && bol_s.t || []).slice(0, 4).forEach(function (bol_x) {
     bol_tags.push(bol_chip(bol_x));
@@ -1229,6 +1283,11 @@ function bol_Hub(bol_p) {
   }, [], [bol_det]);
   // The game's featured-experience layout, when this build has one.
   var bol_layout = __FABS__(__LAYOUT__);
+  // The game's language, followed live: a change redraws the whole page
+  // in the new one.
+  var bol_loc = __LOCALE__ ? __R__.useContext(__LOCALE__) : null;
+  var bol_code = bol_uiOf(bol_loc && bol_loc.locale);
+  if (bol_code !== bol_uiNow() || !bol_cur) bol_localize(bol_code);
   // The location's hash, which names the server whose page is open.
   var bol_hash = __HASH__();
   bol_ctx.hash = !!bol_hash;
@@ -1245,7 +1304,7 @@ function bol_Hub(bol_p) {
                : null,
     bol_h(__UNWRAP__, {data: bol_snap}, function (bol_s) {
       return bol_h(__UNWRAP__, {data: bol_detNow}, function (bol_d) {
-        return bol_h(bol_HubView, {snap: bol_s, det: bol_d,
+        return bol_h(bol_HubView, {key: bol_code, snap: bol_s, det: bol_d,
                                    layout: bol_layout, route: bol_route[0],
                                    prefix: bol_p.routePrefix});
       });
@@ -1291,7 +1350,14 @@ function bol_langName(bol_code, bol_inSentence) {
   if (!bol_code) return bol_t("allLanguages");
   var bol_d = bol_data(), bol_l = (bol_d && bol_d.langs || []).filter(
     function (bol_x) { return bol_x[0] === bol_code; })[0];
-  if (!bol_l) return bol_code.toUpperCase();
+  var bol_ui = bol_uiNow(), bol_names = (bol_d && bol_d.names || {})[bol_ui];
+  if (!bol_l && !(bol_names && bol_names[bol_code]))
+    return bol_code.toUpperCase();
+  if (bol_names && bol_names[bol_code]) {
+    var bol_name = bol_names[bol_code];
+    return bol_inSentence && (bol_d.lower || []).indexOf(bol_ui) >= 0
+      ? bol_name.toLowerCase() : bol_name;
+  }
   return bol_inSentence && bol_l[3] ? bol_l[3] : bol_l[2];
 }
 
@@ -1352,11 +1418,15 @@ function bol_rowsFor(bol_all, bol_ws, bol_lg, bol_md) {
   if (!bol_any)
     bol_row("featured", bol_t("featured"), bol_all.featured,
             bol_t("featuredHint"), true);
-  var bol_ui = bol_d.ui || "en";
-  if (!bol_any && bol_ui !== "en")
-    bol_row("local", bol_t("popularIn", [bol_langName(bol_ui, true)]),
+  // The game's language, Brazilian servers for Portuguese included.
+  var bol_ui = bol_uiNow().split("-")[0];
+  var bol_mine_ = (bol_d.langs || []).filter(function (bol_l) {
+    return bol_l[0].split("-")[0] === bol_ui;
+  })[0];
+  if (!bol_any && bol_ui !== "en" && bol_mine_)
+    bol_row("local", bol_t("popularIn", [bol_langName(bol_mine_[0], true)]),
             bol_ranked.filter(function (bol_c) {
-              return bol_c.s.l === bol_ui;
+              return String(bol_c.s.l).split("-")[0] === bol_ui;
             }));
   if (bol_any) {
     var bol_title_ = bol_lg ? bol_t("popularIn", [bol_langName(bol_lg, true)])

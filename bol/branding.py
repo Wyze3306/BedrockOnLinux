@@ -290,6 +290,16 @@ def browser_partners(partners=PARTNERS, ui="en"):
             "lg": asset + p["icon"],
             "bn": asset + p["banner"],
             "bh": round(dims[1] * 100 / dims[0], 2) if dims else 30,
+            # Every language's text, English included, for the tab to
+            # follow the game's language live.
+            "tr": dict({lang: {
+                "d": t.get("description", p["description"]),
+                "news": t.get("news", p.get("news", "")),
+                "acts": [list(x) for x in t.get("activities", ())]}
+                for lang, t in p.get("translations", {}).items()},
+                en={"d": p["description"], "news": p.get("news", ""),
+                    "acts": [[a["subtitle"], a["description"]]
+                             for a in acts]}),
             "acts": [{"t": a["title"],
                       "st": texts[i][0] if i < len(texts) else a["subtitle"],
                       "d": texts[i][1] if i < len(texts)

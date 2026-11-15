@@ -67,6 +67,7 @@ import urllib.request
 from pathlib import Path
 
 from .config import APP, CACHE, VERSION
+from . import serverbrowser_i18n
 from .log import warn
 
 SETTING = "server_browser"
@@ -221,6 +222,12 @@ LANGUAGE_NAMES = {
 }
 
 
+# The game's other languages.
+for _code, _table in serverbrowser_i18n.STRINGS.items():
+    STRINGS[_code] = _table
+LANGUAGE_NAMES.update(serverbrowser_i18n.LANGUAGE_NAMES)
+
+
 def enabled(settings):
     return bool(settings.get(SETTING, True))
 
@@ -232,15 +239,20 @@ def ui_language(game_language, environ=None):
     and then follows the system's, which under Wine is the launcher's
     locale: LC_ALL, then LC_MESSAGES, then LANG.
     """
-    code = str(game_language or "").split("_")[0].lower()
-    if not code:
+    tag = str(game_language or "")
+    if not tag:
         import os
         env = os.environ if environ is None else environ
         for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
             value = str(env.get(var) or "")
             if value and value not in ("C", "POSIX"):
-                code = value.split(".")[0].split("_")[0].lower()
+                tag = value.split(".")[0].split("@")[0]
                 break
+    code, _, region = tag.replace("-", "_").partition("_")
+    code, region = code.lower(), region.upper()
+    # Traditional Chinese for Taiwan and Hong Kong, simplified elsewhere.
+    if code == "zh" and region in ("TW", "HK", "MO"):
+        return "zh-TW"
     return code if code in STRINGS else "en"
 
 
@@ -655,13 +667,17 @@ def player_servers(data_dirs):
 
 
 def _language_name(code, ui):
-    names = LANGUAGE_NAMES.get(ui, LANGUAGE_NAMES["en"])
-    return names.get(code) or names.get(code.split("-")[0]) or code.upper()
+    for names in (LANGUAGE_NAMES.get(ui, {}), LANGUAGE_NAMES["en"]):
+        name = names.get(code) or names.get(code.split("-")[0])
+        if name:
+            return name
+    return code.upper()
 
 
 def _language_in_sentence(name, ui):
     # "Most played in French", but "Les plus joués en français".
-    return name.lower() if ui == "fr" else name
+    return name.lower() if ui in serverbrowser_i18n.LOWER_IN_SENTENCE \
+        else name
 
 
 # Each picture's height, in % of its width, under its own key.
@@ -751,6 +767,12 @@ def build_payload(entries, *, on=True, ui="en", images=None,
         "langs": [[c, n, _language_name(c, ui),
                    _language_in_sentence(_language_name(c, ui), ui)]
                   for c, n in lang_list],
+        # Every language's text too: the tab follows the game's language
+        # as the player changes it, without waiting for the next launch.
+        "i18n": STRINGS,
+        "names": {u: {c: _language_name(c, u) for c, _ in lang_list}
+                  for u in STRINGS},
+        "lower": sorted(serverbrowser_i18n.LOWER_IN_SENTENCE),
         "mine": dict(mine or {}),
         "pinged": status is not None,
         "partners": list(partners),
@@ -1015,6 +1037,14 @@ def _discover(data):
                   data)
     if m:
         names["HASH"] = m.group(1)
+    # The context the game's translations read the current locale from
+    # ("fr_FR"), so the tab changes language with the game. Optional:
+    # without it the tab keeps the language it was launched in.
+    m = re.search(r"[,;{ ](" + _N + r")=(?:\(0,[\w$]+\.createContext\)|"
+                  r"[\w$]+\.createContext)\(\{translationPrefix:\"hbui\"",
+                  data)
+    if m:
+        names["LOCALE"] = m.group(1)
     m = re.search(r"\{routePrefix:(" + _N + r')="/play",', tab_text)
     names["_prefix"] = m.group(1) if m else None
     names.update(_layout_names(data))
@@ -1037,7 +1067,8 @@ _LAYOUT_HOOK = re.compile(
 _LAYOUT_DEFAULTS = {"FABS": "bol_noLayout", "LAYOUT": '""',
                     "QUERY": "bol_noLayout"}
 # Every optional name and its stand-in: the route's parameters too.
-_OPTIONAL_DEFAULTS = dict(_LAYOUT_DEFAULTS, HASH="bol_noLayout")
+_OPTIONAL_DEFAULTS = dict(_LAYOUT_DEFAULTS, HASH="bol_noLayout",
+                          LOCALE="null")
 # Which tab the game draws: the second one when the flag says so. With the
 # page on, always the first, which draws the page.
 _TAB_V2 = re.compile(

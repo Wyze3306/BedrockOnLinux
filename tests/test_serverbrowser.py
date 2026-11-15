@@ -26,6 +26,8 @@ NODE = shutil.which("node")
 _DIRECT = (
     'const Ue=1,U=()=>T(({list:e},t)=>t?e[e.length-1].hash:l,[],'
     '[(0,t.useContext)(x),W()]);'
+    'const Ki=(0,t.createContext)({translationPrefix:"hbui",'
+    'translate:e=>e,locale:"en-US"});'
     'const vM=oi("vanilla.externalServerWorldList"),'
     'bD=oi("vanilla.thirdPartyWorldList"),VM=oi("vanilla.networkWorldDetails"),'
     'QM=oi("vanilla.networkWorldJoiner"),JM=oi("vanilla.notificationOptions");'
@@ -161,9 +163,28 @@ class Payload(unittest.TestCase):
         p = sb.build_payload(self.entries, ui=sb.ui_language("fr_FR"))
         self.assertEqual(p["strings"]["play"], "Jouer")
         self.assertIn(["fr", 11, "Français", "français"], p["langs"])
-        p = sb.build_payload(self.entries, ui=sb.ui_language("ja_JP"))
+        p = sb.build_payload(self.entries, ui=sb.ui_language("es_MX"))
+        self.assertEqual(p["strings"]["play"], "Jugar")
+        self.assertIn(["fr", 11, "Francés", "francés"], p["langs"])
+        p = sb.build_payload(self.entries, ui=sb.ui_language("de_DE"))
+        self.assertIn(["fr", 11, "Französisch", "Französisch"], p["langs"])
+        # A language without a translation reads English.
+        p = sb.build_payload(self.entries, ui=sb.ui_language("ar_SA"))
         self.assertEqual(p["strings"]["play"], "Play")
-        self.assertEqual(set(sb.STRINGS["fr"]), set(sb.STRINGS["en"]))
+        self.assertIn(["fr", 11, "French", "French"], p["langs"])
+
+    def test_every_language_says_everything_english_says(self):
+        for code, table in sb.STRINGS.items():
+            self.assertEqual(set(table), set(sb.STRINGS["en"]), code)
+            for key, text in table.items():
+                # The same placeholders as the English text.
+                self.assertEqual(sorted(re.findall(r"\{\d\}", text)),
+                                 sorted(re.findall(r"\{\d\}",
+                                                   sb.STRINGS["en"][key])),
+                                 (code, key))
+        for code in sb.STRINGS:
+            if code != "en":
+                self.assertIn(code, sb.LANGUAGE_NAMES, code)
 
     def test_runtime_is_one_line(self):
         p = sb.build_payload(self.entries)
@@ -331,7 +352,8 @@ class BundlePatch(unittest.TestCase):
                   "UNWRAP": "Po", "BUTTON": "Cg", "ICONS": "HL",
                   "ROUTER": "_", "PANEL": "Zf", "IMAGE": "Bm", "SCROLL": "qp",
                   "TEXTFIELD": "wz", "UFS": "nt", "LEGEND": "lf",
-                  "KEYS": "ye", "HASH": "U", "_prefix": "e"}
+                  "KEYS": "ye", "HASH": "U", "LOCALE": "Ki",
+                  "_prefix": "e"}
         self.assertEqual({k: names[k] for k in expect}, expect)
 
     def test_without_the_hash_hook_a_tile_joins_at_once(self):
@@ -531,6 +553,14 @@ class PlayerServers(unittest.TestCase):
         self.assertEqual(sb.ui_language("en_US", {"LANG": "fr_FR"}), "en")
         self.assertEqual(sb.ui_language("", {}), "en")
 
+    def test_the_games_languages_pick_their_own_text(self):
+        self.assertEqual(sb.ui_language("pt_BR"), "pt")
+        self.assertEqual(sb.ui_language("zh_CN"), "zh")
+        self.assertEqual(sb.ui_language("zh_TW"), "zh-TW")
+        self.assertEqual(sb.ui_language("", {"LANG": "zh_HK.UTF-8"}), "zh-TW")
+        self.assertEqual(sb.ui_language("ru_RU"), "ru")
+        self.assertEqual(sb.ui_language("bg_BG"), "en")
+
 
 class Branding(unittest.TestCase):
     """The browser rides on the partner patch's first line."""
@@ -691,6 +721,16 @@ class TabLogic(unittest.TestCase):
         self.assertEqual(got, ["Voici Motaz KitMap", "Un PvP fluide",
                                "-5% en boutique", "", "Célestia"])
 
+    def test_the_fonts_carry_the_games_script(self):
+        ja = sb.build_payload(sb._valid_entries(_entries()), ui="ja")
+        got = self._run(ja, '[bol_TEN,bol_SEVEN]')
+        self.assertEqual(got[0], '"Minecraft Ten v2", "Noto Sans", '
+                         '"Noto Sans JP", "Noto Sans SC", "Noto Sans TC", '
+                         '"Noto Sans KR"')
+        self.assertTrue(got[1].startswith('"Minecraft Seven v2", '))
+        self.assertIn('"Noto Sans SC", "Noto Sans TC"',
+                      self._run(self.payload, 'bol_SEVEN'))
+
     def test_language_filter(self):
         rows = {r[0]: r for r in self.rows(lang="en")}
         self.assertNotIn("featured", rows)
@@ -763,6 +803,27 @@ class TabLogic(unittest.TestCase):
         snap = self.snap.replace("partners:[]",
                                  "partners:" + snap_partners)
         return payload, snap
+
+    def test_the_page_follows_the_games_language_live(self):
+        payload, snap = self._with_partner()
+        got = self._run(payload, (
+            '(function(){var out=[bol_uiOf("zh_TW"),bol_uiOf("pt_BR"),'
+            'bol_uiOf("bg_BG"),bol_uiOf(""),bol_t("play")];'
+            'var pt=bol_data().partners[0];out.push(pt.acts[0].st);'
+            'bol_localize("de");out.push(bol_t("play"),bol_t("popularIn",'
+            '[bol_langName("fr",true)]),pt.d===pt.tr.en.d,'
+            'pt.acts[0].st===pt.tr.en.acts[0][0],bol_SEVEN.indexOf("JP"));'
+            'bol_localize("es");out.push(bol_t("popularIn",'
+            '[bol_langName("fr",true)]));bol_localize("fr");'
+            'out.push(pt.d===pt.tr.fr.d,bol_t("play"));return out})()'))
+        self.assertEqual(got[:5], ["zh-TW", "pt", "en", "fr", "Jouer"])
+        fr_subtitle = got[5]
+        self.assertEqual(got[6:8], ["Spielen", "Meistgespielt: Französisch"])
+        self.assertEqual(got[8:10], [True, True])  # no German: English
+        self.assertGreater(got[10], 0)
+        self.assertEqual(got[11], "Los más jugados en francés")
+        self.assertEqual(got[12:], [True, "Jouer"])
+        self.assertTrue(fr_subtitle)
 
     def test_the_partner_box_comes_after_the_players_servers(self):
         payload, snap = self._with_partner()

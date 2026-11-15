@@ -20,7 +20,11 @@
   the most played servers come first; many networks (Linesia among them)
   never answer that ping, so the ones that stayed silent still show, last
   and marked "No answer". Search by name, address, category or any word of
-  a description, and filter by language and by game mode. Settings ▸ General ▸ In the game turns it off to get the
+  a description, and filter by language and by game mode. The page speaks
+  the game's language (English, French, German, Spanish, Italian,
+  Portuguese, Dutch, Polish, Russian, Ukrainian, Turkish, Japanese, Korean,
+  Chinese, Indonesian, Vietnamese, Czech and Swedish; English for the
+  others) and follows it the moment you change it in the settings. Settings ▸ General ▸ In the game turns it off to get the
   game's own tab back.
 
 ## 3.0.0 — 2026-11-14 (pre-release)
