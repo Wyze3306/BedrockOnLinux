@@ -167,6 +167,36 @@ PARTNERS = (
                 "image": "linesia-sea.jpg",
             },
         ),
+        # The server browser's page in other game languages: description,
+        # news, then each activity's subtitle and description, in order.
+        "translations": {
+            "fr": {
+                "description": (
+                    "Linesia est un serveur Minecraft Bedrock français : "
+                    "SkyFaction, Kitmap et Faction PvP, avec des îles, des "
+                    "métiers, des prestiges et des events. Jouable sur PC, "
+                    "mobile et console.\n\n"
+                    "Serveur partenaire de BedrockOnLinux."),
+                "news": "Mis en avant par BedrockOnLinux. Bon jeu de la "
+                        "part de Tux !",
+                "activities": (
+                    ("Ton île, ton empire !",
+                     "Commence sur ta propre île dans le ciel, agrandis-la "
+                     "avec ta faction et grimpe au sommet du classement."),
+                    ("Bats-toi pour la carte !",
+                     "Forme des alliances et affronte les factions rivales "
+                     "dans des events PvP épiques : Domination, Nexus, "
+                     "Outpost et plus encore !"),
+                    ("Construis ton usine !",
+                     "Branche tes machines, revends l'énergie en trop, "
+                     "éclaire ta base aux néons et décolle en jetpack."),
+                    ("Prends le large !",
+                     "Traverse cinq mers sur ton propre bateau, trouve les "
+                     "meilleurs coins de pêche et explore les forêts des "
+                     "îles."),
+                ),
+            },
+        },
     },
 )
 
@@ -235,6 +265,39 @@ _ACTIVITIES_SHOWN = "e=>e.networkDetails.activities.length>0"
 _ACTIVITIES_SHOWN_PATCHED = (
     "e=>__bolDetail(e.networkDetails,\"activities\",\"activities\")"
     ".length>0")
+
+
+def browser_partners(partners=PARTNERS, ui="en"):
+    """The partners as the server browser's payload carries them, in the
+    game's language where they have it: their box on the page, and their
+    own page with its pictures and text."""
+    out = []
+    for p in partners:
+        tr = p.get("translations", {}).get(ui, {})
+        acts = list(p.get("activities", ()))
+        texts = list(tr.get("activities", ()))
+        asset = "assets/" + _ASSET_PREFIX
+        dims = serverbrowser._image_dims(
+            pkgutil.get_data("bol", "partners/" + p["banner"]) or b"")
+        out.append({
+            "k": "pt-" + p["key"].lower(),
+            "n": p["label"],
+            "a": p["host"].lower(),
+            "p": int(p.get("port") or 19132),
+            "msg": p["message"],
+            "d": tr.get("description", p["description"]),
+            "news": tr.get("news", p.get("news", "")),
+            "lg": asset + p["icon"],
+            "bn": asset + p["banner"],
+            "bh": round(dims[1] * 100 / dims[0], 2) if dims else 30,
+            "acts": [{"t": a["title"],
+                      "st": texts[i][0] if i < len(texts) else a["subtitle"],
+                      "d": texts[i][1] if i < len(texts)
+                      else a["description"],
+                      "img": asset + a["image"]}
+                     for i, a in enumerate(acts)],
+        })
+    return out
 
 
 def _partner_runtime(partners):
@@ -505,9 +568,10 @@ def server_browser_payload(game_dir, settings):
         images = serverbrowser.install_images(hbui, entries)
         serverbrowser.prefetch_images(entries)
         mine = _player_servers()
-    args = dict(on=on, ui=serverbrowser.ui_language(_game_language()),
-                images=images, partner_hosts=[p["host"] for p in PARTNERS],
-                mine=mine)
+    ui = serverbrowser.ui_language(_game_language())
+    args = dict(on=on, ui=ui, images=images,
+                partner_hosts=[p["host"] for p in PARTNERS], mine=mine,
+                partners=browser_partners(PARTNERS, ui))
     if entries:
         def show(status):
             payload = serverbrowser.build_payload(entries, status=status,

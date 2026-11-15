@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from bol import branding, serverbrowser as sb
@@ -23,6 +24,8 @@ from bol import branding, serverbrowser as sb
 NODE = shutil.which("node")
 
 _DIRECT = (
+    'const Ue=1,U=()=>T(({list:e},t)=>t?e[e.length-1].hash:l,[],'
+    '[(0,t.useContext)(x),W()]);'
     'const vM=oi("vanilla.externalServerWorldList"),'
     'bD=oi("vanilla.thirdPartyWorldList"),VM=oi("vanilla.networkWorldDetails"),'
     'QM=oi("vanilla.networkWorldJoiner"),JM=oi("vanilla.notificationOptions");'
@@ -279,6 +282,39 @@ class Images(unittest.TestCase):
                           "assets/bol-srv-cv-c.png", 12.82))
         self.assertNotIn("img", c)
 
+    def test_a_gallery_is_cached_installed_and_listed_in_order(self):
+        cache = Path(tempfile.mkdtemp())
+        hbui = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, cache)
+        self.addCleanup(shutil.rmtree, hbui)
+        (hbui / "assets").mkdir()
+        raw = "https://raw.githubusercontent.com/l/"
+        entries = [{"id": "g", "name": "G", "ip": "g.example.org",
+                    "logo": raw + "g-logo.gif",
+                    "gallery": [raw + "g-0.png", "https://evil.example/x.png",
+                                raw + "g-1.gif", 7, raw + "g-2.png",
+                                raw + "g-3.png", raw + "g-4.png"]}]
+        asked = []
+
+        def get(url, limit, timeout):
+            asked.append(url.rsplit("/", 1)[1])
+            return self.GIF if url.endswith(".gif") else self.PNG
+        self.assertEqual(sb.download_images(entries, cache, getter=get), 5)
+        # The logo before any gallery picture; four pictures at most.
+        self.assertEqual(asked, ["g-logo.gif", "g-0.png", "g-1.gif",
+                                 "g-2.png", "g-3.png"])
+        self.assertEqual(sb.download_images(entries, cache, getter=get), 0)
+        images = sb.install_images(hbui, entries, cache)
+        self.assertEqual(images["g"]["g1"], ("assets/bol-srv-gl-g-1.gif",
+                                             25.0))
+        self.assertTrue((hbui / "assets" / "bol-srv-gl-g-3.png").is_file())
+        g = sb.build_payload(entries, images=images)["servers"][0]
+        self.assertEqual(g["gl"], [["assets/bol-srv-gl-g-0.png", 12.82],
+                                   ["assets/bol-srv-gl-g-1.gif", 25.0],
+                                   ["assets/bol-srv-gl-g-2.png", 12.82],
+                                   ["assets/bol-srv-gl-g-3.png", 12.82]])
+        self.assertEqual(g["lg"], "assets/bol-srv-lg-g.gif")
+
 
 class BundlePatch(unittest.TestCase):
     def _patched(self, bundle):
@@ -295,8 +331,14 @@ class BundlePatch(unittest.TestCase):
                   "UNWRAP": "Po", "BUTTON": "Cg", "ICONS": "HL",
                   "ROUTER": "_", "PANEL": "Zf", "IMAGE": "Bm", "SCROLL": "qp",
                   "TEXTFIELD": "wz", "UFS": "nt", "LEGEND": "lf",
-                  "KEYS": "ye", "_prefix": "e"}
+                  "KEYS": "ye", "HASH": "U", "_prefix": "e"}
         self.assertEqual({k: names[k] for k in expect}, expect)
+
+    def test_without_the_hash_hook_a_tile_joins_at_once(self):
+        bundle = _DIRECT.replace("e[e.length-1].hash", "e[0].hash")
+        self.assertNotIn("HASH", sb._discover(bundle))
+        out = self._patched(bundle)
+        self.assertIn("bol_hash=bol_noLayout()", out.replace(" ", ""))
 
     # The game's second Servers tab, as 1.26.63 writes it (and the flag
     # that picks it), and as the 1.26.70 previews read the layout id.
@@ -447,6 +489,26 @@ class Ping(unittest.TestCase):
         self.assertFalse(p["pinged"])
 
 
+class StatusRounds(unittest.TestCase):
+    def test_a_round_that_lost_most_answers_keeps_the_last_counts(self):
+        cache = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, cache)
+        last = {f"s{i}:19132": {"o": i, "m": 99} for i in range(10)}
+        sb.save_status(last, cache)
+        rounds = [{"s1:19132": {"o": 50, "m": 99}},
+                  {f"s{i}:19132": {"o": 7, "m": 99} for i in range(1, 7)}]
+        got = []
+        with mock.patch.object(sb, "ping_servers",
+                               side_effect=lambda t: rounds.pop(0)):
+            for _ in range(2):
+                sb.refresh_status([], on_done=got.append, cache=cache).join()
+        self.assertEqual(len(got[0]), 10)  # 1 answer of 10: a lost round
+        self.assertEqual(got[0]["s1:19132"]["o"], 50)
+        self.assertEqual(got[0]["s4:19132"]["o"], 4)
+        self.assertEqual(len(got[1]), 6)  # 6 of 10: the others are down
+        self.assertEqual(sb.cached_status(cache), got[1])
+
+
 class PlayerServers(unittest.TestCase):
     def test_every_account_list_is_read_by_address(self):
         root = Path(tempfile.mkdtemp())
@@ -538,6 +600,8 @@ class TabLogic(unittest.TestCase):
         names = {k: "S_" + k for k in sb._PLACEHOLDERS}
         code = sb._render(sb._template(), names)
         script = ("var S_KD={External:1,ThirdParty:2};"
+                  "var S_JU=function(k){return k===1?'external'"
+                  ":'third-party'};"
                   "var S_R={memo:function(f){return f;}};"
                   + sb.runtime_line(payload) + code
                   + ";process.stdout.write(JSON.stringify(" + expr + "))")
@@ -561,11 +625,12 @@ class TabLogic(unittest.TestCase):
                      'partners:[],featured:[{id:"h",name:"Hive",'
                      'image:"hive.png"}],creators:[]}')
 
-    def rows(self, query="", lang=""):
+    def rows(self, query="", lang="", mode=""):
         return self._run(self.payload, (
-            'bol_rowsFor(bol_cards(%s),bol_words(%s),%s).map(function(r){'
+            'bol_rowsFor(bol_cards(%s),bol_words(%s),%s,%s).map(function(r){'
             'return [r.key,r.title,r.cards.map(function(c){return c.n})]})'
-            % (self.snap, json.dumps(query), json.dumps(lang))))
+            % (self.snap, json.dumps(query), json.dumps(lang),
+               json.dumps(mode))))
 
     def test_rows_in_order_with_the_most_played_first(self):
         rows = self.rows()
@@ -597,6 +662,34 @@ class TabLogic(unittest.TestCase):
         found = names("number")
         self.assertEqual(found[:2], ["Server 28", "Server 26"])
         self.assertEqual(found[-1], "Server 29")
+
+    def test_silent_servers_stay_in_the_language_and_category_rows(self):
+        # Odd servers never answered the ping; many real networks never do.
+        rows = {r[0]: r[2] for r in self.rows()}
+        self.assertEqual(rows["local"][-5:], ["Server 3", "Server 9",
+                                              "Server 15", "Server 21",
+                                              "Server 27"])
+        self.assertEqual(len(rows["cat-Skyblock"]), 15)
+        self.assertNotIn("Server 1", rows["popular"])
+
+    def test_mode_filter(self):
+        rows = self.rows(lang="fr", mode="Skyblock")
+        self.assertEqual([r[0] for r in rows], ["mine", "popular"])
+        self.assertEqual(rows[0][2], ["Server 3"])
+        self.assertEqual(rows[1][1], "Les plus joués en français \u00b7 Skyblock")
+        self.assertEqual(rows[1][2], ["Server 3", "Server 9", "Server 15",
+                                      "Server 21", "Server 27"])
+        rows = {r[0]: r for r in self.rows(mode="Factions")}
+        self.assertNotIn("partners", rows)
+        self.assertEqual(rows["popular"][2][:2], ["Linesia", "Server 28"])
+
+    def test_a_description_loses_the_markdown_and_emoji_the_font_lacks(self):
+        got = self._run(self.payload, (
+            '["> \\ud83d\\udd25 - Voici **Motaz KitMap**",'
+            '"<:pvp:123> Un PvP __fluide__ \\u2694\\ufe0f","-5% en boutique",'
+            '"  ---  ","Célestia"].map(bol_plain)'))
+        self.assertEqual(got, ["Voici Motaz KitMap", "Un PvP fluide",
+                               "-5% en boutique", "", "Célestia"])
 
     def test_language_filter(self):
         rows = {r[0]: r for r in self.rows(lang="en")}
@@ -657,6 +750,72 @@ class TabLogic(unittest.TestCase):
             'bol_cards({favs:[],partners:[],featured:[],creators:[]}).cat'
             '.map(function(c){return [c.logo,c.wide,c.wh,c.banner]})'))
         self.assertEqual(got, [["assets/l.png", "assets/c.jpg", 56.25, ""]])
+
+    def _with_partner(self, snap_partners="[]"):
+        """The payload with Linesia as a partner, silent to the ping."""
+        payload = dict(self.payload)
+        payload["partners"] = branding.browser_partners(ui="fr")
+        payload["servers"] = [dict(x) for x in payload["servers"]]
+        for x in payload["servers"]:
+            if x["a"] == "play.linesia.net":
+                x.pop("on", None)
+                x["off"] = 1
+        snap = self.snap.replace("partners:[]",
+                                 "partners:" + snap_partners)
+        return payload, snap
+
+    def test_the_partner_box_comes_after_the_players_servers(self):
+        payload, snap = self._with_partner()
+        got = self._run(payload, (
+            '(function(){var a=bol_cards(%s);'
+            'var r=bol_rowsFor(a,[],"");var p=a.partners[0];'
+            'return [r.map(function(x){return x.key}),p.n,p.kind,p.id,'
+            'p.wide,p.logo,!!p.s.off,p.s.i,p.pt.acts.length,p.pt.d]})()'
+            % snap))
+        keys, name, kind, pid, wide, logo, off, sid, acts, desc = got
+        self.assertEqual(keys[:3], ["mine", "partners", "featured"])
+        self.assertEqual((name, kind, pid), ("Linesia", "cat", None))
+        self.assertEqual(wide, "assets/bol-partner-linesia-banner.jpg")
+        self.assertEqual(logo, "assets/bol-partner-linesia-icon.png")
+        self.assertFalse(off)  # silent to the ping is not offline
+        self.assertEqual(sid, "bol-linesia")  # the catalogue's entry
+        self.assertEqual(acts, 4)
+        self.assertTrue(desc.startswith("Linesia est un serveur"))
+
+    def test_a_partner_in_the_players_list_is_theirs(self):
+        payload, snap = self._with_partner('[{id:9,name:"Linesia"}]')
+        got = self._run(payload, (
+            '(function(){var a=bol_cards(%s);var c=a.cat.filter(function(c)'
+            '{return c.n==="Linesia"})[0];return [a.partners[0].kind,'
+            'a.partners[0].id,c.kind,c.id]})()' % snap))
+        self.assertEqual(got, ["mine", 9, "mine", 9])
+
+    def test_a_hash_names_the_card_its_page_shows(self):
+        payload, snap = self._with_partner('[{id:9,name:"Linesia"}]')
+        got = self._run(payload, (
+            '(function(){var a=bol_cards(%s);function k(r){'
+            'var c=bol_findCard(a,r);return c?[c.k,c.kind,c.id]:null}'
+            'return [k("pt-linesia"),k("bol-srv-7"),k("bol-srv-3"),'
+            'k("tph"),k("tpzz"),k("zz"),k("tp"),k("")]})()' % snap))
+        self.assertEqual(got, [["pt-linesia", "mine", 9],
+                               ["bol-srv-7", "cat", None],
+                               ["bol-srv-3", "mine", 5],
+                               ["tph", "tp", "h"], ["tpzz", "tp", "zz"],
+                               None, None, None])
+
+    def test_opening_a_tile_pushes_its_route(self):
+        got = self._run(self.payload, (
+            '(function(){var to=[];bol_ctx.router={push:function(r)'
+            '{to.push(r)}};bol_ctx.hash=true;bol_ctx.prefix="/play";'
+            'var a=bol_cards(%s);bol_open(a.cat[7]);bol_open(a.mine[0]);'
+            'bol_open(a.featured[0]);bol_open({kind:"exp",'
+            'route:"/play/servers/experience/e/l"});return to})()'
+            % self.snap))
+        # Never the route's /:id/:type, which the game's tab would load.
+        self.assertEqual(got, ["/play/servers?bol#bol-srv-7",
+                               "/play/servers?bol#bol-srv-3",
+                               "/play/servers?bol#tph",
+                               "/play/servers/experience/e/l"])
 
     def test_strings_and_counts(self):
         got = self._run(self.payload, '[bol_t("online",[bol_compact(1234)]),'

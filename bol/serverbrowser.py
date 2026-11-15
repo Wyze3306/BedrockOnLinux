@@ -11,8 +11,9 @@ the controller alike:
 * a search bar (name, address, category or any word of a description) and
   a language choice;
 * the player's own servers (the game's ``external_servers.txt``);
-* the featured experiences, in big tiles: BedrockOnLinux's partners, then
-  the servers of the game's own featured layout (The Hive, CubeCraft,
+* BedrockOnLinux's partners, each in a tile the width of the page;
+* the featured experiences, in big tiles: the servers of the game's own
+  featured layout (The Hive, CubeCraft,
   MegaSMP...: the second Servers tab some accounts get, read for its lists
   alone), or the game's featured servers where there is no layout, with the
   banner and player count their details give;
@@ -21,7 +22,12 @@ the controller alike:
   github.com/Wyze3306/bedrock-servers-list, each with the logo and cover
   that list stores for it.
 
-A tile joins its server in one press. A server of the community list is
+A tile opens the server's own page (big picture, description, activities,
+its other pictures; Play, Add to my servers, Back) at
+``/play/servers#<card key>``: a history entry of its own, so the game's
+Back leaves it, which the game's tab does not read (its ``:id`` it would
+load, and a catalogue key there crashes the game). The spotlight's Play, and the
+page's, join it in one press. A server of the community list is
 first added to the player's own list, since the game only joins servers it
 knows, then joined the way the game's own details pane does: straight away
 when the player has turned the safety warning off, through the game's
@@ -96,11 +102,25 @@ STRINGS = {
         "searchPlaceholder": "Name, address, category or keyword",
         "language": "Language",
         "allLanguages": "All languages",
+        "gameMode": "Game mode",
+        "allModes": "All modes",
         "addServer": "Add a server",
         "myServers": "My servers",
         "myServersHint": "The ones you added or played",
         "featured": "Featured experiences",
-        "featuredHint": "Partners and the game's featured servers",
+        "featuredHint": "The game's featured servers",
+        "partners": "BedrockOnLinux partner",
+        "partnerTag": "Partner",
+        "partnersHint": "Servers that support BedrockOnLinux",
+        "details": "Details",
+        "back": "Back",
+        "about": "About",
+        "pictures": "Pictures",
+        "activities": "Activities",
+        "address": "Address: {0}",
+        "website": "Website: {0}",
+        "discord": "Discord: {0}",
+        "players": "{0} / {1} players",
         "popular": "Most played",
         "popularIn": "Most played in {0}",
         "pingedHint": "Players online at launch",
@@ -113,7 +133,7 @@ STRINGS = {
         "listUnavailable": "The server list could not be downloaded. "
                            "It is fetched again at the next launch.",
         "online": "{0} online",
-        "offline": "Offline",
+        "noAnswer": "No answer",
         "server": "Server",
         "play": "Play",
         "favorite": "Add to my servers",
@@ -131,11 +151,25 @@ STRINGS = {
         "searchPlaceholder": "Nom, adresse, catégorie ou mot-clé",
         "language": "Langue",
         "allLanguages": "Toutes les langues",
+        "gameMode": "Mode de jeu",
+        "allModes": "Tous les modes",
         "addServer": "Ajouter un serveur",
         "myServers": "Mes serveurs",
         "myServersHint": "Ceux que vous avez ajoutés ou joués",
         "featured": "Expériences en vedette",
-        "featuredHint": "Partenaires et serveurs en vedette du jeu",
+        "featuredHint": "Les serveurs en vedette du jeu",
+        "partners": "Partenaire BedrockOnLinux",
+        "partnerTag": "Partenaire",
+        "partnersHint": "Des serveurs qui soutiennent BedrockOnLinux",
+        "details": "Détails",
+        "back": "Retour",
+        "about": "À propos",
+        "pictures": "Images",
+        "activities": "Activités",
+        "address": "Adresse : {0}",
+        "website": "Site : {0}",
+        "discord": "Discord : {0}",
+        "players": "{0} / {1} joueurs",
         "popular": "Les plus joués",
         "popularIn": "Les plus joués en {0}",
         "pingedHint": "Joueurs en ligne au lancement",
@@ -148,7 +182,7 @@ STRINGS = {
         "listUnavailable": "La liste des serveurs n'a pas pu être "
                            "téléchargée. Nouvel essai au prochain lancement.",
         "online": "{0} en ligne",
-        "offline": "Hors ligne",
+        "noAnswer": "Pas de réponse",
         "server": "Serveur",
         "play": "Jouer",
         "favorite": "Ajouter à mes serveurs",
@@ -325,11 +359,38 @@ def _image_allowed(url):
 # in its own folder.
 ART = (("lg", "logo", "logos"), ("cv", "cover", "covers"),
        ("img", "image", "images"))
+# And a few more pictures for its page, cached as <slug>-<n>.
+GALLERY_DIR = "gallery"
+_GALLERY_MAX = 4
 
 
 def _image_url(entry, field="image"):
     url = entry.get(field) or ""
-    return url if _image_allowed(url) else ""
+    return url if isinstance(url, str) and _image_allowed(url) else ""
+
+
+def _art_of(entry):
+    """(payload key, URL, folder, file stem) of each picture of one entry:
+    logo, cover, banner, then its gallery as g0, g1..."""
+    slug = _slug(entry)
+    for key, field, sub in ART:
+        url = _image_url(entry, field)
+        if url:
+            yield key, url, sub, slug
+    urls = entry.get("gallery")
+    n = 0
+    for url in urls if isinstance(urls, list) else ():
+        if n == _GALLERY_MAX:
+            break
+        if isinstance(url, str) and _image_allowed(url):
+            yield f"g{n}", url, GALLERY_DIR, f"{slug}-{n}"
+            n += 1
+
+
+def _art_rank(key):
+    """Logos first, then covers, banners and the galleries."""
+    keys = [k for k, _f, _s in ART]
+    return keys.index(key) if key in keys else len(keys) + int(key[1:])
 
 
 def cached_images(cache=LIST_CACHE, folder="images"):
@@ -345,8 +406,8 @@ def cached_images(cache=LIST_CACHE, folder="images"):
 
 
 def download_images(entries, cache=LIST_CACHE, getter=_get, budget=None):
-    """Fetch the logos, covers and banners not cached yet; returns how many
-    were added.
+    """Fetch the logos, covers, banners and galleries not cached yet;
+    returns how many were added.
 
     Runs off the launch path (see ``prefetch_images``): the game only shows
     the pictures already on disk when PLAY patched it, so a new one appears
@@ -354,26 +415,28 @@ def download_images(entries, cache=LIST_CACHE, getter=_get, budget=None):
     """
     added = 0
     deadline = None if budget is None else time.monotonic() + budget
-    for _key, field, sub in ART:
+    todo = sorted((item for entry in entries for item in _art_of(entry)),
+                  key=lambda item: _art_rank(item[0]))
+    have = {}
+    for _key, url, sub, stem in todo:
+        if deadline is not None and time.monotonic() > deadline:
+            return added
+        if sub not in have:
+            have[sub] = cached_images(cache, sub)
+        if stem in have[sub]:
+            continue
         folder = Path(cache) / sub
-        have = cached_images(cache, sub)
-        for entry in entries:
-            if deadline is not None and time.monotonic() > deadline:
-                return added
-            slug, url = _slug(entry), _image_url(entry, field)
-            if not url or slug in have:
+        try:
+            blob = getter(url, _MAX_IMAGE_BYTES, 10)
+            ext = _image_kind(blob)
+            if not ext or not _image_dims(blob):
                 continue
-            try:
-                blob = getter(url, _MAX_IMAGE_BYTES, 10)
-                ext = _image_kind(blob)
-                if not ext or not _image_dims(blob):
-                    continue
-                folder.mkdir(parents=True, exist_ok=True)
-                (folder / (slug + ext)).write_bytes(blob)
-                have[slug] = folder / (slug + ext)
-                added += 1
-            except (OSError, ValueError, urllib.error.URLError):
-                continue
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / (stem + ext)).write_bytes(blob)
+            have[sub][stem] = folder / (stem + ext)
+            added += 1
+        except (OSError, ValueError, urllib.error.URLError):
+            continue
     return added
 
 
@@ -545,6 +608,12 @@ def refresh_status(targets, on_done=None, cache=LIST_CACHE):
         status = ping_servers(targets)
         if not status:  # offline: keep the last counts rather than none
             return
+        last = cached_status(cache) or {}
+        if len(status) < len(last) // 2:
+            # Far fewer answers than last time: this round lost them (a
+            # swapping machine, a flaky link), half the servers did not go
+            # down. The silent ones keep their last counts.
+            status = dict(last, **status)
         save_status(status, cache)
         if on_done is not None:
             try:
@@ -600,7 +669,7 @@ _RATIO_KEYS = {"img": "ih", "lg": "lh", "cv": "ch"}
 
 
 def build_payload(entries, *, on=True, ui="en", images=None,
-                  partner_hosts=(), status=None, mine=None):
+                  partner_hosts=(), status=None, mine=None, partners=()):
     """The ``__bolServerBrowser`` object: settings, strings, servers.
 
     ``images`` maps a server's slug to its pictures (``install_images``):
@@ -608,7 +677,9 @@ def build_payload(entries, *, on=True, ui="en", images=None,
     a percentage of its width. ``status`` is
     ``ping_servers``' answer ({"host:port": {"o", "m"}}), None when no ping
     ran: then nobody is shown offline. ``mine`` maps the player's own
-    servers' "host:port" to the name they gave them.
+    servers' "host:port" to the name they gave them. ``partners`` are
+    BedrockOnLinux's partner servers as the page shows them, in their own
+    box and on their own page (``branding.browser_partners``).
     """
     images = images or {}
     total = len(entries) or 1
@@ -650,8 +721,12 @@ def build_payload(entries, *, on=True, ui="en", images=None,
             url = str(e.get(field) or "").strip()
             if url.startswith(("https://", "http://")):
                 s[key] = url
-        for key, (name, ratio) in sorted(images.get(slug, {}).items()):
-            s[key], s[_RATIO_KEYS[key]] = name, ratio
+        for key, (name, ratio) in sorted(images.get(slug, {}).items(),
+                                         key=lambda kv: _art_rank(kv[0])):
+            if key in _RATIO_KEYS:
+                s[key], s[_RATIO_KEYS[key]] = name, ratio
+            else:
+                s.setdefault("gl", []).append([name, ratio])
         if s["a"].lower() in partner_hosts:
             s["pt"] = 1
         if status is not None:
@@ -678,6 +753,7 @@ def build_payload(entries, *, on=True, ui="en", images=None,
                   for c, n in lang_list],
         "mine": dict(mine or {}),
         "pinged": status is not None,
+        "partners": list(partners),
     }
 
 
@@ -720,25 +796,27 @@ def install_images(hbui, entries, cache=LIST_CACHE):
     """Copy the cached pictures into one game's HBUI assets.
 
     Returns the ``images`` mapping ``build_payload`` takes: {slug: {key:
-    (asset, height %)}}. A picture that cannot be read or copied is simply
-    not shown.
+    (asset, height %)}}, the gallery under g0, g1... A picture that cannot
+    be read or copied is simply not shown.
     """
     assets = Path(hbui) / "assets"
-    out = {}
-    for key, _field, sub in ART:
-        have = cached_images(cache, sub)
-        prefix = _ASSET_PREFIX + ("" if key == "img" else key + "-")
-        for e in entries:
-            slug = _slug(e)
-            src = have.get(slug)
+    out, have = {}, {}
+    for e in entries:
+        slug = _slug(e)
+        for key, _url, sub, stem in _art_of(e):
+            if sub not in have:
+                have[sub] = cached_images(cache, sub)
+            src = have[sub].get(stem)
             if src is None:
                 continue
+            kind = ("" if key == "img"
+                    else "gl-" if sub == GALLERY_DIR else key + "-")
             try:
                 blob = src.read_bytes()
                 dims = _image_dims(blob)
                 if not dims or not dims[0]:
                     continue
-                name = prefix + slug + src.suffix
+                name = _ASSET_PREFIX + kind + stem + src.suffix
                 dst = assets / name
                 if not dst.is_file() or dst.stat().st_size != len(blob):
                     shutil.copyfile(src, dst)
@@ -928,6 +1006,15 @@ def _discover(data):
                   + r")\.Y,inputLegend:", data)
     names["LEGEND"], names["KEYS"] = (m.group(1), m.group(2)) if m else (
         None, None)
+    # The router's hook for the current location's hash: `/play/servers#<k>`
+    # opens a server's own page. Not the route's `:id`: the game's tab loads
+    # whatever server that names, and a catalogue key there crashes the
+    # game. Optional: without it a tile joins at once.
+    m = re.search(r"[,;{ ](" + _N + r")=\(\)=>" + _HOOK + r"\(\(?\(\{list:("
+                  + _N + r")\},(" + _N + r")\)=>\3\?\2\[\2\.length-1\]\.hash:",
+                  data)
+    if m:
+        names["HASH"] = m.group(1)
     m = re.search(r"\{routePrefix:(" + _N + r')="/play",', tab_text)
     names["_prefix"] = m.group(1) if m else None
     names.update(_layout_names(data))
@@ -949,6 +1036,8 @@ _LAYOUT_HOOK = re.compile(
     + _HOOK + r")\((" + _N + r")(?:\|\|(" + _N + r"))?\)")
 _LAYOUT_DEFAULTS = {"FABS": "bol_noLayout", "LAYOUT": '""',
                     "QUERY": "bol_noLayout"}
+# Every optional name and its stand-in: the route's parameters too.
+_OPTIONAL_DEFAULTS = dict(_LAYOUT_DEFAULTS, HASH="bol_noLayout")
 # Which tab the game draws: the second one when the flag says so. With the
 # page on, always the first, which draws the page.
 _TAB_V2 = re.compile(
@@ -985,10 +1074,11 @@ _PLACEHOLDERS = (
 def _render(template, names):
     # Comments go: the bundle is minified, and nobody reads it there.
     code = re.sub(r"(?m)^\s*//.*\n", "", template)
-    # The layout names are optional: their stand-ins draw our own row.
+    # The layout and route names are optional: their stand-ins draw our own
+    # row and join a server at once.
     return re.sub(r"__([A-Z]+)__",
                   lambda m: names.get(m.group(1))
-                  or _LAYOUT_DEFAULTS[m.group(1)], code)
+                  or _OPTIONAL_DEFAULTS[m.group(1)], code)
 
 
 def patch_body(data):
