@@ -100,13 +100,13 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 # match the reviewed pins below.
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
 # The commit alone does not identify vendored follow-up patches.
-WINEGDK_SOURCE_MANIFEST_SHA256 = "6f6ad608658c7b7791cb5ec1efb3079ad66d7ad6be20112089a0942d9dba8fed"
+WINEGDK_SOURCE_MANIFEST_SHA256 = "aaf05bc46d254c997c7eb5dc94c317cf59da5deffc47691a80155d5b30a55919"
 # How the WineGDK prefix is built from that source, when not the way it first
 # was: it is part of what the bytes are, so it is part of the name of the
 # release that holds them (scripts/winegdk-release-tag.sh). "stripped"
 # installs Wine's modules without their debugging sections.
 WINEGDK_PREFIX_RECIPE = "stripped"
-WINEGDK_BUILD_REV = "wow64-archs-native25"
+WINEGDK_BUILD_REV = "wow64-archs-native26"
 # native22 carries the ntdll loader patches the Microsoft Store packages need:
 # 0007 maps the main image from a descriptor, 0008 from a path so it survives
 # the Steam Linux Runtime container. Their game executable stays encrypted on
@@ -160,6 +160,10 @@ WINEGDK_BUILD_REV = "wow64-archs-native25"
 # native25 adds the ECMA-402 Intl object to jscript (0018): Minecraft
 # Education signs in through the IE WebBrowser control, and the Microsoft
 # account page it opens stayed an empty card without it (#351).
+#
+# native26 makes jscript call a method on the first use of an mshtml object
+# instead of returning it (0019): the Office sign-in page Education opens
+# first drew no form, because Knockout's first createElement got a function.
 WINEGDK_ARCHIVE_SHA256 = "e2558a0baef43f83472b8caf9697820d086a48ed85c4d611d344a6a4ab0c5022"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "c0f4cdeb89b0f07b13b38838f323f360a1cebd406671f35ffd68aa22cc7ba615"

@@ -204,9 +204,9 @@ rather than behind a new configure check, and the server protocol files that
 builders also refuse a wineserver that lacks the fallback.
 
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
-native5 delta and its follow-ups through `0018`. The Bullseye builder applies
+native5 delta and its follow-ups through `0019`. The Bullseye builder applies
 the reviewed r12 and native patches when the target commit is unavailable,
-always applies `0002` through `0018`, then verifies the complete resulting
+always applies `0002` through `0019`, then verifies the complete resulting
 source tree; the container builder does the same on the target commit. Each
 patch is also pinned by its own SHA-256 in both builders and in the
 packager. `0014` to `0017` were first applied around the manifest, so that the
@@ -254,3 +254,16 @@ Microsoft account page it opens is a React app that reads `Intl` while it
 renders, and with none the sign-in window stayed an empty card (issue #351).
 native25 is the first engine built with it; the packager refuses a jscript.dll
 without `Intl` in either architecture.
+
+`0019` makes jscript call, not read, a property when `IDispatchEx::InvokeEx`
+gets `DISPATCH_METHOD|DISPATCH_PROPERTYGET` with positional arguments. Since
+upstream treats that pair as a getter in ES5+ modes, while jscript's own
+`disp_call()` still sends it for a call with arguments when it cannot see a
+script object yet, the first `document.createElement("div")` of a page came
+back as the `createElement` function: the document's script object is only
+created by that call. Knockout's Internet Explorer detection throws on it,
+and the Office sign-in page Minecraft Education opens first
+(`odc.officeapps.live.com/odc/v2.1/hrd`) then drew its background and no form
+(issue #351). A getter takes no arguments, so the change leaves every
+argument-less case upstream tests as it was. native26 is the first engine
+built with it.

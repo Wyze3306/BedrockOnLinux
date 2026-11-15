@@ -79,10 +79,14 @@ GAME_EVENT_PATCH = (
 INTL_PATCH = (
     DELTA / "0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch"
 )
+CALL_FLAGS_PATCH = (
+    DELTA
+    / "0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch"
+)
 # The follow-ups after 0013. They were first applied around the manifest so
 # that native22 kept verifying; native23 pins every file they change.
 LATE_PATCHES = (FSYNC_PATCH, VM_COUNTERS_PATCH, TIME_ZONE_PATCH,
-                GAME_EVENT_PATCH, INTL_PATCH)
+                GAME_EVENT_PATCH, INTL_PATCH, CALL_FLAGS_PATCH)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -91,6 +95,7 @@ CHANGED_FILES = {
     "dlls/combase/marshal.c",
     "dlls/combase/stubmanager.c",
     "dlls/jscript/Makefile.in",
+    "dlls/jscript/dispex.c",
     "dlls/jscript/global.c",
     "dlls/jscript/intl.c",
     "dlls/jscript/jscript.h",
@@ -1072,6 +1077,23 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
         self.assertIn(hashlib.sha256(INTL_PATCH.read_bytes()).hexdigest(),
                       packager)
         self.assertIn("grep -Fx getCanonicalLocales", packager)
+
+    def test_jscript_calls_when_method_or_get_carries_arguments(self):
+        # #351: the first document.createElement("div") of a page came back
+        # as the createElement function, Knockout threw, and the Office
+        # sign-in Education opens drew no form.
+        additions = self._additions(CALL_FLAGS_PATCH)
+        self.assertIn("pdp->cArgs > pdp->cNamedArgs", additions)
+        self.assertEqual(self._changed_files(CALL_FLAGS_PATCH),
+                         {"dlls/jscript/dispex.c"})
+        digest = hashlib.sha256(CALL_FLAGS_PATCH.read_bytes()).hexdigest()
+        for script in (SCRIPT, CONTAINER_SCRIPT):
+            with self.subTest(script=script.name):
+                self.assertEqual(
+                    digest,
+                    re.search(r'^readonly VENDORED_CALL_FLAGS_PATCH_SHA256="([^"]+)"',
+                              script.read_text(), re.MULTILINE).group(1))
+        self.assertIn(digest, PACKAGER.read_text())
 
     def test_game_events_reach_the_launcher(self):
         # #152: QueryApiImpl refused this class with E_NOTIMPL, XSAPI dropped

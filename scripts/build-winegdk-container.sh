@@ -59,6 +59,8 @@ readonly VENDORED_GAME_EVENT_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/00
 readonly VENDORED_GAME_EVENT_PATCH_SHA256="c791f7bcab535204649c27ade0d328f669134f6044a1130362aeb5df964b28ad"
 readonly VENDORED_INTL_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch"
 readonly VENDORED_INTL_PATCH_SHA256="154f48790e2a8eecd970438cda3caf3bfea5e0b72f5012f2dd0379d3e49de61a"
+readonly VENDORED_CALL_FLAGS_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch"
+readonly VENDORED_CALL_FLAGS_PATCH_SHA256="8e5c60b1eb3e9494abab7ff61f3e4cc8eed1f1d73a31623d76d07f24a35086fb"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
@@ -291,6 +293,16 @@ echo "== Applying the jscript Intl object"
 git -C "$SRC" apply --check "$VENDORED_INTL_PATCH" \
   || { echo "!! jscript Intl patch does not apply" >&2; exit 1; }
 git -C "$SRC" apply "$VENDORED_INTL_PATCH"
+
+echo "== Applying the jscript call flags fix"
+[ -f "$VENDORED_CALL_FLAGS_PATCH" ] \
+  || { echo "!! missing jscript call flags patch" >&2; exit 1; }
+[ "$(sha256sum "$VENDORED_CALL_FLAGS_PATCH" | cut -d' ' -f1)" = \
+  "$VENDORED_CALL_FLAGS_PATCH_SHA256" ] \
+  || { echo "!! jscript call flags patch hash mismatch" >&2; exit 1; }
+git -C "$SRC" apply --check "$VENDORED_CALL_FLAGS_PATCH" \
+  || { echo "!! jscript call flags patch does not apply" >&2; exit 1; }
+git -C "$SRC" apply "$VENDORED_CALL_FLAGS_PATCH"
 
 echo "== Verifying reviewed source hashes"
 [ -f "$SOURCE_SHA256SUMS" ] || { echo "!! missing SOURCE-SHA256SUMS" >&2; exit 1; }

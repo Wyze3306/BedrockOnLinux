@@ -363,6 +363,7 @@ WINEGDK_NATIVE_PROVENANCE_FILES=(
   0016-ntdll-check-the-time-zone-at-most-once-a-second.patch
   0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch
   0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch
+  0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch
 )
 
 verify_sha256() {
@@ -415,10 +416,10 @@ verify_winegdk_source_provenance() {
     "ee0543f11737a11f5edec389967bb41482c7f5eda3807c24d171dd6bf6301274" \
     "WineGDK r12 source delta"
   verify_sha256 "$native_root/README.md" \
-    "297c23f7f9026780f1ea017dc0362fd22a00512a89070b735524f1f84d03c0ab" \
+    "8f84d8a2084bb0eb7bf0eb669c7b13acc66dc4fa356dbd445a85dba779bbe4f6" \
     "WineGDK native5 source-delta README"
   verify_sha256 "$native_root/SOURCE-SHA256SUMS" \
-    "6f6ad608658c7b7791cb5ec1efb3079ad66d7ad6be20112089a0942d9dba8fed" \
+    "aaf05bc46d254c997c7eb5dc94c317cf59da5deffc47691a80155d5b30a55919" \
     "WineGDK native5 source hash lock"
   verify_sha256 \
     "$native_root/0001-winegdk-native5-Xbox-and-file-picker-runtime.patch" \
@@ -492,6 +493,10 @@ verify_winegdk_source_provenance() {
     "$native_root/0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch" \
     "154f48790e2a8eecd970438cda3caf3bfea5e0b72f5012f2dd0379d3e49de61a" \
     "WineGDK jscript Intl object"
+  verify_sha256 \
+    "$native_root/0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch" \
+    "8e5c60b1eb3e9494abab7ff61f3e4cc8eed1f1d73a31623d76d07f24a35086fb" \
+    "WineGDK jscript call flags"
 }
 
 has_marker() {
@@ -995,6 +1000,7 @@ for relative_root, names in (
         "native5/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch",
         "native5/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch",
         "native5/0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch",
+        "native5/0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch",
     )),
     (gdk_proton_provenance_root, ("provenance.env",)),
 ):

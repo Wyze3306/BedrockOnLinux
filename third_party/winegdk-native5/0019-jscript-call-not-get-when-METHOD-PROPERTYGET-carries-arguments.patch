@@ -1,0 +1,35 @@
+From: BedrockOnLinux contributors
+Subject: [PATCH] jscript: call, not get, when METHOD|PROPERTYGET carries
+ arguments
+
+disp_call() sends DISPATCH_METHOD|DISPATCH_PROPERTYGET for a call with
+arguments whenever it cannot see a jsdisp yet. That is the case on the
+first use of an mshtml object whose script object the call itself
+creates, so in ES5+ modes the first document.createElement("div") of a
+page came back as the createElement function. Knockout's IE detection
+throws on that, and pages built on it, such as the Office sign-in that
+Minecraft Education opens, render no form. A getter takes no arguments,
+so positional arguments mean a call.
+---
+ dlls/jscript/dispex.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/jscript/dispex.c b/dlls/jscript/dispex.c
+index dc2ff9f6a55..a032d1e2b46 100644
+--- a/dlls/jscript/dispex.c
++++ b/dlls/jscript/dispex.c
+@@ -2136,8 +2136,13 @@ static HRESULT WINAPI DispatchEx_InvokeEx(IWineJSDispatch *iface, DISPID id, LCI
+     if(pspCaller)
+         IServiceProvider_AddRef(pspCaller);
+ 
++    /* A getter takes no arguments, so with positional arguments the caller can
++     * only mean a call. disp_call() sends both flags for a call with arguments
++     * whenever it cannot see a jsdisp yet, which happens on the first use of an
++     * mshtml object whose script object that very call creates. */
+     if(wFlags == (DISPATCH_METHOD | DISPATCH_PROPERTYGET))
+-        wFlags = (This->ctx->version < SCRIPTLANGUAGEVERSION_ES5) ? DISPATCH_METHOD : DISPATCH_PROPERTYGET;
++        wFlags = (This->ctx->version < SCRIPTLANGUAGEVERSION_ES5 || (pdp && pdp->cArgs > pdp->cNamedArgs))
++            ? DISPATCH_METHOD : DISPATCH_PROPERTYGET;
+ 
+     switch(wFlags) {
+     case DISPATCH_METHOD:
