@@ -250,17 +250,34 @@ class Images(unittest.TestCase):
                    {"id": "b", "name": "B", "ip": "b.example.org",
                     "image": "https://minecraftpocket-servers.com/b.gif"},
                    {"id": "c", "name": "C", "ip": "c.example.org",
-                    "image": "https://minecraftpocket-servers.com/c.png"}]
-        blobs = {"a.png": self.PNG, "b.gif": self.GIF, "c.png": b"<html>"}
+                    "image": "https://minecraftpocket-servers.com/c.png",
+                    "logo": "https://raw.githubusercontent.com/l/c-logo.gif",
+                    "cover": "https://raw.githubusercontent.com/l/c-cover.png"},
+                   {"id": "d", "name": "D", "ip": "d.example.org",
+                    "logo": "https://evil.example/d.png"}]
+        blobs = {"a.png": self.PNG, "b.gif": self.GIF, "c.png": b"<html>",
+                 "c-logo.gif": self.GIF, "c-cover.png": self.PNG}
+        asked = []
 
         def get(url, limit, timeout):
+            asked.append(url)
             return blobs[url.rsplit("/", 1)[1]]
-        self.assertEqual(sb.download_images(entries, cache, getter=get), 2)
+        self.assertEqual(sb.download_images(entries, cache, getter=get), 4)
+        self.assertFalse([u for u in asked if "evil" in u])
         images = sb.install_images(hbui, entries, cache)
-        self.assertEqual(images["a"], ("assets/bol-srv-a.png", 12.82))
-        self.assertEqual(images["b"], ("assets/bol-srv-b.gif", 25.0))
-        self.assertNotIn("c", images)
+        self.assertEqual(images["a"], {"img": ("assets/bol-srv-a.png", 12.82)})
+        self.assertEqual(images["b"], {"img": ("assets/bol-srv-b.gif", 25.0)})
+        self.assertEqual(images["c"], {
+            "lg": ("assets/bol-srv-lg-c.gif", 25.0),
+            "cv": ("assets/bol-srv-cv-c.png", 12.82)})
+        self.assertNotIn("d", images)
         self.assertTrue((hbui / "assets" / "bol-srv-a.png").is_file())
+        payload = sb.build_payload(entries, images=images)
+        c = [x for x in payload["servers"] if x["n"] == "C"][0]
+        self.assertEqual((c["lg"], c["lh"], c["cv"], c["ch"]),
+                         ("assets/bol-srv-lg-c.gif", 25.0,
+                          "assets/bol-srv-cv-c.png", 12.82))
+        self.assertNotIn("img", c)
 
 
 class BundlePatch(unittest.TestCase):
@@ -519,7 +536,7 @@ class TabLogic(unittest.TestCase):
     def test_rows_in_order_with_the_most_played_first(self):
         rows = self.rows()
         keys = [r[0] for r in rows]
-        self.assertEqual(keys[:4], ["mine", "partners", "local", "popular"])
+        self.assertEqual(keys[:4], ["mine", "featured", "local", "popular"])
         self.assertEqual(keys[-1], "all")
         self.assertIn("cat-Factions", keys)
         mine = rows[0][2]
@@ -549,7 +566,7 @@ class TabLogic(unittest.TestCase):
 
     def test_language_filter(self):
         rows = {r[0]: r for r in self.rows(lang="en")}
-        self.assertNotIn("partners", rows)
+        self.assertNotIn("featured", rows)
         self.assertNotIn("mine", rows)  # both of the player's are not English
         self.assertEqual(rows["popular"][1], "Les plus joués en anglais")
         for _, _, names in rows.values():
@@ -565,6 +582,36 @@ class TabLogic(unittest.TestCase):
             'bol_cards(%s).mine.map(function(c){return c.motd||""})'
             % self.snap))
         self.assertEqual(got[1], "")  # an untranslated key is not shown
+
+    def test_featured_walk_reads_each_servers_details_once(self):
+        # Two featured servers: the first answers its details and its ping,
+        # the second never loads; both end up tried, the first enriched.
+        got = self._run(self.payload, (
+            '(function(){var asked=[];bol_ctx.load=function(i,k){'
+            'asked.push([i,k])};var ids=["h","g"],t=0,steps=[];'
+            'steps.push(bol_featStep({ok:false},ids,t));'
+            'steps.push(bol_featStep({ok:true,id:"h",img:"b.png",on:12,'
+            'mx:99,ping:0},ids,t+=100));'
+            'steps.push(bol_featStep({ok:true,id:"h",img:"b.png",on:12,'
+            'mx:99,ping:2},ids,t+=300));'
+            'steps.push(bol_featStep({ok:true,id:"h"},ids,t+=7000));'
+            'steps.push(bol_featStep({ok:true,id:"h"},ids,t+=100));'
+            'var c=bol_withDetails(bol_cards(%s).featured[0]);'
+            'return [asked,steps,c.wide,c.wh,c.on]})()' % self.snap))
+        asked, steps, wide, wh, on = got
+        self.assertEqual(asked, [["h", 2], ["g", 2]])
+        self.assertEqual(steps, [400, 400, 400, 0, 0])
+        self.assertEqual((wide, wh, on), ("b.png", 30, 12))
+
+    def test_catalogue_cards_carry_their_art(self):
+        entries = [{"id": "a", "name": "A", "ip": "a.example.org",
+                    "description": "x", "lang": "en"}]
+        payload = sb.build_payload(entries, images={"a": {
+            "lg": ("assets/l.png", 100.0), "cv": ("assets/c.jpg", 56.25)}})
+        got = self._run(payload, (
+            'bol_cards({favs:[],partners:[],featured:[],creators:[]}).cat'
+            '.map(function(c){return [c.logo,c.wide,c.wh,c.banner]})'))
+        self.assertEqual(got, [["assets/l.png", "assets/c.jpg", 56.25, ""]])
 
     def test_strings_and_counts(self):
         got = self._run(self.payload, '[bol_t("online",[bol_compact(1234)]),'

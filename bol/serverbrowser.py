@@ -10,11 +10,14 @@ the controller alike:
   my servers;
 * a search bar (name, address, category or any word of a description) and
   a language choice;
-* rows of tiles: the player's own servers (the game's
-  ``external_servers.txt``), the partner and featured servers, the most
-  played servers in the game's language and overall, one row per category,
-  then every server of the community list
-  github.com/Wyze3306/bedrock-servers-list.
+* the player's own servers (the game's ``external_servers.txt``);
+* the featured experiences, in big tiles: BedrockOnLinux's partners and the
+  game's own featured servers, with the banner and player count their
+  details give;
+* rows of tiles: the most played servers in the game's language and
+  overall, one row per category, then every server of the community list
+  github.com/Wyze3306/bedrock-servers-list, each with the logo and cover
+  that list stores for it.
 
 A tile joins its server in one press. A server of the community list is
 first added to the player's own list, since the game only joins servers it
@@ -93,7 +96,8 @@ STRINGS = {
         "addServer": "Add a server",
         "myServers": "My servers",
         "myServersHint": "The ones you added or played",
-        "partners": "Partners",
+        "featured": "Featured experiences",
+        "featuredHint": "Partners and the game's featured servers",
         "popular": "Most played",
         "popularIn": "Most played in {0}",
         "pingedHint": "Players online at launch",
@@ -127,7 +131,8 @@ STRINGS = {
         "addServer": "Ajouter un serveur",
         "myServers": "Mes serveurs",
         "myServersHint": "Ceux que vous avez ajoutés ou joués",
-        "partners": "Partenaires",
+        "featured": "Expériences en vedette",
+        "featuredHint": "Partenaires et serveurs en vedette du jeu",
         "popular": "Les plus joués",
         "popularIn": "Les plus joués en {0}",
         "pingedHint": "Joueurs en ligne au lancement",
@@ -312,16 +317,23 @@ def _image_allowed(url):
         host == h or host.endswith("." + h) for h in _IMAGE_HOSTS)
 
 
-def _image_url(entry):
-    url = entry.get("logo") or entry.get("image") or ""
+# A server's pictures, by the payload key the tab reads them under: its
+# square logo, its wide cover and the list's old banner strip, each cached
+# in its own folder.
+ART = (("lg", "logo", "logos"), ("cv", "cover", "covers"),
+       ("img", "image", "images"))
+
+
+def _image_url(entry, field="image"):
+    url = entry.get(field) or ""
     return url if _image_allowed(url) else ""
 
 
-def cached_images(cache=LIST_CACHE):
-    """{slug: Path} of the banners already downloaded."""
+def cached_images(cache=LIST_CACHE, folder="images"):
+    """{slug: Path} of the pictures of one kind already downloaded."""
     out = {}
     try:
-        for p in (Path(cache) / "images").iterdir():
+        for p in (Path(cache) / folder).iterdir():
             if p.suffix in (".png", ".jpg", ".gif") and p.stat().st_size:
                 out[p.stem] = p
     except OSError:
@@ -330,40 +342,42 @@ def cached_images(cache=LIST_CACHE):
 
 
 def download_images(entries, cache=LIST_CACHE, getter=_get, budget=None):
-    """Fetch the banners not cached yet; returns how many were added.
+    """Fetch the logos, covers and banners not cached yet; returns how many
+    were added.
 
     Runs off the launch path (see ``prefetch_images``): the game only shows
-    the banners already on disk when PLAY patched it, so a new one appears
+    the pictures already on disk when PLAY patched it, so a new one appears
     from the following launch on.
     """
-    folder = Path(cache) / "images"
-    have = cached_images(cache)
     added = 0
     deadline = None if budget is None else time.monotonic() + budget
-    for entry in entries:
-        if deadline is not None and time.monotonic() > deadline:
-            break
-        slug, url = _slug(entry), _image_url(entry)
-        if not url or slug in have:
-            continue
-        try:
-            blob = getter(url, _MAX_IMAGE_BYTES, 10)
-            ext = _image_kind(blob)
-            if not ext or not _image_dims(blob):
+    for _key, field, sub in ART:
+        folder = Path(cache) / sub
+        have = cached_images(cache, sub)
+        for entry in entries:
+            if deadline is not None and time.monotonic() > deadline:
+                return added
+            slug, url = _slug(entry), _image_url(entry, field)
+            if not url or slug in have:
                 continue
-            folder.mkdir(parents=True, exist_ok=True)
-            (folder / (slug + ext)).write_bytes(blob)
-            have[slug] = folder / (slug + ext)
-            added += 1
-        except (OSError, ValueError, urllib.error.URLError):
-            continue
+            try:
+                blob = getter(url, _MAX_IMAGE_BYTES, 10)
+                ext = _image_kind(blob)
+                if not ext or not _image_dims(blob):
+                    continue
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / (slug + ext)).write_bytes(blob)
+                have[slug] = folder / (slug + ext)
+                added += 1
+            except (OSError, ValueError, urllib.error.URLError):
+                continue
     return added
 
 
 def prefetch_images(entries, cache=LIST_CACHE):
     """``download_images`` in a daemon thread. Never in PLAY's way."""
     t = threading.Thread(target=download_images, args=(entries, cache),
-                         name="bol-server-banners", daemon=True)
+                         name="bol-server-art", daemon=True)
     t.start()
     return t
 
@@ -578,12 +592,17 @@ def _language_in_sentence(name, ui):
     return name.lower() if ui == "fr" else name
 
 
+# Each picture's height, in % of its width, under its own key.
+_RATIO_KEYS = {"img": "ih", "lg": "lh", "cv": "ch"}
+
+
 def build_payload(entries, *, on=True, ui="en", images=None,
                   partner_hosts=(), status=None, mine=None):
     """The ``__bolServerBrowser`` object: settings, strings, servers.
 
-    ``images`` maps a server's slug to the asset name its banner was copied
-    under, with its height as a percentage of its width. ``status`` is
+    ``images`` maps a server's slug to its pictures (``install_images``):
+    by payload key, the asset name each was copied under and its height as
+    a percentage of its width. ``status`` is
     ``ping_servers``' answer ({"host:port": {"o", "m"}}), None when no ping
     ran: then nobody is shown offline. ``mine`` maps the player's own
     servers' "host:port" to the name they gave them.
@@ -628,8 +647,8 @@ def build_payload(entries, *, on=True, ui="en", images=None,
             url = str(e.get(field) or "").strip()
             if url.startswith(("https://", "http://")):
                 s[key] = url
-        if slug in images:
-            s["img"], s["ih"] = images[slug]
+        for key, (name, ratio) in sorted(images.get(slug, {}).items()):
+            s[key], s[_RATIO_KEYS[key]] = name, ratio
         if s["a"].lower() in partner_hosts:
             s["pt"] = 1
         if status is not None:
@@ -695,31 +714,35 @@ def rewrite_runtime(js, payload):
 
 
 def install_images(hbui, entries, cache=LIST_CACHE):
-    """Copy the cached banners into one game's HBUI assets.
+    """Copy the cached pictures into one game's HBUI assets.
 
-    Returns the ``images`` mapping ``build_payload`` takes. A banner that
-    cannot be read or copied is simply not shown.
+    Returns the ``images`` mapping ``build_payload`` takes: {slug: {key:
+    (asset, height %)}}. A picture that cannot be read or copied is simply
+    not shown.
     """
-    have = cached_images(cache)
     assets = Path(hbui) / "assets"
     out = {}
-    for e in entries:
-        slug = _slug(e)
-        src = have.get(slug)
-        if src is None:
-            continue
-        try:
-            blob = src.read_bytes()
-            dims = _image_dims(blob)
-            if not dims or not dims[0]:
+    for key, _field, sub in ART:
+        have = cached_images(cache, sub)
+        prefix = _ASSET_PREFIX + ("" if key == "img" else key + "-")
+        for e in entries:
+            slug = _slug(e)
+            src = have.get(slug)
+            if src is None:
                 continue
-            name = _ASSET_PREFIX + slug + src.suffix
-            dst = assets / name
-            if not dst.is_file() or dst.stat().st_size != len(blob):
-                shutil.copyfile(src, dst)
-        except OSError:
-            continue
-        out[slug] = ("assets/" + name, round(dims[1] * 100 / dims[0], 2))
+            try:
+                blob = src.read_bytes()
+                dims = _image_dims(blob)
+                if not dims or not dims[0]:
+                    continue
+                name = prefix + slug + src.suffix
+                dst = assets / name
+                if not dst.is_file() or dst.stat().st_size != len(blob):
+                    shutil.copyfile(src, dst)
+            except OSError:
+                continue
+            out.setdefault(slug, {})[key] = (
+                "assets/" + name, round(dims[1] * 100 / dims[0], 2))
     return out
 
 

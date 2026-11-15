@@ -139,7 +139,8 @@ ENDPOINTS = (
                     "minecraftpocket-servers.com"),
         _PLAIN_GET,
         "The community server list (Wyze3306/bedrock-servers-list) and its "
-        "server banners, shown in the game's Servers tab while the "
+        "servers' logos, covers and banners, shown in the game's Servers tab "
+        "while the "
         "BedrockOnLinux server browser is on. Refreshed at most twice a "
         "day."),
     Endpoint(

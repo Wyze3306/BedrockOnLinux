@@ -3721,8 +3721,8 @@ class MainWindow(QMainWindow):
             "BedrockOnLinux server browser",
             self.settings.get("server_browser", True),
             "Redraws the game's Servers tab as one page of tiles, for mouse "
-            "and controller alike: your servers, the partners, the most "
-            "played ones and every server of the community list "
+            "and controller alike: your servers, the featured experiences, "
+            "the most played ones and every server of the community list "
             "github.com/Wyze3306/bedrock-servers-list, each joined in one "
             "press and searchable by name, address, category or keyword. "
             "Off shows the game's own tab. Takes effect at the next PLAY.")

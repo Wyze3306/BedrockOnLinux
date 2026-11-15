@@ -6,9 +6,12 @@
 
 - **A Servers tab of our own.** The game's Servers tab becomes one page of
   big tiles, built for the mouse and the controller alike: your servers,
-  the partner and featured servers, the most played ones (in your language
-  first), one row per category, then every server of the community list
-  [Wyze3306/bedrock-servers-list](https://github.com/Wyze3306/bedrock-servers-list).
+  the featured experiences (our partners and the game's featured servers,
+  in big tiles with their banner and player count), the most played ones
+  (in your language first), one row per category, then every server of the
+  community list
+  [Wyze3306/bedrock-servers-list](https://github.com/Wyze3306/bedrock-servers-list),
+  with the logo and cover picture it stores for each.
   A tile joins its server in one press; the spotlight at the top describes
   the one you are on, with Add to my servers (or Y). The player counts come
   from a status ping at each launch, so the most played servers come first
