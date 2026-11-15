@@ -76,10 +76,13 @@ TIME_ZONE_PATCH = (
 GAME_EVENT_PATCH = (
     DELTA / "0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch"
 )
+INTL_PATCH = (
+    DELTA / "0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch"
+)
 # The follow-ups after 0013. They were first applied around the manifest so
 # that native22 kept verifying; native23 pins every file they change.
 LATE_PATCHES = (FSYNC_PATCH, VM_COUNTERS_PATCH, TIME_ZONE_PATCH,
-                GAME_EVENT_PATCH)
+                GAME_EVENT_PATCH, INTL_PATCH)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
@@ -87,6 +90,11 @@ CHANGED_FILES = {
     "dlls/combase/dcom.idl",
     "dlls/combase/marshal.c",
     "dlls/combase/stubmanager.c",
+    "dlls/jscript/Makefile.in",
+    "dlls/jscript/global.c",
+    "dlls/jscript/intl.c",
+    "dlls/jscript/jscript.h",
+    "dlls/jscript/string.c",
     "dlls/kernelbase/debug.c",
     "dlls/ntdll/Makefile.in",
     "dlls/ntdll/unix/fsync.c",
@@ -1043,6 +1051,27 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
     def _changed_files(path):
         return set(re.findall(r"^diff --git a/(\S+) b/\1$", path.read_text(),
                               re.MULTILINE))
+
+    def test_jscript_has_the_intl_object_ie11_had(self):
+        # #351: the Microsoft account page Minecraft Education opens reads
+        # Intl while it renders; with none the sign-in stayed an empty card.
+        additions = self._additions(INTL_PATCH)
+        for name in ("NumberFormat", "DateTimeFormat", "Collator",
+                     "getCanonicalLocales", "supportedLocalesOf"):
+            self.assertIn(f'L"{name}"', additions)
+        self.assertIn("return init_intl(ctx);", additions)
+        self.assertIn("intl_compare_strings(ctx, NULL, vthis", additions)
+        self.assertIn("intl.c", additions)
+        for script in (SCRIPT, CONTAINER_SCRIPT):
+            with self.subTest(script=script.name):
+                self.assertEqual(
+                    hashlib.sha256(INTL_PATCH.read_bytes()).hexdigest(),
+                    re.search(r'^readonly VENDORED_INTL_PATCH_SHA256="([^"]+)"',
+                              script.read_text(), re.MULTILINE).group(1))
+        packager = PACKAGER.read_text()
+        self.assertIn(hashlib.sha256(INTL_PATCH.read_bytes()).hexdigest(),
+                      packager)
+        self.assertIn("grep -Fx getCanonicalLocales", packager)
 
     def test_game_events_reach_the_launcher(self):
         # #152: QueryApiImpl refused this class with E_NOTIMPL, XSAPI dropped

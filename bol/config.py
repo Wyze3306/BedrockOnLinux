@@ -100,13 +100,13 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 # match the reviewed pins below.
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
 # The commit alone does not identify vendored follow-up patches.
-WINEGDK_SOURCE_MANIFEST_SHA256 = "356ce8528c080bb5e97208e08d95ee91089922dd0669ef1c3aac4679b8bd3bd5"
+WINEGDK_SOURCE_MANIFEST_SHA256 = "6f6ad608658c7b7791cb5ec1efb3079ad66d7ad6be20112089a0942d9dba8fed"
 # How the WineGDK prefix is built from that source, when not the way it first
 # was: it is part of what the bytes are, so it is part of the name of the
 # release that holds them (scripts/winegdk-release-tag.sh). "stripped"
 # installs Wine's modules without their debugging sections.
 WINEGDK_PREFIX_RECIPE = "stripped"
-WINEGDK_BUILD_REV = "wow64-archs-native24"
+WINEGDK_BUILD_REV = "wow64-archs-native25"
 # native22 carries the ntdll loader patches the Microsoft Store packages need:
 # 0007 maps the main image from a descriptor, 0008 from a path so it survives
 # the Steam Linux Runtime container. Their game executable stays encrypted on
@@ -156,6 +156,10 @@ WINEGDK_BUILD_REV = "wow64-archs-native24"
 # installed stripped of their debugging sections, and Wine Mono and the
 # import libraries are left out. The code is the same; the engine is not
 # 2.5 GB on disk any more, nor its archive 863 MB.
+#
+# native25 adds the ECMA-402 Intl object to jscript (0018): Minecraft
+# Education signs in through the IE WebBrowser control, and the Microsoft
+# account page it opens stayed an empty card without it (#351).
 WINEGDK_ARCHIVE_SHA256 = "06f87bcda4ccf139efc05fa943c3f5110aa9bbea08c4a8e2ebaafedaa818ef7f"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "3abba830089fc7f2b788ab8228024fa8573c8530f7458c9e7ae45419dd9f9a58"

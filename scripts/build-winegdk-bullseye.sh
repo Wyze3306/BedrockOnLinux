@@ -57,8 +57,10 @@ readonly VENDORED_TIME_ZONE_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/001
 readonly VENDORED_TIME_ZONE_PATCH_SHA256="6054f33a5a95c5beaf12039dca8b303fdfa66c4e01fb95b75479659f0aebc2d9"
 readonly VENDORED_GAME_EVENT_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch"
 readonly VENDORED_GAME_EVENT_PATCH_SHA256="c791f7bcab535204649c27ade0d328f669134f6044a1130362aeb5df964b28ad"
+readonly VENDORED_INTL_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch"
+readonly VENDORED_INTL_PATCH_SHA256="154f48790e2a8eecd970438cda3caf3bfea5e0b72f5012f2dd0379d3e49de61a"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
-readonly SOURCE_SHA256SUMS_SHA256="356ce8528c080bb5e97208e08d95ee91089922dd0669ef1c3aac4679b8bd3bd5"
+readonly SOURCE_SHA256SUMS_SHA256="6f6ad608658c7b7791cb5ec1efb3079ad66d7ad6be20112089a0942d9dba8fed"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
 readonly GLIBC_CEILING="2.31"
@@ -627,6 +629,11 @@ fi
 [[ "$(sha256sum "$VENDORED_GAME_EVENT_PATCH" | cut -d' ' -f1)" == \
     "$VENDORED_GAME_EVENT_PATCH_SHA256" ]] ||
   die "vendored XGameEvent patch SHA-256 mismatch"
+[[ -f "$VENDORED_INTL_PATCH" ]] ||
+  die "vendored jscript Intl patch is missing"
+[[ "$(sha256sum "$VENDORED_INTL_PATCH" | cut -d' ' -f1)" == \
+    "$VENDORED_INTL_PATCH_SHA256" ]] ||
+  die "vendored jscript Intl patch SHA-256 mismatch"
 [[ "$SOURCE_DATE_EPOCH" == "$EXPECTED_SOURCE_DATE_EPOCH" ]] ||
   die "WineGDK source timestamp changed: $SOURCE_DATE_EPOCH"
 
@@ -684,6 +691,7 @@ vendored_fsync_patch_sha256=$VENDORED_FSYNC_PATCH_SHA256
 vendored_vm_counters_patch_sha256=$VENDORED_VM_COUNTERS_PATCH_SHA256
 vendored_time_zone_patch_sha256=$VENDORED_TIME_ZONE_PATCH_SHA256
 vendored_game_event_patch_sha256=$VENDORED_GAME_EVENT_PATCH_SHA256
+vendored_intl_patch_sha256=$VENDORED_INTL_PATCH_SHA256
 source_sha256sums_sha256=$SOURCE_SHA256SUMS_SHA256
 source_date_epoch=$SOURCE_DATE_EPOCH
 debian_suite=$DEBIAN_SUITE
@@ -796,6 +804,11 @@ git -C "$WORK_ROOT/source" apply --check "$VENDORED_GAME_EVENT_PATCH" ||
   die "vendored XGameEvent patch does not apply"
 git -C "$WORK_ROOT/source" apply "$VENDORED_GAME_EVENT_PATCH" ||
   die "could not apply vendored XGameEvent patch"
+printf '==> Applying the jscript Intl object\n'
+git -C "$WORK_ROOT/source" apply --check "$VENDORED_INTL_PATCH" ||
+  die "vendored jscript Intl patch does not apply"
+git -C "$WORK_ROOT/source" apply "$VENDORED_INTL_PATCH" ||
+  die "could not apply vendored jscript Intl patch"
 [[ -f "$SOURCE_SHA256SUMS" ]] || die "WineGDK source hash manifest is missing"
 [[ "$(sha256sum "$SOURCE_SHA256SUMS" | cut -d' ' -f1)" == \
     "$SOURCE_SHA256SUMS_SHA256" ]] ||

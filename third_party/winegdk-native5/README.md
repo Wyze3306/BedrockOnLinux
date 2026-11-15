@@ -204,9 +204,9 @@ rather than behind a new configure check, and the server protocol files that
 builders also refuse a wineserver that lacks the fallback.
 
 `SOURCE-SHA256SUMS` pins every source file changed by the cumulative r12 to
-native5 delta and its follow-ups through `0017`. The Bullseye builder applies
+native5 delta and its follow-ups through `0018`. The Bullseye builder applies
 the reviewed r12 and native patches when the target commit is unavailable,
-always applies `0002` through `0017`, then verifies the complete resulting
+always applies `0002` through `0018`, then verifies the complete resulting
 source tree; the container builder does the same on the target commit. Each
 patch is also pinned by its own SHA-256 in both builders and in the
 packager. `0014` to `0017` were first applied around the manifest, so that the
@@ -246,12 +246,11 @@ session's events, the collector refused none, the account's
 and crafting a wooden hoe unlocked "Time to Farm!" and "MOAR Tools". The
 packager refuses an `xgameruntime.dll` built without the class.
 
-`pending/0018` adds the ECMA-402 `Intl` object to jscript, at the level
+The `0018` patch adds the ECMA-402 `Intl` object to jscript, at the level
 Internet Explorer 11 shipped it (`NumberFormat`, `DateTimeFormat`, `Collator`),
 and implements `String.prototype.localeCompare`. Minecraft Education signs in
 through the IE WebBrowser control, which is Wine's mshtml with jscript; the
 Microsoft account page it opens is a React app that reads `Intl` while it
 renders, and with none the sign-in window stayed an empty card (issue #351).
-It touches no file `SOURCE-SHA256SUMS` pins. It is not applied yet: wiring it
-into the builders changes the engine's inputs, so it ships with the next engine
-revision.
+native25 is the first engine built with it; the packager refuses a jscript.dll
+without `Intl` in either architecture.

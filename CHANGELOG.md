@@ -146,6 +146,12 @@ offered this version: download it from this release to try it.
 
 ### Fixed
 
+- **Minecraft Education's sign-in window shows the form.** It stayed an empty
+  card. Education signs in through Wine's Internet Explorer, whose JavaScript
+  engine had no `Intl` object, and the Microsoft account page reads it while
+  it draws. Engine native25 adds it (WineGDK patch 0018), with
+  `String.localeCompare` (#351).
+
 - **"Could not initialise the Wine prefix" says why.** The dialog only
   pointed at a log file. It now gives what wineboot did (timed out, exited
   with a status, left no registry) and the last lines of the log, and asks

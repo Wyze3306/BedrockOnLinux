@@ -362,6 +362,7 @@ WINEGDK_NATIVE_PROVENANCE_FILES=(
   0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch
   0016-ntdll-check-the-time-zone-at-most-once-a-second.patch
   0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch
+  0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch
 )
 
 verify_sha256() {
@@ -414,10 +415,10 @@ verify_winegdk_source_provenance() {
     "ee0543f11737a11f5edec389967bb41482c7f5eda3807c24d171dd6bf6301274" \
     "WineGDK r12 source delta"
   verify_sha256 "$native_root/README.md" \
-    "d10a2dc2ebd7ea4a1b918d114ae068c67ee9c6022062008a2f4b3833ba846460" \
+    "297c23f7f9026780f1ea017dc0362fd22a00512a89070b735524f1f84d03c0ab" \
     "WineGDK native5 source-delta README"
   verify_sha256 "$native_root/SOURCE-SHA256SUMS" \
-    "356ce8528c080bb5e97208e08d95ee91089922dd0669ef1c3aac4679b8bd3bd5" \
+    "6f6ad608658c7b7791cb5ec1efb3079ad66d7ad6be20112089a0942d9dba8fed" \
     "WineGDK native5 source hash lock"
   verify_sha256 \
     "$native_root/0001-winegdk-native5-Xbox-and-file-picker-runtime.patch" \
@@ -487,6 +488,10 @@ verify_winegdk_source_provenance() {
     "$native_root/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch" \
     "c791f7bcab535204649c27ade0d328f669134f6044a1130362aeb5df964b28ad" \
     "WineGDK XGameEvent runtime class"
+  verify_sha256 \
+    "$native_root/0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch" \
+    "154f48790e2a8eecd970438cda3caf3bfea5e0b72f5012f2dd0379d3e49de61a" \
+    "WineGDK jscript Intl object"
 }
 
 has_marker() {
@@ -778,6 +783,10 @@ for arch in "${ARCHES[@]}"; do
     echo "!! WineGDK native interface diagnostics missing for $arch" >&2; exit 1; }
   has_text "$xgdk" "short write of an event record" || {
     echo "!! WineGDK XGameEvent runtime class (0017) missing for $arch" >&2; exit 1; }
+  # Its names are wide strings, which strings(1) only lists with -el.
+  jscript="$STAGED_ENGINE/files/lib/wine/$arch/jscript.dll"
+  LC_ALL=C strings -a -el "$jscript" | grep -Fx getCanonicalLocales >/dev/null || {
+    echo "!! WineGDK jscript Intl object (0018) missing for $arch" >&2; exit 1; }
   storage="$STAGED_ENGINE/files/lib/wine/$arch/windows.storage.dll"
   [[ -f "$storage" ]] || {
     echo "!! WineGDK windows.storage.dll missing for $arch" >&2; exit 1; }
@@ -985,6 +994,7 @@ for relative_root, names in (
         "native5/0015-ntdll-reread-proc-self-status-through-a-kept-descriptor.patch",
         "native5/0016-ntdll-check-the-time-zone-at-most-once-a-second.patch",
         "native5/0017-xgameruntime-record-the-title-s-XGameEventWrite-calls.patch",
+        "native5/0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch",
     )),
     (gdk_proton_provenance_root, ("provenance.env",)),
 ):

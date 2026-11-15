@@ -57,8 +57,8 @@ REQUIRED_COMPONENTS = {
 # frame-limiter busy-wait fix (#202): d3d12core.dll changes on both
 # architectures again and d3d12.dll stays byte for byte the same. native24
 # strips Wine's own modules and leaves the payload, already built stripped,
-# as it was.
-REQUIRED_VARIANT_HASHES_BUILD_REV = "wow64-archs-native24"
+# as it was. native25 only adds jscript's Intl object.
+REQUIRED_VARIANT_HASHES_BUILD_REV = "wow64-archs-native25"
 REQUIRED_ENGINE_GLIBC_MAX = "2.31"
 REQUIRED_VKD3D_BASE_COMMIT = "3b10bd7a7ec6a7347e616cf8bea59333afec2255"
 REQUIRED_VKD3D_REVERT = "76c11d2e2b90b0a46dc894508e67e2aaacc2c04d"
