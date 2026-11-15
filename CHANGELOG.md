@@ -176,6 +176,15 @@ offered this version: download it from this release to try it.
   object, which native25 added (patch 0018), with `String.localeCompare`
   (#351).
 
+- **Minecraft Education no longer sends a school account to Windows' account
+  broker.** Right after the e-mail address, sign-in stopped on "Something
+  went wrong [4nsvw]". The sign-in library in Education sends school accounts
+  to the Web Account Manager, which Wine does not have, and offers no setting
+  to turn that off. While Education runs, the launcher now turns the switch
+  off in the game's memory, so the account signs in through the game's own
+  window. It only does so after checking the bytes of a build it knows
+  (1.26.33.0), and it cannot reach the game inside the Flatpak (#351).
+
 - **"Could not initialise the Wine prefix" says why.** The dialog only
   pointed at a log file. It now gives what wineboot did (timed out, exited
   with a status, left no registry) and the last lines of the log, and asks

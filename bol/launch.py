@@ -28,6 +28,7 @@ from . import (
     gameevents,
     instances,
     mods,
+    msal_flights,
     packcache,
     presence as xbl_presence,
     saves,
@@ -1487,6 +1488,17 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         except Exception as inject_error:
             warn("Automatic DLL injection could not be started (%s)."
                  % type(inject_error).__name__)
+        # Education's sign-in goes to Windows' account broker, which Wine
+        # lacks, unless MSAL's flight for it is turned off in the game (#351).
+        if edition_title(edition_entry) == "education":
+            try:
+                prefix = active_prefix()
+                msal_flights.start(
+                    exe, lambda: prefix_processes(prefix),
+                    lambda: proc.poll() is None)
+            except Exception as flight_error:
+                warn("The Minecraft Education sign-in watcher could not be "
+                     "started (%s)." % type(flight_error).__name__)
         # Started in fullscreen, the game keeps a frame the size of its
         # maximized window until it is resized once its menu is up (#283).
         try:

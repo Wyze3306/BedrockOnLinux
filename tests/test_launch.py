@@ -121,6 +121,8 @@ class ReadyLaunchHarness:
             # bridging the machine's own virtual desktop setting.
             mock.patch.object(launch.fullscreen_fix, "start"),
             mock.patch.object(launch.virtual_desktop, "start"),
+            # Nor the memory of whatever Minecraft Education runs here.
+            mock.patch.object(launch.msal_flights, "start"),
             mock.patch.object(launch, "seed_default_servers"),
             # Nor the player's real worlds: a backup is a copy of them.
             mock.patch.object(launch.saves, "before_launch",
@@ -169,6 +171,7 @@ class ReadyLaunchHarness:
                              "_prefix_stably_idle_after_wrapper",
                              "proton_umu_cmd")
             }
+            self.launch_mocks["msal_flights.start"] = launch.msal_flights.start
             return launch._launch_once(lock_fds=lock_fds,
                                        on_started=on_started,
                                        notices=notices, editor=editor)
@@ -925,6 +928,13 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         said = [str(call.args[0]) for call
                 in self.launch_mocks["info"].call_args_list if call.args]
         self.assertIn(launch.EDUCATION_SIGNIN_NOTICE, said)
+        # Its sign-in is kept out of Windows' account broker, which Wine
+        # does not have, for as long as the game runs.
+        start = self.launch_mocks["msal_flights.start"]
+        start.assert_called_once()
+        exe, pids, alive = start.call_args.args
+        self.assertTrue(exe.endswith("Minecraft.Windows.exe"))
+        self.assertTrue(callable(pids) and callable(alive))
 
     def test_bedrock_still_gets_the_xbox_account_and_its_patches(self):
         observed = {}
@@ -942,6 +952,7 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.launch_mocks["hide_signin_button"].assert_called_once()
         self.launch_mocks["apply_branding"].assert_called_once()
         self.launch_mocks["seed_default_servers"].assert_called_once()
+        self.launch_mocks["msal_flights.start"].assert_not_called()
 
     def test_unusable_preauth_payload_is_withheld_from_the_engine(self):
         for preauth, expected in ((True, True), (False, False)):
