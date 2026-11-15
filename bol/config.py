@@ -168,7 +168,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native27"
 # native27 lets ieframe's WebBrowser control give OneAuth its window through
 # SID_SShellBrowser (0020): Education's sign-in stopped on "Something went
 # wrong [9zj22]" right after the e-mail address.
-WINEGDK_ARCHIVE_SHA256 = "fba82bf839d21eb013e0f1830eff57e5316b08cc6b6de2acf3a6c3ddb4a5715c"
+WINEGDK_ARCHIVE_SHA256 = "e8db800b19eacdda97538bd969f5ac07d5859139b2b4aea0e755891f7a469935"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "a052116ecbb041c219fb30b201a0eead9d1a667e9fb5ef17fb5dacd09b59f000"
 
