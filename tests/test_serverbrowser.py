@@ -298,6 +298,40 @@ class BundlePatch(unittest.TestCase):
                   "KEYS": "ye", "_prefix": "e"}
         self.assertEqual({k: names[k] for k in expect}, expect)
 
+    # The game's second Servers tab, as 1.26.63 writes it (and the flag
+    # that picks it), and as the 1.26.70 previews read the layout id.
+    _V2 = (
+        'function Cie(){const e=Jc(),n=Do(oK("mc-servers-tab-layout-id"),'
+        'yie),{fabIds:a,isLoading:r,hasError:l}=Fee(n||yie),o=k((e,t,n)=>'
+        'e||!t&&0===n.length,[],[l,r,a]);return t.createElement(Po,{data:o},'
+        'e=>e?null:t.createElement(Wee,{fabIds:a,registry:Sie}))}'
+        'const yie="ServerTab",Mee=e=>lr("vanilla.menus.fabQuery",e);'
+        'const Ede=()=>{const e=z0("mc-servers-tab-v2");return '
+        't.createElement(Po,{data:e},e=>e?t.createElement(wie,null):'
+        't.createElement(Noe,null))};')
+    _V2_PREVIEW = (
+        'function H7(){const e=ss(),a=zo(fG("mc-servers-tab-layout-id"),z7)'
+        '||z7,{fabIds:r,isLoading:l,hasError:o}=r3(a),i=T((e,t,n)=>e,[],'
+        '[o,l,r]);return t.createElement(E6,{fabIds:r,registry:j7})}'
+        'const t3=e=>lr("vanilla.menus.fabQuery",e);')
+
+    def test_the_games_featured_layout_is_found(self):
+        self.assertEqual(sb._layout_names(_DIRECT + self._V2), {
+            "FABS": "Fee", "LAYOUT": "yie", "QUERY": "lr"})
+        self.assertEqual(sb._layout_names(self._V2_PREVIEW), {
+            "FABS": "r3", "LAYOUT": "z7", "QUERY": "lr"})
+        # A build without it draws our own row.
+        self.assertEqual(sb._layout_names(_DIRECT), sb._LAYOUT_DEFAULTS)
+        out = self._patched(_DIRECT)
+        self.assertIn("bol_noLayout(\"\")", out)
+
+    def test_the_second_tab_gives_way_to_the_page(self):
+        out = self._patched(_DIRECT + self._V2)
+        self.assertIn('e=>e&&!bol_on()?t.createElement(wie,null):', out)
+        self.assertIn("Fee(yie)", out)
+        self.assertIn('lr("vanilla.menus.fabQuery",', out)
+        self.assertIn('lr("vanilla.menus.imageQuery",', out)
+
     def test_wrapped_shape_names(self):
         names = sb._discover(_wrapped(_DIRECT))
         self.assertEqual(names["UFM"], "(0,r.useFacetMap)")
@@ -602,6 +636,17 @@ class TabLogic(unittest.TestCase):
         self.assertEqual(asked, [["h", 2], ["g", 2]])
         self.assertEqual(steps, [400, 400, 400, 0, 0])
         self.assertEqual((wide, wh, on), ("b.png", 30, 12))
+
+    def test_a_layout_block_gives_its_experiences(self):
+        got = self._run(self.payload, (
+            'bol_expsOf({fab:{pagedExperiences:{experiences:['
+            '{experienceId:"e1",linksTo:{id:"l1"},title:{value:"MegaSMP"},'
+            'creatorName:"InPvP",listing:{displayImage:{url:"https://x/a"},'
+            'motd:{value:"SURVIVAL"}}},{title:null}]}}}).concat('
+            'bol_expsOf({fab:{experience:{}}}))'))
+        self.assertEqual(got, [{"eid": "e1", "lid": "l1", "n": "MegaSMP",
+                                "by": "InPvP", "url": "https://x/a",
+                                "motd": "SURVIVAL"}])
 
     def test_catalogue_cards_carry_their_art(self):
         entries = [{"id": "a", "name": "A", "ip": "a.example.org",

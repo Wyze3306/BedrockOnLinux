@@ -11,9 +11,11 @@ the controller alike:
 * a search bar (name, address, category or any word of a description) and
   a language choice;
 * the player's own servers (the game's ``external_servers.txt``);
-* the featured experiences, in big tiles: BedrockOnLinux's partners and the
-  game's own featured servers, with the banner and player count their
-  details give;
+* the featured experiences, in big tiles: BedrockOnLinux's partners, then
+  the servers of the game's own featured layout (The Hive, CubeCraft,
+  MegaSMP...: the second Servers tab some accounts get, read for its lists
+  alone), or the game's featured servers where there is no layout, with the
+  banner and player count their details give;
 * rows of tiles: the most played servers in the game's language and
   overall, one row per category, then every server of the community list
   github.com/Wyze3306/bedrock-servers-list, each with the logo and cover
@@ -35,7 +37,8 @@ written against placeholders. ``_discover`` reads, from anchors the Servers
 tab cannot drop without being rewritten, the minified name each build gives
 the components, hooks and engine facets they use, and the components are
 pasted into the bundle's own scope next to the vanilla tab. The vanilla tab
-then draws the page instead of its own two panes, but only while the
+then draws the page instead of its own two panes (and the game keeps that
+tab rather than its second one), but only while the
 ``__bolServerBrowser`` global on the bundle's first line says so: switching
 the setting off rewrites that line alone, and the game is back to its own
 tab without the bundle being restored.
@@ -927,11 +930,47 @@ def _discover(data):
         None, None)
     m = re.search(r"\{routePrefix:(" + _N + r')="/play",', tab_text)
     names["_prefix"] = m.group(1) if m else None
+    names.update(_layout_names(data))
     if not names["_prefix"] or not all(names.get(k) for k in _PLACEHOLDERS):
         return None
     names["_tab_start"] = tab.start()
     names["_tab"] = tab_text
     names["_tab_name"] = tab.group(1)
+    return names
+
+
+# The game's second Servers tab (1.26.60 on, behind the account flag
+# ``mc-servers-tab-v2``) is an online layout of "experience" blocks: a hero
+# banner, then lists of experiences (servers). The page reads those lists
+# for its featured row, in its own tiles. Optional: without them the row
+# shows the game's featured servers.
+_LAYOUT_HOOK = re.compile(
+    r"\{fabIds:" + _N + r",isLoading:" + _N + r",hasError:" + _N + r"\}=("
+    + _HOOK + r")\((" + _N + r")(?:\|\|(" + _N + r"))?\)")
+_LAYOUT_DEFAULTS = {"FABS": "bol_noLayout", "LAYOUT": '""',
+                    "QUERY": "bol_noLayout"}
+# Which tab the game draws: the second one when the flag says so. With the
+# page on, always the first, which draws the page.
+_TAB_V2 = re.compile(
+    r'(\("mc-servers-tab-v2"\);return ' + _N + r"\.createElement\(" + _N
+    + r",\{data:(" + _N + r")\},\(?" + _N + r"=>)(" + _N + r")\?")
+
+
+def _layout_names(data):
+    names = dict(_LAYOUT_DEFAULTS)
+    m = _LAYOUT_HOOK.search(data)
+    if not m:
+        return names
+    # The query hook the layout reads its blocks and their images with.
+    query = re.search(r"(" + _N + r')\("vanilla\.menus\.fabQuery",', data)
+    layout = m.group(3)
+    if not layout:
+        # `a=read("mc-servers-tab-layout-id",Default)||Default,{...}=hook(a)`
+        d = re.findall(r'"mc-servers-tab-layout-id"\),(' + _N + r")\)",
+                       data[max(0, m.start() - 400):m.start()])
+        layout = d[-1] if d else None
+    if query and layout:
+        names.update(FABS=m.group(1), LAYOUT=layout, QUERY=query.group(1))
     return names
 
 
@@ -946,7 +985,10 @@ _PLACEHOLDERS = (
 def _render(template, names):
     # Comments go: the bundle is minified, and nobody reads it there.
     code = re.sub(r"(?m)^\s*//.*\n", "", template)
-    return re.sub(r"__([A-Z]+)__", lambda m: names[m.group(1)], code)
+    # The layout names are optional: their stand-ins draw our own row.
+    return re.sub(r"__([A-Z]+)__",
+                  lambda m: names.get(m.group(1))
+                  or _LAYOUT_DEFAULTS[m.group(1)], code)
 
 
 def patch_body(data):
@@ -977,4 +1019,8 @@ def patch_body(data):
     except (OSError, KeyError):
         return data, "lost"
     out = data[:tab_start] + code + new_tab + data[tab_start + len(tab):]
+    v2 = list(_TAB_V2.finditer(out))
+    if len(v2) == 1:
+        m = v2[0]
+        out = (out[:m.start(3)] + m.group(3) + "&&!bol_on()" + out[m.end(3):])
     return out, "applied"

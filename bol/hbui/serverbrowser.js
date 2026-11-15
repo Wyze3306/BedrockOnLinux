@@ -184,12 +184,17 @@ function bol_play(bol_c) {
     bol_join(__KD__.ThirdParty, bol_c.id);
     return;
   }
+  if (bol_c.kind === "exp") {
+    if (bol_c.route) bol_ctx.router.push(bol_c.route);
+    return;
+  }
   var bol_id = bol_c.id;
   if (bol_id == null && bol_c.s) bol_id = bol_add(bol_c.s);
   if (bol_id != null) bol_join(__KD__.External, bol_id);
 }
 function bol_toggleFav(bol_c) {
-  if (!bol_c || !bol_ctx.act || bol_c.kind === "tp") return;
+  if (!bol_c || !bol_ctx.act || bol_c.kind === "tp" || bol_c.kind === "exp")
+    return;
   if (bol_c.id != null) {
     var bol_r = bol_ctx.act("remove", null, bol_c.id);
     bol_say(bol_r && bol_r.error != null ? bol_t("removeFailed")
@@ -329,7 +334,8 @@ function bol_status(bol_c, bol_size) {
   var bol_bits = bol_s ? (bol_s.t || []).slice(0, 2) : [];
   if (bol_s && bol_s.l) bol_bits.push(bol_s.l.toUpperCase());
   return bol_line(bol_bits.length ? bol_bits.join(" · ")
-                  : (bol_c.motd || bol_t("server")), bol_size, bol_DIM);
+                  : (bol_c.by || bol_c.motd || bol_t("server")), bol_size,
+                  bol_DIM);
 }
 
 // The picture of a card: its wide cover cropped to the box, else its logo
@@ -434,20 +440,23 @@ function bol_BigTileView(bol_p) {
   var bol_s = bol_c.s;
   var bol_pitch = bol_s ? (bol_s.t || []).slice(0, 4).join(" · ")
                         : (bol_c.motd || "");
-  return bol_div({width: "50%", padding: "0.6rem"}, [
+  var bol_third = !!bol_p.third;
+  return bol_div({width: bol_third ? "33.33%" : "50%", padding: "0.6rem"}, [
     bol_h(__PANEL__, {compact: true, focusable: true, role: "neutral",
                       onClick: bol_onClick, onFocusChanged: bol_onFocus,
                       onHoverChanged: bol_onFocus,
                       onClickSecondary: bol_onFav,
                       narrationText: bol_c.n, inputLegend: bol_t("play")},
-      bol_h(bol_ArtWithBadge, {card: bol_c, height: "21rem",
+      bol_h(bol_ArtWithBadge, {card: bol_c,
+                               height: bol_third ? "15.5rem" : "21rem",
                                logoSize: "17rem", badge: "6.5rem",
                                big: "4rem"}),
       bol_div({padding: "1rem 1.4rem 1.2rem"}, [
         bol_div({display: "flex", flexDirection: "row",
                  alignItems: "center", marginBottom: "0.4rem"}, [
-          bol_line((bol_c.fav ? "\u2605 " : "") + bol_c.n, "2.4rem",
-                   bol_WHITE, {flexShrink: 1}),
+          bol_line((bol_c.fav ? "\u2605 " : "") + bol_c.n,
+                   bol_third ? "2rem" : "2.4rem", bol_WHITE,
+                   {flexShrink: 1}),
           bol_div({flexGrow: 1}),
           bol_status(bol_c, "1.6rem")]),
         bol_line(bol_pitch || " ", "1.6rem", bol_DIM)]))]);
@@ -487,6 +496,7 @@ function bol_Row(bol_p) {
       label: bol_limit <= bol_ROW ? bol_t("seeAll") : bol_t("showMore"),
       onClick: bol_p.onMore}));
   return bol_div({marginBottom: "1.8rem"}, [
+    !bol_p.title ? null :
     bol_div({display: "flex", flexDirection: "row", alignItems: "flex-end",
              padding: "0 0.6rem 0.4rem"}, [
       bol_line(bol_p.title, bol_p.big ? "2.8rem" : "2.3rem", bol_WHITE,
@@ -519,7 +529,7 @@ function bol_Spotlight(bol_p) {
       bol_h(__BUTTON__, {variant: "hero", inputLegend: bol_t("play"),
                          onClick: function () { bol_play(bol_c); }},
             bol_t("play"))])];
-  if (bol_c.kind !== "tp")
+  if (bol_c.kind !== "tp" && bol_c.kind !== "exp")
     bol_buttons.push(bol_div({width: "26rem", flexShrink: 0}, [
       bol_h(__BUTTON__, {variant: "secondary",
                          inputLegend: bol_c.fav ? bol_t("unfavorite")
@@ -556,6 +566,147 @@ function bol_Spotlight(bol_p) {
                marginTop: "0.8rem"}, bol_buttons.concat([
         bol_line(bol_addr, "1.6rem", bol_DIM,
                  {marginLeft: "1.6rem", flexShrink: 1})]))])]);
+}
+
+// --------------------------------------------------------------------------
+// The featured experiences: the servers the game's own online layout lists
+// (its second Servers tab, when this build has it and the account gets
+// one), in our big tiles, without its banner or its own lists; then our
+// partners. The game's featured servers in our tiles otherwise.
+
+function bol_noLayout() { return null; }
+
+// The experiences one layout block lists, as plain values.
+function bol_expsOf(bol_v) {
+  var bol_f = bol_v && bol_v.fab;
+  var bol_list = bol_f && bol_f.pagedExperiences
+    && bol_f.pagedExperiences.experiences;
+  var bol_out = [];
+  Array.from(bol_list || []).forEach(function (bol_e) {
+    if (!bol_e || !bol_e.title) return;
+    var bol_l = bol_e.listing || {};
+    bol_out.push({
+      eid: String(bol_e.experienceId || ""),
+      lid: bol_e.linksTo && bol_e.linksTo.id ? String(bol_e.linksTo.id) : "",
+      n: String(bol_e.title.value || ""),
+      by: String(bol_e.creatorName || ""),
+      url: bol_l.displayImage && bol_l.displayImage.url || "",
+      motd: bol_l.motd && bol_l.motd.value || ""});
+  });
+  return bol_out;
+}
+
+// Reads one block and hands its experiences up; draws nothing.
+function bol_Report(bol_p) {
+  var bol_key = JSON.stringify(bol_p.list);
+  __R__.useEffect(function () {
+    bol_p.onList(bol_p.id, bol_p.list);
+  }, [bol_key]);
+  return null;
+}
+function bol_FabSource(bol_p) {
+  var bol_h = __R__.createElement;
+  var bol_q = __QUERY__("vanilla.menus.fabQuery", bol_p.id);
+  var bol_list = __UFM__(bol_expsOf, [], [bol_q]);
+  return bol_h(__UNWRAP__, {data: bol_list}, function (bol_l) {
+    return bol_h(bol_Report, {id: bol_p.id, list: bol_l,
+                              onList: bol_p.onList});
+  });
+}
+
+// One experience: its picture, once the game has it on disk, in a big
+// tile. A server of the game's featured list is joined in one press; any
+// other opens the experience's own page.
+function bol_ExpTile(bol_p) {
+  var bol_h = __R__.createElement, bol_e = bol_p.exp;
+  var bol_q = __QUERY__("vanilla.menus.imageQuery", bol_e.url);
+  var bol_src = __UFM__(function (bol_v) {
+    return bol_v && bol_v.localPath ? String(bol_v.localPath) : "";
+  }, [], [bol_q]);
+  return bol_h(__UNWRAP__, {data: bol_src}, function (bol_path) {
+    var bol_tp = bol_p.tp[bol_fold(bol_e.n)];
+    var bol_c = {k: "exp" + (bol_e.eid || bol_e.n), n: bol_e.n,
+                 motd: bol_e.motd, by: bol_e.by, s: null, o: 0,
+                 wide: bol_path, wh: 56.25, logo: "", fav: false};
+    if (bol_tp) {
+      bol_c.kind = "tp";
+      bol_c.id = bol_tp.id;
+      bol_c = bol_withDetails(bol_c);
+      bol_c.wide = bol_path || bol_c.wide;
+      bol_c.wh = bol_path ? 56.25 : bol_c.wh;
+    } else {
+      bol_c.kind = "exp";
+      bol_c.route = bol_e.eid && bol_e.lid
+        ? "/play/servers/experience/" + bol_e.eid + "/" + bol_e.lid : "";
+    }
+    return bol_h(bol_BigTile, {card: bol_c, third: true});
+  });
+}
+
+function bol_ExpGrid(bol_p) {
+  var bol_R = __R__, bol_h = bol_R.createElement;
+  var bol_lists = bol_R.useState({});
+  var bol_onList = bol_R.useCallback(function (bol_id, bol_list) {
+    bol_lists[1](function (bol_old) {
+      var bol_next = {};
+      for (var bol_k in bol_old) bol_next[bol_k] = bol_old[bol_k];
+      bol_next[bol_id] = bol_list;
+      return bol_next;
+    });
+  }, []);
+  var bol_seen = {}, bol_exps = [];
+  bol_p.ids.forEach(function (bol_id) {
+    (bol_lists[0][bol_id] || []).forEach(function (bol_e) {
+      var bol_key = bol_fold(bol_e.n);
+      if (!bol_key || bol_seen[bol_key]) return;
+      bol_seen[bol_key] = 1;
+      bol_exps.push(bol_e);
+    });
+  });
+  var bol_kids = bol_p.ids.map(function (bol_id) {
+    return bol_h(bol_FabSource, {key: "src" + bol_id, id: bol_id,
+                                 onList: bol_onList});
+  });
+  bol_exps.forEach(function (bol_e) {
+    bol_kids.push(bol_h(bol_ExpTile, {key: "exp" + (bol_e.eid || bol_e.n),
+                                      exp: bol_e, tp: bol_p.tp}));
+  });
+  return bol_div({display: "flex", flexDirection: "row", flexWrap: "wrap"},
+                 bol_kids);
+}
+
+function bol_Featured(bol_p) {
+  var bol_h = __R__.createElement, bol_lay = bol_p.layout;
+  var bol_ours = bol_h(bol_Row, bol_p.row);
+  if (!bol_lay) return bol_ours;
+  var bol_lst = __UFM__(function (bol_err, bol_busy, bol_ids) {
+    return bol_err || bol_busy || !bol_ids || !bol_ids.length
+      ? [] : Array.from(bol_ids).map(String);
+  }, [], [bol_lay.hasError, bol_lay.isLoading, bol_lay.fabIds]);
+  return bol_h(__UNWRAP__, {data: bol_lst}, function (bol_ids) {
+    if (!bol_ids.length) return bol_ours;
+    var bol_tp = {};
+    bol_p.row.cards.forEach(function (bol_c) {
+      if (bol_c.kind === "tp") bol_tp[bol_fold(bol_c.n)] = bol_c;
+    });
+    var bol_partners = bol_p.row.cards.filter(function (bol_c) {
+      return bol_c.kind !== "tp";
+    });
+    var bol_row = {};
+    for (var bol_k in bol_p.row) bol_row[bol_k] = bol_p.row[bol_k];
+    bol_row.cards = bol_partners;
+    bol_row.title = "";
+    bol_row.hint = "";
+    bol_row.limit = bol_partners.length;
+    return bol_div({marginBottom: "1.8rem"}, [
+      bol_div({display: "flex", flexDirection: "row",
+               alignItems: "flex-end", padding: "0 0.6rem 0.4rem"}, [
+        bol_line(bol_p.row.title, "2.8rem", bol_WHITE, {flexShrink: 0}),
+        bol_line(bol_p.row.hint || "", "1.6rem", bol_DIM,
+                 {marginLeft: "1.2rem", flexShrink: 1})]),
+      bol_partners.length ? bol_h(bol_Row, bol_row) : null,
+      bol_h(bol_ExpGrid, {ids: bol_ids, tp: bol_tp})]);
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -630,10 +781,13 @@ function bol_Hub(bol_p) {
             img: bol_n.imagePath || "", on: bol_n.playerCount,
             mx: bol_n.capacity, ping: bol_n.pingStatus || 0};
   }, [], [bol_det]);
+  // The game's featured-experience layout, when this build has one.
+  var bol_layout = __FABS__(__LAYOUT__);
   var bol_h = __R__.createElement;
   return bol_h(__UNWRAP__, {data: bol_snap}, function (bol_s) {
     return bol_h(__UNWRAP__, {data: bol_detNow}, function (bol_d) {
       return bol_h(bol_HubView, {snap: bol_s, det: bol_d,
+                                 layout: bol_layout,
                                  prefix: bol_p.routePrefix});
     });
   });
@@ -758,7 +912,7 @@ function bol_HubView(bol_p) {
   var bol_rows = bol_rowsFor(bol_all, bol_ws, bol_lang[0]).map(
     function (bol_r) {
       var bol_limit = bol_open[0][bol_r.key] || bol_ROW;
-      return bol_h(bol_Row, {
+      var bol_props = {
         key: bol_r.key, title: bol_r.title, hint: bol_r.hint,
         cards: bol_r.cards, big: bol_r.big,
         limit: bol_r.big ? bol_r.cards.length : bol_limit,
@@ -770,7 +924,11 @@ function bol_HubView(bol_p) {
                                                      : bol_limit + bol_PAGE;
           bol_state.open = bol_next;
           bol_open[1](bol_next);
-        }});
+        }};
+      return bol_r.key === "featured"
+        ? bol_h(bol_Featured, {key: "featured", row: bol_props,
+                               layout: bol_p.layout})
+        : bol_h(bol_Row, bol_props);
     });
   if (!bol_rows.length)
     bol_rows.push(bol_text(bol_ws.length ? bol_t("noMatch")
@@ -816,16 +974,18 @@ function bol_HubView(bol_p) {
                                height: "100%", padding: "1rem 2rem 0"}},
     bol_h(__FOCUS__, {containerRef: bol_rootRef,
                       delegateFocusFromMemory: true},
-      bol_h(bol_Spotlight, {fallback: bol_fallback, byKey: bol_byKey}),
-      bol_toolbar,
-      bol_msg[0] ? bol_line(bol_msg[0], "1.7rem", bol_GREEN,
-                            {margin: "0 0.6rem 0.8rem", flexShrink: 0})
-                 : null,
       bol_h(__LEGEND__, {options: {button: __KEYS__.Y,
                                    inputLegend: "\u2605 " + bol_t("myServers")},
                          onClick: function () { bol_toggleFav(bol_spot.v); }}),
+      // One scroll for the whole page, the spotlight and search included:
+      // fixed above the rows they left a 16:9 window no room for them.
       bol_div({flexGrow: 1, flexShrink: 1, flexBasis: 0,
                display: "flex", flexDirection: "column"}, [
-        bol_h.apply(null, [__SCROLL__, {loading: false}].concat(bol_rows)
+        bol_h.apply(null, [__SCROLL__, {loading: false},
+          bol_h(bol_Spotlight, {fallback: bol_fallback, byKey: bol_byKey}),
+          bol_toolbar,
+          bol_msg[0] ? bol_line(bol_msg[0], "1.7rem", bol_GREEN,
+                                {margin: "0 0.6rem 0.8rem", flexShrink: 0})
+                     : null].concat(bol_rows)
                     .concat([bol_div({height: "2rem"})]))])));
 }
