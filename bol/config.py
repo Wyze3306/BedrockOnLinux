@@ -164,7 +164,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native26"
 # native26 makes jscript call a method on the first use of an mshtml object
 # instead of returning it (0019): the Office sign-in page Education opens
 # first drew no form, because Knockout's first createElement got a function.
-WINEGDK_ARCHIVE_SHA256 = "e2558a0baef43f83472b8caf9697820d086a48ed85c4d611d344a6a4ab0c5022"
+WINEGDK_ARCHIVE_SHA256 = "fba82bf839d21eb013e0f1830eff57e5316b08cc6b6de2acf3a6c3ddb4a5715c"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "83efa0fd6afd23a96fc90f04adae8ae8e38cacddf41739964091ebbfb7b373ae"
 
