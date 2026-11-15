@@ -160,7 +160,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native25"
 # native25 adds the ECMA-402 Intl object to jscript (0018): Minecraft
 # Education signs in through the IE WebBrowser control, and the Microsoft
 # account page it opens stayed an empty card without it (#351).
-WINEGDK_ARCHIVE_SHA256 = "06f87bcda4ccf139efc05fa943c3f5110aa9bbea08c4a8e2ebaafedaa818ef7f"
+WINEGDK_ARCHIVE_SHA256 = "e2558a0baef43f83472b8caf9697820d086a48ed85c4d611d344a6a4ab0c5022"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "c0f4cdeb89b0f07b13b38838f323f360a1cebd406671f35ffd68aa22cc7ba615"
 
