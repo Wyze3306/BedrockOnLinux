@@ -166,7 +166,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native26"
 # first drew no form, because Knockout's first createElement got a function.
 WINEGDK_ARCHIVE_SHA256 = "e2558a0baef43f83472b8caf9697820d086a48ed85c4d611d344a6a4ab0c5022"
 # Build workflows verify this deterministic intermediate before reusing it.
-WINEGDK_PREFIX_SHA256 = "c0f4cdeb89b0f07b13b38838f323f360a1cebd406671f35ffd68aa22cc7ba615"
+WINEGDK_PREFIX_SHA256 = "83efa0fd6afd23a96fc90f04adae8ae8e38cacddf41739964091ebbfb7b373ae"
 
 SELF_REPO = WINEGDK_PREBUILT_REPO
 
