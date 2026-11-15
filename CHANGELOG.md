@@ -25,6 +25,16 @@
 
 ### Fixed
 
+- **Three hardening gaps around the Store sign-in and the changelog.** A
+  link in either changelog tab now opens only if it is http or https: the
+  text comes off the network, and a `file:`, `smb:`, `ssh:` or `steam:` link
+  used to go straight to the desktop's handler for it. The Store keyring,
+  which holds the device credentials and the account's Passport session, is
+  now 0600: Xodus writes it 0644, so the sign-in runs under a 0077 umask and
+  an existing keyring is tightened the next time the launcher runs Xodus.
+  A `XODUS_LOG` set in the shell no longer reaches xodus-cli, which at trace
+  level logs decrypted token exchanges into `logs/store-*.log`;
+  `BOL_XODUS_LOG` turns its logging on, capped at debug (#379).
 - **Less CPU spent waiting between frames with vsync on.** With a Max
   Framerate set in Minecraft, the launcher swaps the game's own limiter,
   which holds a whole CPU core under Wine, for vkd3d-proton's. That one

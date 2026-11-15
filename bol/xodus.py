@@ -458,8 +458,8 @@ def _adopt_legacy_keyring():
         try:
             with os.fdopen(fd, "wb") as handle:
                 handle.write(blob)
-            # Xodus creates it 0600 and the tokens are the account; a
-            # world-readable copy would be the launcher's doing, not Xodus's.
+            # The tokens are the account. mkstemp() already makes the copy
+            # 0600; say so, since Xodus itself writes the file 0644 (#379).
             os.chmod(staged, 0o600)
             os.replace(staged, XODUS_KEYRING)
         finally:
@@ -658,7 +658,13 @@ def login(on_line=None):
             stderr=subprocess.STDOUT, text=True, errors="replace",
             # Its own session, so cancel_login() can take the webview's
             # children with it.
-            start_new_session=True)
+            start_new_session=True,
+            # The sign-in is what creates the keyring, and Xodus writes it
+            # with a plain fs::write: 0644 under the usual umask, with the
+            # device credentials and the account's Passport session in it
+            # (#379). Only here, not on `xodus-cli run`: the game would
+            # inherit the umask and write every file of its own 0600.
+            umask=0o077)
     except OSError as exc:
         raise XodusError(
             f"Could not start the Microsoft sign-in: {exc}") from exc
@@ -824,14 +830,59 @@ def _env(binary=None):
     runtime added here rather than at the sign-in alone.
     """
     env = os.environ.copy()
+    # xodus-cli always turns on reqwest's connection_verbose, so at trace
+    # level it logs request bodies after TLS decryption -- the RST2.srf token
+    # exchanges included -- and its output goes to logs/store-*.log, which
+    # people attach to issues (#379). A XODUS_LOG left in the user's shell
+    # is not a request for that; BOL_XODUS_LOG is, and stops at debug.
+    env.pop("XODUS_LOG", None)
+    level = _xodus_log_level(env.get("BOL_XODUS_LOG"))
+    if level:
+        env["XODUS_LOG"] = level
     # Xodus writes its file keyring under $HOME, so $HOME is what decides
     # whether the sign-in outlives the window it was made in: see home().
     base = home()
+    _protect_keyring()
     env["HOME"] = str(base)
     for name, path in _xdg_dirs(base).items():
         env[name] = str(path)
     webview.apply(binary if binary is not None else XODUS_BIN, env)
     return env
+
+
+def _xodus_log_level(value):
+    """``value`` (an EnvFilter directive list) with trace lowered to debug.
+
+    The reqwest records that carry decrypted request bodies are only emitted
+    at trace, so every directive is capped one level below it -- a bare
+    ``trace`` as well as ``reqwest=trace``. Returns None for an empty value.
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    return re.sub(r"\btrace\b", "debug", value, flags=re.IGNORECASE)
+
+
+def _protect_keyring():
+    """Make the keyring 0600 if it is readable by anyone else.
+
+    Xodus writes it with a plain fs::write, so a keyring made by a launcher
+    older than #379 -- or by a command other than the sign-in, which is the
+    only one started under a 0077 umask -- is 0644. fs::write keeps the mode
+    of a file it overwrites, so tightening it once holds for later rewrites.
+    The file is not created when missing: Xodus fails to parse an empty one.
+    """
+    try:
+        mode = XODUS_KEYRING.stat().st_mode
+    except OSError:
+        return
+    if mode & 0o077:
+        try:
+            os.chmod(XODUS_KEYRING, 0o600)
+        except OSError as exc:
+            if not _WARNED.get("keyring-mode"):
+                _WARNED["keyring-mode"] = True
+                warn(f"Could not make {XODUS_KEYRING} private ({exc}).")
 
 
 # ---------------------------------------------------------------- install

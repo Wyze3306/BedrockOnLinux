@@ -306,6 +306,60 @@ class XodusHomeTests(unittest.TestCase):
 
         self.assertEqual(env["HOME"], str(home))
 
+    def test_a_world_readable_keyring_is_made_private(self):
+        # Xodus writes the keyring with a plain fs::write, so every install
+        # signed in before #379 has it 0644 -- with the account's Passport
+        # session in it. fs::write keeps the mode on later rewrites.
+        with tempfile.TemporaryDirectory() as tmp, _own_home(tmp) as home, \
+                mock.patch.object(xodus.webview, "apply", return_value={}):
+            home.mkdir(mode=0o700)
+            keyring = home / ".xodus-keyring.ron"
+            keyring.write_bytes(SIGNED_IN)
+            os.chmod(keyring, 0o644)
+
+            xodus._env(Path("/opt/xodus-cli"))
+
+            self.assertEqual(keyring.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(keyring.read_bytes(), SIGNED_IN)
+
+    def test_no_keyring_is_made_up(self):
+        # Xodus cannot parse an empty keyring, so none is created to chmod.
+        with tempfile.TemporaryDirectory() as tmp, _own_home(tmp) as home, \
+                mock.patch.object(xodus.webview, "apply", return_value={}):
+            xodus._env(Path("/opt/xodus-cli"))
+
+            self.assertFalse((home / ".xodus-keyring.ron").exists())
+
+    def test_a_trace_level_from_the_shell_does_not_reach_xodus(self):
+        # At trace, xodus-cli logs decrypted request bodies -- the RST2.srf
+        # token exchanges -- into logs/store-*.log (#379).
+        with tempfile.TemporaryDirectory() as tmp, _own_home(tmp), \
+                mock.patch.object(xodus.webview, "apply", return_value={}), \
+                mock.patch.dict(os.environ, {"XODUS_LOG": "trace"}):
+            os.environ.pop("BOL_XODUS_LOG", None)
+            env = xodus._env(Path("/opt/xodus-cli"))
+
+        self.assertNotIn("XODUS_LOG", env)
+
+    def test_the_launchers_own_switch_stops_at_debug(self):
+        cases = {
+            "trace": "debug",
+            "TRACE": "debug",
+            "info": "info",
+            "xodus=trace,reqwest=trace": "xodus=debug,reqwest=debug",
+            "warn,xodus_cli=debug": "warn,xodus_cli=debug",
+        }
+        for asked, passed in cases.items():
+            with self.subTest(asked=asked), \
+                    tempfile.TemporaryDirectory() as tmp, _own_home(tmp), \
+                    mock.patch.object(xodus.webview, "apply",
+                                      return_value={}), \
+                    mock.patch.dict(os.environ, {"BOL_XODUS_LOG": asked,
+                                                 "XODUS_LOG": "trace"}):
+                env = xodus._env(Path("/opt/xodus-cli"))
+
+            self.assertEqual(env["XODUS_LOG"], passed)
+
     def test_the_home_is_private(self):
         with tempfile.TemporaryDirectory() as tmp, _own_home(tmp) as home:
             xodus.home()
@@ -1538,6 +1592,23 @@ class StoreSignInTests(unittest.TestCase):
                 mock.patch.object(xodus, "LOGIN_LOG", log), \
                 mock.patch.object(xodus.webview, "apply", return_value={}):
             yield log
+
+    def test_the_keyring_the_sign_in_writes_is_private(self):
+        # Xodus writes it with a plain fs::write, so it is the umask the
+        # sign-in runs under that keeps the tokens to their owner (#379).
+        script = ('printf \'%s\' "$(umask)" > "$HOME/umask"\n'
+                  'echo tokens > "$HOME/.xodus-keyring.ron"\n'
+                  'echo done\n')
+        with tempfile.TemporaryDirectory() as tmp, \
+                self._login(tmp, script):
+            home = Path(tmp) / "xodus-home"
+            with contextlib.suppress(xodus.XodusError):
+                xodus.login()
+            keyring = home / ".xodus-keyring.ron"
+
+            self.assertTrue(keyring.exists())
+            self.assertEqual(keyring.stat().st_mode & 0o777, 0o600)
+            self.assertEqual((home / "umask").read_text().strip(), "0077")
 
     def test_a_sign_in_window_can_be_closed_from_the_launcher(self):
         started = threading.Event()
