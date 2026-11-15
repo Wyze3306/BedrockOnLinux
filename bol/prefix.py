@@ -14,6 +14,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import selinux
 from .archive import safe_extract_tar
 from .config import (
     CACHE,
@@ -540,7 +541,10 @@ def _run_wineboot(pfx: Path, log_path: Path, native_cryptbase):
     cmd, env = proton_umu_cmd("wineboot", prefix=pfx)
     cmd.append("-u")
     env = headless_setup_env(env, native_cryptbase=native_cryptbase)
-    env.setdefault("WINEDEBUG", "-all")
+    # Wine's errors, not its fixmes: "-all" also silenced the one line that
+    # says why a prefix could not be made, and a wineboot that exits with
+    # status 1 then leaves nothing in the log to go on (#380).
+    env.setdefault("WINEDEBUG", "fixme-all")
     timeout = WINEBOOT_TIMEOUT
     if runtime_setup_pending():
         # This first run pays for the Steam Linux Runtime as well as for Wine.
@@ -621,11 +625,18 @@ def boot_prefix(prefix=None):
         # Also for a prefix refreshed by an earlier release, which kept them.
         prune_engine_dll_backups(pfx)
         repair_managed_prefix_user32(pfx)
+        # Only a rule known to apply: inside the Flatpak the boolean cannot
+        # be read, and a warning at every PLAY of a working game is noise.
+        if selinux.execmod_state() == selinux.DENIED:
+            warn(selinux.problem())
         return True
     # Refuse a known-bad graphics session before Wine can open a device.
     from .gpu_safety import require_safe_graphics_session
     require_safe_graphics_session()
     info("Initialising the Wine prefix (first run) …")
+    selinux_problem = selinux.problem()
+    if selinux_problem:
+        warn(selinux_problem)
     native_cryptbase = seed_managed_bootstrap_cryptbase(pfx)
     LOGS.mkdir(parents=True, exist_ok=True)
     log_path = LOGS / "native-login.log"
@@ -677,6 +688,12 @@ def boot_prefix(prefix=None):
             cause = (" Wine aborted every prefix service on the unresolved "
                      "advapi32.SystemFunction036 (RtlGenRandom → cryptbase) "
                      "forward, so the prefix could never finish.")
+        else:
+            # A stock openSUSE refuses Wine execmod, and Proton's first
+            # process dies on it without a word (#380).
+            selinux_problem = selinux.problem(failed=True)
+            if selinux_problem:
+                cause = " " + selinux_problem
         LAST_BOOT_PROBLEM = f"wineboot {failure}.{cause}"
         warn(f"Wine prefix initialisation failed: wineboot {failure}.{cause} "
              f"Details: {log_path}")

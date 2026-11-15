@@ -4,7 +4,7 @@
 import re
 from pathlib import Path
 
-from . import hostarch
+from . import hostarch, selinux
 from .auth import msa_signed_in
 from .config import LOGS
 from .deps import ensure_login_deps
@@ -498,6 +498,14 @@ def diagnose(quiet=False):
                     "DXVK and vkd3d-proton are dropped. Minecraft renders "
                     "exclusively through D3D12, so expect visual artifacts "
                     "and no ray tracing.")
+    # Proton's first process dies on SELinux's execmod rule without a line
+    # in any log (#380), so this is checked on the system, not the log: always
+    # when the boolean is known to be off, and on an openSUSE Flatpak, which
+    # cannot read it, when nothing else explains the failure.
+    selinux_problem = selinux.problem()
+    if selinux_problem and (
+            not hits or selinux.execmod_state() == selinux.DENIED):
+        hits.insert(0, selinux_problem)
     # Check the field itself, not the log: an override that breaks the launch
     # can leave nothing in the log to match on, which is how issue #134 ended
     # in three full reinstalls.

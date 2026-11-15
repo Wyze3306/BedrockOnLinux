@@ -4,7 +4,8 @@
 import shutil
 import sys
 
-from . import deps, discord, fixups, gamepad, hostarch, presence, webview
+from . import (deps, discord, fixups, gamepad, hostarch, presence, selinux,
+               webview)
 from .config import DATA, PRETTY, VERSION
 from .gpu_safety import (
     GpuSafetyAcknowledgementStatus,
@@ -117,6 +118,11 @@ def doctor(acknowledge_gpu_crash=False):
     arch_problem = hostarch.problem()
     if arch_problem:
         warn(arch_problem)
+    # A stock openSUSE refuses Wine execmod (#380).
+    print(f"  {'selinux':12} : {selinux.summary()}")
+    selinux_problem = selinux.problem()
+    if selinux_problem:
+        warn(selinux_problem)
     for tool, pkg in (("tar", "tar"), ("curl", "curl"), ("unzstd", "zstd")):
         have = shutil.which(tool)
         print(f"  {tool:12} : {'OK' if have else 'MISSING'}")

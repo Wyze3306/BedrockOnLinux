@@ -14,6 +14,14 @@
   A `XODUS_LOG` set in the shell no longer reaches xodus-cli, which at trace
   level logs decrypted token exchanges into `logs/store-*.log`;
   `BOL_XODUS_LOG` turns its logging on, capped at debug (#379).
+- **openSUSE: "wineboot exited with status 1" now says why (#380).** A stock
+  Tumbleweed runs SELinux with `selinuxuser_execmod` off, which stops Wine
+  before it writes a word, and the Flatpak cannot install the
+  `selinux-policy-targeted-gaming` package that Steam's and Lutris's RPMs
+  pull in to turn it on. The launcher now detects this before it makes the
+  Wine prefix, names it when the prefix or the game fails, lists it in
+  `doctor`, and gives the command that fixes it. Wine's own errors are no
+  longer silenced in the prefix log.
 
 ## 3.0.0 — 2026-11-14 (pre-release)
 
