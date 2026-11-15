@@ -170,7 +170,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native27"
 # wrong [9zj22]" right after the e-mail address.
 WINEGDK_ARCHIVE_SHA256 = "fba82bf839d21eb013e0f1830eff57e5316b08cc6b6de2acf3a6c3ddb4a5715c"
 # Build workflows verify this deterministic intermediate before reusing it.
-WINEGDK_PREFIX_SHA256 = "83efa0fd6afd23a96fc90f04adae8ae8e38cacddf41739964091ebbfb7b373ae"
+WINEGDK_PREFIX_SHA256 = "a052116ecbb041c219fb30b201a0eead9d1a667e9fb5ef17fb5dacd09b59f000"
 
 SELF_REPO = WINEGDK_PREBUILT_REPO
 
