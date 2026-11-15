@@ -22,6 +22,7 @@ import re
 import shutil
 from pathlib import Path
 
+from . import serverbrowser
 from .log import ok, warn
 
 # --------------------------------------------------------------------------
@@ -396,8 +397,12 @@ def _install_partner_assets(hbui, partners):
             dst.write_bytes(blob)
 
 
-def feature_partner_servers(game_dir, partners=PARTNERS):
-    """Show the partner servers under "Featured Servers". Never fatal."""
+def feature_partner_servers(game_dir, partners=PARTNERS, browser=None):
+    """Show the partner servers under "Featured Servers". Never fatal.
+
+    ``browser`` is the ``__bolServerBrowser`` payload (bol.serverbrowser),
+    or None to leave the server browser out of this launch's patch.
+    """
     hbui = Path(game_dir) / HBUI_REL
     bundles = sorted(p for p in hbui.glob("index-*.js"))
     if not bundles:
@@ -414,6 +419,9 @@ def feature_partner_servers(game_dir, partners=PARTNERS):
         except (OSError, UnicodeDecodeError):
             continue
         new, status = _partner_patch(data, partners)
+        browser_status = None
+        if status in ("applied", "already") and browser is not None:
+            new, browser_status = _add_server_browser(new, browser)
         if status in ("applied", "already") and new != data:
             try:
                 bak = js.with_name(js.name + ".bol-orig")
@@ -427,8 +435,12 @@ def feature_partner_servers(game_dir, partners=PARTNERS):
                 return False
             if status == "applied":
                 ok("Partner servers added to Featured Servers")
+            if browser_status == "applied":
+                ok("BedrockOnLinux server browser added to the Servers tab")
+            _warn_browser_lost(browser_status)
             return True
         if status in ("already", "lost"):
+            _warn_browser_lost(browser_status)
             break
     if status == "lost":
         warn("This Minecraft build rebundled its Servers tab, so the partner "
@@ -437,10 +449,63 @@ def feature_partner_servers(game_dir, partners=PARTNERS):
     return status == "already"
 
 
-def apply_branding(game_dir):
+def _add_server_browser(data, payload):
+    """Add the server browser to a bundle the partner patch holds.
+
+    The partner patch writes the bundle's first line afresh every launch;
+    the browser's settings, strings and list go at its end, so switching the
+    browser off or refreshing the list only ever rewrites that line.
+    """
+    head, sep, body = data.partition("\n")
+    body, status = serverbrowser.patch_body(body)
+    if status in ("applied", "already"):
+        head += serverbrowser.runtime_line(payload)
+    return head + sep + body, status
+
+
+def _warn_browser_lost(status):
+    if status == "lost":
+        warn("This Minecraft build rebundled its Servers tab, so the game's "
+             "own tab shows instead of the BedrockOnLinux server browser.")
+
+
+def _game_language():
+    """``game_language`` from the options.txt PLAY's game reads, or ""."""
+    try:
+        from .perfcheck import find_options_file, read_game_options
+        from .prefix import active_prefix
+        return read_game_options(find_options_file(active_prefix())).get(
+            "game_language", "")
+    except Exception:  # only picks the tab's language
+        return ""
+
+
+def server_browser_payload(game_dir, settings):
+    """This launch's ``__bolServerBrowser``: the list, banners, strings."""
+    on = serverbrowser.enabled(settings)
+    entries = serverbrowser.fetch_list() if on else []
+    images = {}
+    if entries:
+        images = serverbrowser.install_images(Path(game_dir) / HBUI_REL,
+                                              entries)
+        serverbrowser.prefetch_images(entries)
+    return serverbrowser.build_payload(
+        entries, on=on, ui=serverbrowser.ui_language(_game_language()),
+        images=images, partner_hosts=[p["host"] for p in PARTNERS])
+
+
+def apply_branding(game_dir, settings=None):
     """Everything above, for one installed game. Never raises."""
-    for step in (apply_linux_splashes, feature_partner_servers):
-        try:
-            step(game_dir)
-        except Exception as e:  # cosmetic: never in the way of PLAY
-            warn(f"{step.__name__}: {e}")
+    try:
+        apply_linux_splashes(game_dir)
+    except Exception as e:  # cosmetic: never in the way of PLAY
+        warn(f"apply_linux_splashes: {e}")
+    browser = None
+    try:
+        browser = server_browser_payload(game_dir, settings or {})
+    except Exception as e:
+        warn(f"server browser: {e}")
+    try:
+        feature_partner_servers(game_dir, browser=browser)
+    except Exception as e:
+        warn(f"feature_partner_servers: {e}")

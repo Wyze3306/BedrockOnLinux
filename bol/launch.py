@@ -1232,7 +1232,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         # Linux splashes on the title screen, partner servers under Featured
         # Servers: re-applied each launch, since a game update brings the
         # vanilla files back.
-        apply_branding(Path(gd))
+        apply_branding(Path(gd), s)
     cmd, env = proton_umu_cmd(exe)
     # Required by the menu's indirect root-CBV updates (#27/#29/#30).
     _require_vkd3d_config(env, "force_raw_va_cbv")

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- **A Servers tab of our own.** The game's Servers tab now has three
+  sections you switch between with the mouse or a controller: your
+  favorite servers (with Add a server for any address), the partner and
+  featured servers, and every server of the community list
+  [Wyze3306/bedrock-servers-list](https://github.com/Wyze3306/bedrock-servers-list).
+  Search by name, address, category or any word of a description, filter by
+  category and language, and open a server for its banner, description and
+  links, then Play or Add to favorites. Settings ▸ General ▸ In the game
+  turns it off to get the game's own tab back.
+
 ## 3.0.0 — 2026-11-14 (pre-release)
 
 A pre-release of the next major version. Add-ons, maps and texture packs

@@ -135,6 +135,14 @@ ENDPOINTS = (
         "The add-on catalogue, LeviLamina mods and BetterRTX presets you "
         "browse or install."),
     Endpoint(
+        "content", ("raw.githubusercontent.com",
+                    "minecraftpocket-servers.com"),
+        _PLAIN_GET,
+        "The community server list (Wyze3306/bedrock-servers-list) and its "
+        "server banners, shown in the game's Servers tab while the "
+        "BedrockOnLinux server browser is on. Refreshed at most twice a "
+        "day."),
+    Endpoint(
         "content", ("feedback.minecraft.net", "api.github.com"),
         _PLAIN_GET,
         "The Minecraft and launcher changelogs, when you open them."),
