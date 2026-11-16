@@ -764,7 +764,7 @@ def login(on_line=None):
                     tickets, err_msg = _auth._xodus_xbl_tickets()
                     if not err_msg and tickets:
                         epoch = _auth._account_cache_epoch(
-                            DATA / "winegdk-preauth")
+                            _auth.DATA / "winegdk-preauth")
                         _auth.msa_save_for_account_epoch({
                             "refresh_token": "xodus-xbl",
                             "access_token": tickets["user_token"],
