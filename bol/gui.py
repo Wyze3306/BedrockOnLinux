@@ -3797,16 +3797,6 @@ class MainWindow(QMainWindow):
         offline_row.toggled.connect(lambda on: self._save_setting("warn_offline_play", on))
         accounts.addWidget(offline_row)
 
-        presence_row = self._switch("Appear online to your Xbox friends",
-                                  self.settings.get("xbl_presence", True),
-                                  "Nothing in the game tells Xbox Live it is "
-                                  "running under Wine, so the launcher does "
-                                  "it while you play. Off means your friends "
-                                  "see you as offline and cannot join your "
-                                  "world or invite you.")
-        presence_row.toggled.connect(lambda on: self._save_setting("xbl_presence", on))
-        accounts.addWidget(presence_row)
-
         v.addStretch(1)
         return w
 

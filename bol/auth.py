@@ -5,6 +5,7 @@ import concurrent.futures
 import json
 import os
 import re
+import subprocess
 import tempfile
 import threading
 import time
@@ -14,11 +15,13 @@ from pathlib import Path
 from .config import (
     DATA,
     MSA_CLIENT_ID,
-    MSA_CONNECT,
     MSA_DIR,
     MSA_SCOPE,
     MSA_TOKEN,
     WINEGDK_REG,
+    XBL_XODUS_HOME,
+    XODUS_BIN,
+    XODUS_HOME,
 )
 from .log import BolError, die, err, info, ok, warn
 from .prefix import active_prefix, prefix_operation_lock
@@ -29,6 +32,26 @@ from .wine_registry import (
     reg_sz,
     update_prefix_registry,
 )
+
+_MSA_APP_ID = re.compile(r"<MSAAppId>\s*([0-9A-Fa-f]{16})\s*</MSAAppId>")
+
+
+def msa_app_id(game_dir):
+    """The MSA application ID ``MicrosoftGame.Config`` declares, or ``MSA_CLIENT_ID``."""
+    if game_dir:
+        for name in ("MicrosoftGame.Config", "MicrosoftGame.config"):
+            try:
+                raw = (Path(game_dir) / name).read_bytes()
+            except OSError:
+                continue
+            text = (raw.decode("utf-16", "replace")
+                    if raw[:2] in (b"\xff\xfe", b"\xfe\xff")
+                    else raw.decode("utf-8", "replace"))
+            match = _MSA_APP_ID.search(text)
+            if match:
+                return match.group(1).lower()
+    return MSA_CLIENT_ID
+
 
 def msa_load():
     f = MSA_DIR / "token.json"
@@ -62,7 +85,7 @@ def msa_save(tok):
 
 
 def msa_signed_in():
-    return bool(msa_load().get("refresh_token"))
+    return msa_load().get("refresh_token") == "xodus-xbl"
 
 
 def msa_gamertag():
@@ -110,37 +133,131 @@ def msa_logout():
             # another reusable account cache may remain.
             raise BolError("Could not safely clear the Microsoft/Xbox account "
                            "cache; sign-out was cancelled.") from exc
+    _xodus_xbl_logout()
     ok("Microsoft account signed out from this installation")
     return True
 
 
-def msa_refresh_result(refresh_token):
+def _xodus_xbl_env():
+    """Isolated HOME for xodus-cli Xbox Live auth (separate from store-login)."""
+    XBL_XODUS_HOME.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(XBL_XODUS_HOME, 0o700)
+    except OSError:
+        pass
+    env = os.environ.copy()
+    env["HOME"] = str(XBL_XODUS_HOME)
+    return env
+
+
+def _copy_xodus_keyring(src_home, dst_home):
+    """Copy ``.xodus-keyring.ron`` between isolated Xodus homes with 0600 mode."""
+    src = Path(src_home) / ".xodus-keyring.ron"
+    if not src.is_file():
+        return False
+    dst_home = Path(dst_home)
+    dst_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(dst_home, 0o700)
+    except OSError:
+        pass
+    dst = dst_home / ".xodus-keyring.ron"
+    fd, tmp = tempfile.mkstemp(prefix=".keyring-", dir=dst_home)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(src.read_bytes())
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, dst)
+        return True
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _xodus_xbl_logout():
+    if XODUS_BIN.is_file():
+        try:
+            subprocess.run(
+                [str(XODUS_BIN), "logout"],
+                env=_xodus_xbl_env(),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=False,
+            )
+        except Exception:
+            pass
+    keyring = XBL_XODUS_HOME / ".xodus-keyring.ron"
+    try:
+        if keyring.exists():
+            keyring.unlink()
+    except OSError:
+        pass
+
+
+def _xodus_xbl_tickets(client_id=MSA_CLIENT_ID):
+    """Fetch Windows Xbox Live RPS tickets via ``xodus-cli xbl-ticket``."""
+    if not XODUS_BIN.is_file():
+        return None, "missing_xodus_cli"
+    proc = subprocess.run(
+        [str(XODUS_BIN), "xbl-ticket", "--client-id", client_id],
+        env=_xodus_xbl_env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        if "not logged in" in detail.lower():
+            return None, "invalid_grant"
+        raise RuntimeError(detail or f"xodus-cli xbl-ticket exited {proc.returncode}")
+    data = json.loads(proc.stdout)
+    if not isinstance(data, dict) or not data.get("user_token") or not data.get("device_rps"):
+        raise RuntimeError("xodus-cli xbl-ticket returned incomplete JSON")
+    return data, None
+
+
+def msa_refresh_result(refresh_token, client_id=MSA_CLIENT_ID):
     """Return ``(fresh_token, error)`` for an MSA refresh response.
 
     Transport failures still raise, which lets callers distinguish an offline
     machine from Microsoft's explicit ``invalid_grant`` response.  Keep this
     detail here rather than making every caller repeat the token endpoint.
     """
+    if refresh_token == "xodus-xbl":
+        tickets, error = _xodus_xbl_tickets(client_id=client_id)
+        if error:
+            return None, error
+        return ({
+            "access_token": tickets["user_token"],
+            "device_rps": tickets["device_rps"],
+            "refresh_token": "xodus-xbl",
+        }, None)
     t = http_post_form(MSA_TOKEN, {
-        "client_id": MSA_CLIENT_ID, "scope": MSA_SCOPE,
+        "client_id": client_id, "scope": MSA_SCOPE,
         "grant_type": "refresh_token", "refresh_token": refresh_token})
     return (t if t.get("refresh_token") else None, t.get("error"))
 
 
-def msa_refresh(refresh_token):
+def msa_refresh(refresh_token, client_id=MSA_CLIENT_ID):
     """Trade a refresh token for a fresh one (same shape WineGDK's XUser uses
     internally). Returns the token dict, or None if it was rejected."""
-    fresh, _error = msa_refresh_result(refresh_token)
+    fresh, _error = msa_refresh_result(refresh_token, client_id=client_id)
     return fresh
 
 
 class NativeAuth:
-    """MSA device-code login. We only obtain an OAuth refresh token;
-    WineGDK's XUser reads it from the prefix registry
-    and performs the Xbox Live / XSTS exchange itself."""
+    """Windows Xbox Live login via xodus-cli (InlineLogin/RST2)."""
 
     def __init__(self):
         self._stop = False
+        self._proc = None
 
     def signed_in(self):
         return msa_signed_in()
@@ -157,63 +274,60 @@ class NativeAuth:
         # while this exact generation is still current.
         account_epoch = _account_cache_epoch(DATA / "winegdk-preauth")
         threading.Thread(target=self._flow,
-                          args=(on_auth, on_online, account_epoch),
-                          daemon=True).start()
+                         args=(on_auth, on_online, account_epoch),
+                         daemon=True).start()
 
     def _flow(self, on_auth, on_online, account_epoch=None):
         try:
             if account_epoch is None:
                 account_epoch = _account_cache_epoch(
                     DATA / "winegdk-preauth")
-            d = http_post_form(MSA_CONNECT, {
-                "client_id": MSA_CLIENT_ID, "scope": MSA_SCOPE,
-                "response_type": "device_code"})
-            if "device_code" not in d:
-                die("Microsoft device-code request failed: "
-                    f"{d.get('error_description') or d.get('error') or d}")
-            url = d.get("verification_uri") or "https://www.microsoft.com/link"
-            code = d.get("user_code")
-            if on_auth:
-                on_auth(url, code)
-            info(f"Microsoft sign-in → {url} code {code}")
-            interval = max(int(d.get("interval", 5) or 5), 1)
-            deadline = time.time() + int(d.get("expires_in", 900) or 900)
-            dc = d["device_code"]
-            while not self._stop and time.time() < deadline:
-                time.sleep(interval)
-                if self._stop:
-                    return
-                # Legacy live.com grant string — matches WineGDK XUser.c.
-                t = http_post_form(MSA_TOKEN, {
-                    "client_id": MSA_CLIENT_ID,
-                    "grant_type": "device_code", "device_code": dc})
-                if self._stop:
-                    return
-                e = t.get("error")
-                if e == "authorization_pending":
-                    continue
-                if e == "slow_down":
-                    interval += 5
-                    continue
-                if e:
-                    die(f"Microsoft sign-in failed: "
-                        f"{t.get('error_description') or e}")
-                if t.get("refresh_token"):
-                    token = {"refresh_token": t["refresh_token"],
-                             "obtained": int(time.time())}
-                    if not msa_save_for_account_epoch(token, account_epoch):
-                        warn("Microsoft sign-in response arrived after the "
-                             "account was signed out; discarded it.")
-                        return
-                    if self._stop or _account_cache_epoch(
-                            DATA / "winegdk-preauth") != account_epoch:
-                        return
-                    if on_online:
-                        on_online()
-                    ok("Microsoft account linked (in-game login)")
-                    return
-            if not self._stop:
-                warn("Microsoft sign-in timed out — click 'Sign in' again.")
+            if not XODUS_BIN.is_file():
+                from .xodus import ensure_xodus
+                ensure_xodus()
+            if not XODUS_BIN.is_file():
+                die("xodus-cli is not installed; run setup/update first.")
+            info("Opening Microsoft sign-in window (xodus-cli)...")
+            self._proc = subprocess.Popen(
+                [str(XODUS_BIN), "login"],
+                env=_xodus_xbl_env(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            out, _ = self._proc.communicate()
+            rc = self._proc.returncode
+            self._proc = None
+            if self._stop:
+                return
+            if rc != 0:
+                die(f"Microsoft sign-in failed (xodus-cli exited {rc}): "
+                    f"{(out or '').strip()}")
+            tickets, error = _xodus_xbl_tickets()
+            if error or not tickets:
+                die(f"Could not obtain Windows Xbox Live tickets ({error}).")
+            token = {
+                "refresh_token": "xodus-xbl",
+                "access_token": tickets["user_token"],
+                "device_rps": tickets["device_rps"],
+                "obtained": int(time.time()),
+            }
+            if not msa_save_for_account_epoch(token, account_epoch):
+                warn("Microsoft sign-in response arrived after the "
+                     "account was signed out; discarded it.")
+                return
+            if self._stop or _account_cache_epoch(
+                    DATA / "winegdk-preauth") != account_epoch:
+                return
+            try:
+                from . import xodus as _xodus
+                if not _xodus.signed_in():
+                    _copy_xodus_keyring(XBL_XODUS_HOME, XODUS_HOME)
+            except Exception:
+                pass
+            if on_online:
+                on_online()
+            ok("Microsoft account linked (Windows Xbox Live)")
         except BolError:
             pass
         except Exception as ex:
@@ -221,6 +335,12 @@ class NativeAuth:
 
     def stop(self):
         self._stop = True
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
 
 
 class _HttpResp:
@@ -291,6 +411,7 @@ def mint_xsts_from_preauth(relying_party, path=None, timeout=15):
             (cache / "device-key.pem").read_bytes(), password=None)
         device_token = payload.get("device_token")
         user_token = payload.get("user_token")
+        title_token = payload.get("title_token")
         if not (isinstance(device_token, str) and device_token
                 and isinstance(user_token, str) and user_token):
             return None
@@ -300,13 +421,18 @@ def mint_xsts_from_preauth(relying_party, path=None, timeout=15):
             "x": base64.b64encode(numbers.x.to_bytes(32, "big")).decode(),
             "y": base64.b64encode(numbers.y.to_bytes(32, "big")).decode(),
         }
+        props = {
+            "SandboxId": "RETAIL",
+            "UserTokens": [user_token],
+            "DeviceToken": device_token,
+            "ProofKey": proof_key,
+        }
+        if isinstance(title_token, str) and title_token:
+            props["TitleToken"] = title_token
         body = json.dumps({
             "RelyingParty": relying_party,
             "TokenType": "JWT",
-            "Properties": {"SandboxId": "RETAIL",
-                           "UserTokens": [user_token],
-                           "DeviceToken": device_token,
-                           "ProofKey": proof_key},
+            "Properties": props,
         }, separators=(",", ":")).encode()
         request = urllib.request.Request(
             "https://xsts.auth.xboxlive.com/xsts/authorize", data=body,
@@ -792,7 +918,11 @@ def _with_winegdk_expiry_epochs(payload):
     return enriched
 
 
-def _online_preauth_problems(payload, now=None, min_ttl=60):
+_BEDROCK_ONLY_PREAUTH_FIELDS = frozenset({"sisu_token", "realms_token"})
+
+
+def _online_preauth_problems(payload, now=None, min_ttl=60,
+                             require_bedrock_audiences=True):
     """Describe missing or expired fields in an online pre-auth payload."""
     from datetime import timezone
 
@@ -801,6 +931,8 @@ def _online_preauth_problems(payload, now=None, min_ttl=60):
     now = time.time() if now is None else now
     problems = []
     for field, expiry_field in _ONLINE_PREAUTH_REQUIREMENTS.items():
+        if not require_bedrock_audiences and field in _BEDROCK_ONLY_PREAUTH_FIELDS:
+            continue
         if not payload.get(field):
             problems.append(f"missing {field}")
             continue
@@ -983,7 +1115,8 @@ def _store_online_preauth(path, payload, expected_epoch=None):
 
 
 def xbl_preauth(msa_access_token, expected_account_epoch=None,
-                refresh_unreachable=False):
+                refresh_unreachable=False, device_rps=None, client_id=None,
+                require_bedrock_audiences=True):
     """Run the whole Xbox Live auth chain (device + user + SISU tokens) from
     the host's OpenSSL stack and persist it as winegdk-preauth/device.json,
     where xgameruntime.dll short-circuits its own HTTP calls.
@@ -1022,12 +1155,16 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
         warn("xbl_preauth: the Microsoft account changed before Xbox "
              "pre-auth started; refusing stale credentials.")
         return False
+    app_id = client_id or MSA_CLIENT_ID
     cached = _load_online_preauth(out_path)
     # A comfortable margin, not just the floor that keeps a cache usable at
     # all: a launch that reuses it should not sign off mid-session.
     cached_ready = (_cached_account_matches(cached, account_epoch)
+                    and (client_id is None
+                         or (cached or {}).get("app_id") == app_id)
                     and not _online_preauth_problems(
-                        cached, min_ttl=_PREAUTH_REUSE_MARGIN))
+                        cached, min_ttl=_PREAUTH_REUSE_MARGIN,
+                        require_bedrock_audiences=require_bedrock_audiences))
 
     def _keep_cache(log=info):
         """Store WineGDK's epoch fields onto ``cached`` if missing, then use it."""
@@ -1138,17 +1275,31 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
         except urllib.error.HTTPError as e:
             return _HttpResp(e.code, e.read())
 
+    if device_rps is None:
+        device_rps = msa_load().get("device_rps")
+    device_props = (
+        {
+            "AuthMethod": "RPS",
+            "SiteName": "user.auth.xboxlive.com",
+            "RpsTicket": "d=" + device_rps,
+            "DeviceType": "Win32",
+            "Version": "10.0.22631",
+            "ProofKey": proof_key,
+        }
+        if isinstance(device_rps, str) and device_rps
+        else {
+            "AuthMethod": "ProofOfPossession",
+            "Id": device_id,
+            "DeviceType": "Win32",
+            "Version": "10.0.22631",
+            "ProofKey": proof_key,
+        }
+    )
     try:
         r = _xbl_post("https://device.auth.xboxlive.com/device/authenticate", {
             "RelyingParty": "http://auth.xboxlive.com",
             "TokenType": "JWT",
-            "Properties": {
-                "AuthMethod": "ProofOfPossession",
-                "Id": device_id,
-                "DeviceType": "Win32",
-                "Version": "10.0.22631",
-                "ProofKey": proof_key,
-            },
+            "Properties": device_props,
         })
     except Exception:
         return _fallback("xbl_preauth: device.auth POST failed "
@@ -1265,7 +1416,7 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
         try:
             r = _xbl_post("https://sisu.xboxlive.com/authorize", {
                 "AccessToken": "t=" + msa_access_token,
-                "AppId": "0000000048183522",
+                "AppId": app_id,
                 "deviceToken": device_token,
                 "Sandbox": "RETAIL",
                 "UseModernGamertag": True,
@@ -1347,6 +1498,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
         minted_via = {}
         authorized = {}
         refused = []
+        title_token = None
+        title_token_expiry = ""
         for name, _rp in audiences:
             # SISU is the path a real GDK title takes and the only one
             # returning the modern-gamertag claims, so it stays first. It can
@@ -1357,6 +1510,15 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
             # instead of failing the whole sign-in.
             sisu, events = sisu_calls[name].result()
             _replay(events, record=not xsts_usable)
+            if isinstance(sisu, dict):
+                tt = sisu.get("TitleToken")
+                if not title_token and isinstance(tt, dict) and tt.get("Token"):
+                    title_token = tt.get("Token")
+                    title_token_expiry = tt.get("NotAfter", "")
+                ut = sisu.get("UserToken")
+                if not user_token and isinstance(ut, dict) and ut.get("Token"):
+                    user_token = ut.get("Token")
+                    user_token_expiry = ut.get("NotAfter", "")
             claims = (sisu or {}).get("AuthorizationToken")
             if isinstance(claims, dict) and claims.get("Token"):
                 minted_via[name] = "SISU"
@@ -1479,10 +1641,13 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
         # It prevents an in-flight request or a crash-left cache from crossing
         # into the next Microsoft account.
         "_account_epoch": account_epoch,
+        "app_id": app_id,
         "device_id": device_id,
         "ecc_private_blob_b64": base64.b64encode(ecc_blob).decode(),
         "device_token": device_token,
         "device_token_expiry": j.get("NotAfter", ""),
+        "title_token": title_token,
+        "title_token_expiry": title_token_expiry,
         "user_token": user_token,
         "user_token_expiry": user_token_expiry,
         "xbl_token": xbl_token,
@@ -1519,7 +1684,8 @@ def xbl_preauth(msa_access_token, expected_account_epoch=None,
     # without storing or logging the full DisplayClaims object.
     if xbl_privileges_present:
         out["xbl_privileges"] = xbl_privileges
-    problems = _online_preauth_problems(out)
+    problems = _online_preauth_problems(
+        out, require_bedrock_audiences=require_bedrock_audiences)
     if problems:
         return _fallback("xbl_preauth: incomplete online chain ("
                          + ", ".join(problems) + "); refusing to replace "

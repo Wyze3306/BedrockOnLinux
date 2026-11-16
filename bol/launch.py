@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .auth import (
     account_epoch_is_current,
+    msa_app_id,
     msa_refresh,
     msa_signed_in,
     msa_save_for_account_epoch,
@@ -30,7 +31,6 @@ from . import (
     mods,
     msal_flights,
     packcache,
-    presence as xbl_presence,
     saves,
     slr_locales,
     supervision,
@@ -932,13 +932,15 @@ def _prepare_launch_engine(engine_in_use=False):
     return _prepare_graphics_engine()
 
 
-def _start_msa_refresh(tok):
+def _start_msa_refresh(tok, client_id=None):
     """Begin trading ``tok`` for a fresh token; a future, or None."""
     if not tok:
         return None
     pool = concurrent.futures.ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="msa-refresh")
     try:
+        if client_id:
+            return pool.submit(msa_refresh, tok, client_id=client_id)
         return pool.submit(msa_refresh, tok)
     finally:
         pool.shutdown(wait=False)
@@ -957,9 +959,11 @@ def _finish_msa_refresh(refresh, tok, account_epoch):
         refresh_unreachable = True
         warn(f"Token refresh skipped ({e}) — using cached token.")
     if fresh:
-        if not msa_save_for_account_epoch(
-                {"refresh_token": fresh["refresh_token"],
-                 "obtained": int(time.time())}, account_epoch):
+        saved = {"refresh_token": fresh["refresh_token"],
+                 "obtained": int(time.time())}
+        if fresh.get("device_rps"):
+            saved["device_rps"] = fresh["device_rps"]
+        if not msa_save_for_account_epoch(saved, account_epoch):
             die("The Microsoft account changed during launch; no stale "
                 "token was stored. Click PLAY again after signing in.")
         tok = fresh["refresh_token"]
@@ -1146,13 +1150,14 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     require_safe_graphics_session()
 
     xbox_live = uses_xbox_live(gd)
+    app_id = msa_app_id(gd) if xbox_live else None
     account, account_epoch = msa_session_snapshot()
     # Nothing of the Xbox account goes near a game that does not use it: no
     # token in its prefix, no Xbox pre-auth, no presence (#351).
     tok = account.get("refresh_token") if xbox_live else None
     # The token refresh is a round trip to Microsoft that nothing below needs
     # until the Xbox pre-auth: it runs while the prefix is prepared.
-    refresh = _start_msa_refresh(tok)
+    refresh = _start_msa_refresh(tok, client_id=app_id)
     try:
         if not boot_prefix():
             die(boot_failure_message("Minecraft was not started"))
@@ -1185,15 +1190,17 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
              f"No Microsoft account is linked, so {title} cannot sign in to "
              "Xbox Live. Use 'Sign in' to add one.")
     elif not bedrock:
-        # The account goes into the prefix for the engine's XUser, which is
-        # how a GDK title signs in. The pre-auth below is not: it mints
-        # Minecraft's PlayFab and multiplayer tokens, which are Minecraft's
-        # own and would only send another title chasing them.
         if not wine_reg_set_refresh_token(tok):
             die("Could not write the Microsoft login token into the Wine "
                 "prefix. The offline registry was left unchanged; use Repair "
                 "and try again.")
         ensure_login_deps()
+        online = xbl_preauth((fresh or {}).get("access_token") or "",
+                             account_epoch,
+                             refresh_unreachable=refresh_unreachable,
+                             device_rps=(fresh or {}).get("device_rps"),
+                             client_id=app_id,
+                             require_bedrock_audiences=False)
     else:
         if not wine_reg_set_refresh_token(tok):
             die("Could not write the Microsoft login token into the Wine "
@@ -1202,7 +1209,9 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         ensure_login_deps()
         online = xbl_preauth((fresh or {}).get("access_token") or "",
                              account_epoch,
-                             refresh_unreachable=refresh_unreachable)
+                             refresh_unreachable=refresh_unreachable,
+                             device_rps=(fresh or {}).get("device_rps"),
+                             client_id=app_id)
         if not online:
             detail = xbl_preauth_error_message()
             diagnostic = xbl_preauth_diagnostic() or {}
@@ -1428,7 +1437,6 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     gpu_marker_token = None
     game_returned = False
     presence = discord.Session()
-    xbl = xbl_presence.Session()
     game_events = gameevents.Forwarder()
     instance = _InstanceSession()
     try:
@@ -1524,13 +1532,6 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         # own name. Settings turns it off, and it never affects the game.
         presence = discord.start_session(s, started_at=started) \
             if bedrock else discord.Session()
-        # And say it on Xbox Live, which is the half that other players act
-        # on: nothing in the game publishes presence under Wine, so without
-        # this the account reads "Offline" to its own dressing room and to
-        # every friend, and no one can join or invite it (#238, #243).
-        if online and bedrock:
-            xbl = xbl_presence.start_session(s)
-            xbl_presence.warn_if_unavailable(xbl, s)
         game_events = gameevents.start_session(event_title)
         announced = False
         # There is no window yet to give Steam's identity to, so this watches
@@ -1588,11 +1589,9 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         # marker below. Both are daemon threads.
         if stopping:
             presence.stop(timeout=0)
-            xbl.stop(timeout=0)
             gameevents.stop_session(game_events, timeout=0)
         else:
             presence.stop()
-            xbl.stop()
             gameevents.stop_session(game_events)
         prefix_idle = None
         if game_returned and gpu_marker_token:

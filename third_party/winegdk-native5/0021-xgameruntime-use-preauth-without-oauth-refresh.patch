@@ -1,0 +1,109 @@
+From 79f2e0d8b6ad071b6a7e7562eb71704d60ed6b3f Mon Sep 17 00:00:00 2001
+From: BedrockOnLinux <dev@bedrockonlinux.invalid>
+Date: Mon, 16 Nov 2026 17:27:28 +0700
+Subject: [PATCH] xgameruntime: use preauth without oauth refresh
+
+---
+ .../GDKComponent/System/User/XUser.c          | 53 ++++++++++++-------
+ 1 file changed, 34 insertions(+), 19 deletions(-)
+
+diff --git a/dlls/xgameruntime/GDKComponent/System/User/XUser.c b/dlls/xgameruntime/GDKComponent/System/User/XUser.c
+index a6d1943..748078e 100644
+--- a/dlls/xgameruntime/GDKComponent/System/User/XUser.c
++++ b/dlls/xgameruntime/GDKComponent/System/User/XUser.c
+@@ -187,7 +187,7 @@ static HRESULT LoadDefaultUser( XUserHandle *user, LPCSTR client_id )
+     struct x_user *impl;
+     LSTATUS status;
+     LPSTR buffer;
+-    HRESULT hr;
++    HRESULT hr = S_OK;
+     DWORD size;
+     BOOLEAN preauth_done = FALSE;
+ 
+@@ -230,27 +230,37 @@ static HRESULT LoadDefaultUser( XUserHandle *user, LPCSTR client_id )
+     impl->ref = 1;
+     InitializeSRWLock( &impl->achievements_lock );
+ 
+-    hr = RefreshOAuth( client_id, buffer, &impl->oauth_token_expiry, &impl->refresh_token, &impl->oauth_token );
+-    free( buffer );
+-    if (FAILED( hr ))
++    if (strcmp( buffer, "xodus-xbl" ) != 0 && !(getenv( "WINEGDK_PREAUTH_DEVICE" ) && *getenv( "WINEGDK_PREAUTH_DEVICE" )))
+     {
+-        TRACE( "failed to get oauth token\n" );
+-        IXUserImpl_Release( &impl->IXUserImpl_iface );
+-        return hr;
+-    }
++        hr = RefreshOAuth( client_id, buffer, &impl->oauth_token_expiry, &impl->refresh_token, &impl->oauth_token );
++        free( buffer );
++        if (FAILED( hr ))
++        {
++            TRACE( "failed to get oauth token\n" );
++            IXUserImpl_Release( &impl->IXUserImpl_iface );
++            return hr;
++        }
+ 
+-    /* Initialize device auth (generates EC key pair, gets device token) */
+-    {
+-        UINT32 oauth_len;
+-        LPSTR oauth_str;
+-        if (SUCCEEDED( HSTRINGToMultiByte( impl->oauth_token, &oauth_str, &oauth_len ) ))
++        /* Initialize device auth (generates EC key pair, gets device token) */
+         {
+-            HRESULT da_hr = DeviceAuth_Initialize( oauth_str );
+-            free( oauth_str );
+-            if (FAILED( da_hr ))
+-                WARN( "DeviceAuth_Initialize failed: 0x%08lx (continuing without device auth)\n", da_hr );
++            UINT32 oauth_len;
++            LPSTR oauth_str;
++            if (SUCCEEDED( HSTRINGToMultiByte( impl->oauth_token, &oauth_str, &oauth_len ) ))
++            {
++                HRESULT da_hr = DeviceAuth_Initialize( oauth_str );
++                free( oauth_str );
++                if (FAILED( da_hr ))
++                    WARN( "DeviceAuth_Initialize failed: 0x%08lx (continuing without device auth)\n", da_hr );
++            }
+         }
+     }
++    else
++    {
++        HRESULT da_hr = DeviceAuth_Initialize( NULL );
++        free( buffer );
++        if (FAILED( da_hr ))
++            WARN( "DeviceAuth_Initialize(preauth) failed: 0x%08lx\n", da_hr );
++    }
+ 
+     /* Pre-auth bypass for the rest of the Xbox Live chain. Wine 11.1/GnuTLS
+      * gets TCP-RSTed by user.auth + xsts.auth + sisu.xboxlive after the body
+@@ -482,6 +492,11 @@ static HRESULT LoadDefaultUser( XUserHandle *user, LPCSTR client_id )
+ 
+     if (!preauth_done)
+     {
++        if (!impl->oauth_token)
++        {
++            IXUserImpl_Release( &impl->IXUserImpl_iface );
++            return E_FAIL;
++        }
+         if (FAILED( hr = RequestUserToken( impl->oauth_token, &impl->user_token, &impl->local_id ) ))
+         {
+             TRACE( "failed to get user token\n" );
+@@ -1259,7 +1274,7 @@ static HRESULT CALLBACK XUserGetTokenAndSignatureProvider( XAsyncOp operation, c
+                 if (SUCCEEDED( dowork_hr ))
+                     TRACE( "using user-only XSTS for Xbox Achievements.\n" );
+             }
+-            else if (DeviceAuth_IsInitialized() && user_impl->oauth_token)
++            else if (DeviceAuth_IsInitialized())
+             {
+                 /* Preauth: when MC asks for the http://xboxlive.com RP
+                  * (Friends/Social), serve the xbl_token the launcher
+@@ -1380,7 +1395,7 @@ static HRESULT CALLBACK XUserGetTokenAndSignatureProvider( XAsyncOp operation, c
+                             free( rt );
+                         }
+                     }
+-                    if (SUCCEEDED( DeviceAuth_GetDeviceToken( &device_token ) ) && device_token)
++                    if (user_impl->oauth_token && SUCCEEDED( DeviceAuth_GetDeviceToken( &device_token ) ) && device_token)
+                     {
+                         /* xal/imLinguin's working Bedrock-PlayFab auth uses
+                          * the caller's URL as RP unchanged — what unlocks
+-- 
+2.56.1
+
