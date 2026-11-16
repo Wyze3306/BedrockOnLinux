@@ -576,7 +576,9 @@ class XboxPreauthWarmUpTests(unittest.TestCase):
             save.assert_called_once()
             self.assertEqual(save.call_args.args[0]["refresh_token"], "new")
             self.assertEqual(save.call_args.args[1], "epoch")
-            preauth.assert_called_once_with("a", "epoch")
+            preauth.assert_called_once_with(
+                "a", "epoch", device_rps=None,
+                client_id=auth.MSA_CLIENT_ID)
 
     def test_no_stored_account_is_not_an_error(self):
         from bol import auth

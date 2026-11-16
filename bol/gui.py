@@ -3307,13 +3307,15 @@ class MainWindow(QMainWindow):
         """
         def work():
             from .auth import (
-                account_epoch_is_current, msa_refresh_result,
+                account_epoch_is_current, msa_app_id, msa_refresh_result,
                 msa_save_for_account_epoch, msa_session_snapshot, xbl_preauth)
             try:
                 token, epoch = msa_session_snapshot()
                 if not token:
                     return
-                fresh, error = msa_refresh_result(token.get("refresh_token"))
+                app_id = msa_app_id(self.settings.get("game_dir"))
+                fresh, error = msa_refresh_result(
+                    token.get("refresh_token"), client_id=app_id)
                 if not fresh:
                     # A transport failure raises and follows the best-effort
                     # path below. Only Microsoft's explicit invalid_grant
@@ -3327,11 +3329,15 @@ class MainWindow(QMainWindow):
                 # that replacement away, so a later launch could find only a
                 # revoked token even though the GUI still looked signed in.
                 # Save it under the same logout generation before continuing.
-                if not msa_save_for_account_epoch(
-                        {"refresh_token": fresh["refresh_token"],
-                         "obtained": int(time.time())}, epoch):
+                saved = {"refresh_token": fresh["refresh_token"],
+                         "obtained": int(time.time())}
+                if fresh.get("device_rps"):
+                    saved["device_rps"] = fresh["device_rps"]
+                if not msa_save_for_account_epoch(saved, epoch):
                     return
-                if xbl_preauth(fresh.get("access_token"), epoch):
+                if xbl_preauth(fresh.get("access_token"), epoch,
+                               device_rps=fresh.get("device_rps"),
+                               client_id=app_id):
                     # Runs on the raw worker thread started below, which has
                     # no Qt event loop -- go through AuthBridge rather than
                     # QTimer.singleShot (see AuthBridge docstring).
