@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **Inject during the loading screen (#390).** A new switch under Settings ▸
+  Tools ▸ Injector Settings injects the DLL as soon as the injection delay
+  has run out, without waiting for the game's window and main menu. Some
+  DLLs, such as ForceCloseOreUI, change what the game builds while it loads
+  and do nothing once the menu is up. Off by default: clients such as
+  Flarial expect the menu.
+
 ### Fixed
 
 - **Three hardening gaps around the Store sign-in and the changelog.** A

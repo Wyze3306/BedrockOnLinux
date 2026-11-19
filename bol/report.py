@@ -89,8 +89,9 @@ SETTINGS_REPORTED = (
     "proton_source", "renderer", "limit_frame_rate", "ray_tracing",
     "input_backend", "confine_cursor", "diagnostics", "close_on_launch",
     "auto_update_game", "xbl_presence", "injector_auto_enable",
-    "injector_dll_type", "injector_delay", "controller_nav", "mc_edition",
-    "mc_version", "network_updates", "update_channel", "warn_offline_play",
+    "injector_dll_type", "injector_delay", "injector_early", "controller_nav",
+    "mc_edition", "mc_version", "network_updates", "update_channel",
+    "warn_offline_play",
 )
 _SCALAR = (str, int, float, bool)
 

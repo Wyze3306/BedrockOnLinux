@@ -473,3 +473,31 @@ def test_start_auto_inject_watches_in_the_background():
         assert watcher.daemon
         watcher.join(5)
     watch.assert_called_once_with(settings)
+
+
+def test_an_early_injection_waits_for_the_delay_only(tmp_path):
+    """ForceCloseOreUI has to be in before the menu is built (#390)."""
+    dll = tmp_path / "client.dll"
+    dll.write_bytes(b"MZ")
+    settings = {"injector_dll_type": "file", "injector_dll_path": str(dll),
+                "injector_delay": 0.2, "injector_early": True}
+    with _auto_inject_env(tmp_path, window=False, menu=False) as env:
+        started = time.monotonic()
+        inject.perform_auto_inject(settings)
+        elapsed = time.monotonic() - started
+    env.run_injector.assert_called_once()
+    env.window.assert_not_called()
+    env.menu.assert_not_called()
+    assert elapsed >= 0.2
+
+
+def test_an_early_injection_stops_when_the_game_exits(tmp_path):
+    dll = tmp_path / "client.dll"
+    dll.write_bytes(b"MZ")
+    settings = {"injector_dll_type": "file", "injector_dll_path": str(dll),
+                "injector_delay": 5, "injector_early": True}
+    with _auto_inject_env(tmp_path) as env, \
+            mock.patch.object(inject, "_mc_running",
+                              side_effect=[True, False, False]):
+        inject.perform_auto_inject(settings)
+    env.run_injector.assert_not_called()

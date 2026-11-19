@@ -279,6 +279,16 @@ def _menu_reached(since, prefix=None):
     return False
 
 
+def _await_delay(delay):
+    """Hold for ``delay`` seconds of a running game; False if it exited."""
+    started = time.monotonic()
+    while time.monotonic() - started < delay:
+        if not _mc_running():
+            return False
+        time.sleep(_AUTO_INJECT_POLL)
+    return _mc_running()
+
+
 def _await_injection_moment(delay, since=None):
     """Hold until the game is ready to be injected into; False if it exited.
 
@@ -327,8 +337,15 @@ def perform_auto_inject(settings):
     since = time.time()
     if not _await_game_process():
         return
-    if not _await_injection_moment(float(settings.get("injector_delay", 5)),
-                                   since):
+    delay = float(settings.get("injector_delay", 5))
+    if settings.get("injector_early", False):
+        # Some DLLs patch what the game sets up while it loads, and do
+        # nothing once the menu is up (ForceCloseOreUI, #390): those go in
+        # once the delay has run out, loading screen or not.
+        ready = _await_delay(delay)
+    else:
+        ready = _await_injection_moment(delay, since)
+    if not ready:
         return
     try:
         name = run_injector(dll_path)

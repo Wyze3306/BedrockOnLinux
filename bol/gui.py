@@ -4555,6 +4555,18 @@ class MainWindow(QMainWindow):
         delay_layout.addStretch(1)
         injector_sec.addLayout(delay_layout)
 
+        self.early_switch = self._switch(
+            "Inject during the loading screen",
+            self.settings.get("injector_early", False),
+            "Inject as soon as the delay above has run out, without waiting "
+            "for the game's window and main menu. For DLLs that change how "
+            "the game starts up and do nothing once the menu is up. Clients "
+            "such as Flarial expect the menu and can lose the mouse when "
+            "injected earlier.")
+        self.early_switch.toggled.connect(
+            lambda on: self._save_setting("injector_early", on))
+        injector_sec.addWidget(self.early_switch)
+
         self._update_injector_settings_ui()
 
         editor = card_section(
