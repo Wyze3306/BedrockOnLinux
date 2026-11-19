@@ -158,5 +158,29 @@ class DiagnoseTests(unittest.TestCase):
         self.assertIn("selinuxuser_execmod", hits[0])
 
 
+    def test_a_dll_wine_could_not_protect_is_put_down_to_selinux(self):
+        """#388: GameInput's DLL refused PROT_EXEC on a Tumbleweed Flatpak,
+        with other causes in the log that used to win."""
+        log = ("err:virtual:map_image_into_view failed to set 60000020 "
+               "protection on L\"C:\\\\Program Files\\\\Microsoft GameInput"
+               "\\\\x64\\\\gameinputredist.dll\" section .text, noexec "
+               "filesystem?\n")
+        with tempfile.TemporaryDirectory() as td:
+            host = Host(Path(td) / "host", label=SELINUX_LABEL,
+                        os_release=FEDORA)
+            (Path(td) / "proton.log").write_text(log)
+            with mock.patch.object(gamesetup, "LOGS", Path(td)), \
+                    mock.patch.object(selinux, "SELINUXFS", host.selinuxfs), \
+                    mock.patch.object(selinux, "PROC_LABEL", host.label), \
+                    mock.patch.object(selinux, "OS_RELEASE",
+                                      host.os_release), \
+                    mock.patch.object(gamesetup, "load_settings",
+                                      return_value={}), \
+                    mock.patch.object(gamesetup, "msa_signed_in",
+                                      return_value=False):
+                hits = gamesetup.diagnose(quiet=True)
+        self.assertGreater(len(hits), 1)
+        self.assertIn("selinuxuser_execmod", hits[0])
+
 if __name__ == "__main__":
     unittest.main()

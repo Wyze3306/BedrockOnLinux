@@ -22,6 +22,13 @@
   Wine prefix, names it when the prefix or the game fails, lists it in
   `doctor`, and gives the command that fixes it. Wine's own errors are no
   longer silenced in the prefix log.
+- **openSUSE: a game that asks to install a component it has is put down
+  to SELinux (#388).** With `selinuxuser_execmod` off, Wine cannot make
+  GameInput's library executable again after relocating it, so Minecraft
+  reports GameInput missing even though it is installed. The Flatpak cannot
+  read the setting, but the log names the refusal ("noexec filesystem?"),
+  and the launcher now reads it there and names SELinux first. Where SELinux
+  is not in use, the same line names a data folder on a noexec mount.
 - **Ubuntu 24.04 and its derivatives: "bwrap: setting up uid map:
   Permission denied" now says why (#384).** AppArmor's
   `kernel.apparmor_restrict_unprivileged_userns` keeps bubblewrap from

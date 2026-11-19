@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import hostarch, selinux
 from .auth import msa_signed_in
-from .config import LOGS
+from .config import DATA, LOGS
 from .deps import ensure_login_deps
 from .fixups import (
     fix_curl_ssl,
@@ -502,10 +502,27 @@ def diagnose(quiet=False):
     # in any log (#380), so this is checked on the system, not the log: always
     # when the boolean is known to be off, and on an openSUSE Flatpak, which
     # cannot read it, when nothing else explains the failure.
-    selinux_problem = selinux.problem()
+    #
+    # Once Wine has run, the log can say it outright: Wine relocates a DLL
+    # with text relocations in place and then cannot make it executable
+    # again ("noexec filesystem?"). That is how GameInput's redistributable
+    # failed on a Tumbleweed Flatpak and the game kept asking to install a
+    # component it already had (#388).
+    refused_exec = re.search(
+        r"failed to set \w+ protection on .* section \S+, noexec filesystem",
+        text)
+    selinux_problem = selinux.problem(failed=bool(refused_exec))
     if selinux_problem and (
-            not hits or selinux.execmod_state() == selinux.DENIED):
+            not hits or refused_exec
+            or selinux.execmod_state() == selinux.DENIED):
         hits.insert(0, selinux_problem)
+    elif refused_exec:
+        hits.insert(0, "Wine could not make a Windows library executable "
+                       "(\"noexec filesystem?\" in the log): the launcher's "
+                       f"data folder ({DATA}) is on a file system mounted "
+                       "noexec. Move it to one that allows programs to run, "
+                       "with Settings ▸ Advanced ▸ Storage, or remount it without "
+                       "noexec.")
     # Check the field itself, not the log: an override that breaks the launch
     # can leave nothing in the log to match on, which is how issue #134 ended
     # in three full reinstalls.
