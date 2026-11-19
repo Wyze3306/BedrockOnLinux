@@ -175,7 +175,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native28"
 # what lets the game publish its own presence.
 WINEGDK_ARCHIVE_SHA256 = "e8db800b19eacdda97538bd969f5ac07d5859139b2b4aea0e755891f7a469935"
 # Build workflows verify this deterministic intermediate before reusing it.
-WINEGDK_PREFIX_SHA256 = "a052116ecbb041c219fb30b201a0eead9d1a667e9fb5ef17fb5dacd09b59f000"
+WINEGDK_PREFIX_SHA256 = "fb562934c3974c58f7b1676d1a2fc1e408128280b846e6caeb7f6beb2add881e"
 
 SELF_REPO = WINEGDK_PREBUILT_REPO
 
