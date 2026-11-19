@@ -213,9 +213,9 @@ XODUS_SOURCE_COMMIT = "64d39eb87a56c7d0d7e7fde0b233654ac5477b0f"
 # archive the workflow's assert cannot find -- which is the intended failure,
 # not a silent replacement of a published one.
 XODUS_REV = "64d39eb87a56-p15"
-# Integrity pin from the reviewed candidate build of the p14 archive.
-# https://github.com/Wyze3306/BedrockOnLinux/actions/runs/43299041916
-XODUS_ARCHIVE_SHA256 = "4a3cd8888924f419470172a15ca06911b476e68b60203c433cf7d1a3b77db8d2"
+# Integrity pin from the reviewed candidate build of the p15 archive.
+# https://github.com/Wyze3306/BedrockOnLinux/actions/runs/44551780138
+XODUS_ARCHIVE_SHA256 = "438a4b7189043b1a82a062ebd059fffedcc30741352ad8ddcb43ed1a03f5c42b"
 XODUS_DIR = DATA / "xodus"
 XODUS_BIN = XODUS_DIR / "xodus-cli"
 # xodus-cli links wry/tao unconditionally, so libwebkit2gtk-4.1 has to be
