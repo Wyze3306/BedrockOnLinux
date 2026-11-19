@@ -406,9 +406,12 @@ class LaunchWiringTests(unittest.TestCase):
             root = _engine(td, with_ntsync=True)
             device_present = mock.patch.object(
                 ntsync, "kernel_exposes_ntsync", return_value=True)
+            # The runner's own /dev/ntsync, if any, is not this test's.
+            device_readable = mock.patch.object(
+                ntsync, "ntsync_device_readable", return_value=True)
             with mock.patch.object(launch, "proton_path", return_value=root), \
                     mock.patch.object(launch, "warn") as warned, \
-                    device_present, \
+                    device_present, device_readable, \
                     mock.patch.dict(os.environ, {"PROTON_NO_NTSYNC": "1"},
                                     clear=True):
                 launch._warn_if_inproc_sync_unavailable({})

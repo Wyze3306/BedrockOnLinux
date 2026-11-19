@@ -586,8 +586,13 @@ def _collect_game(settings):
         folder = Path(game_dir)
         version = (games.mc_version_str(folder) if games.is_bedrock(edition)
                    else games.build_version(folder))
+    # No edition is what a fresh install reports (nothing selected yet) and
+    # what a build copied in by hand reports; the section still has to say
+    # what is on disk rather than give up on the first row.
     rows = [
-        ("edition", f"{edition.get('name', '?')} ({edition.get('id', '?')})"),
+        ("edition", f"{edition.get('name', '?')} ({edition.get('id', '?')})"
+         if edition else "none selected" if not game_dir
+         else "unknown (a build the launcher did not install)"),
         ("installed build", f"Minecraft version {version}" if version
          else "none selected" if not game_dir else "version unreadable"),
         ("chosen version", settings.get("mc_version") or "newest"),

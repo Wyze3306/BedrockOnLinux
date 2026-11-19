@@ -43,6 +43,12 @@ class CollectionCase(unittest.TestCase):
         (self.logs / "xcurl.log").write_text(
             "GET /users/me -> {\"gamertag\": \"xXDragonSlayer42Xx\"}")
         (self.logs / "notes.txt").write_text("marguerite's notes")
+        # The row only appears where the driver is loaded; the runner's
+        # hardware is not what this case is about.
+        nvidia = mock.patch.object(report, "nvidia_driver_version",
+                                   return_value="580.95.05")
+        nvidia.start()
+        self.addCleanup(nvidia.stop)
         self.report = report.collect(
             activity_log=TRAPPED, settings=dict(SETTINGS),
             logs_dir=self.logs, identity=list(KNOWN))
@@ -210,6 +216,21 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(report.mesa_version([directory]), "25.0.7-2")
             with mock.patch.object(report.shutil, "which", return_value=None):
                 self.assertIsNone(report.mesa_version([directory + "/none"]))
+
+    def test_a_launcher_with_no_game_yet_still_describes_it(self):
+        # A fresh install has no game_dir, so no edition: the section used
+        # to read "(unavailable: AttributeError ...)" in every such report.
+        from bol import games
+        with mock.patch.object(games, "installed_builds", return_value=[]):
+            text = report._collect_game({"game_dir": ""})
+            self.assertIn("none selected", text)
+            self.assertIn("builds on disk", text)
+            with tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(games, "mc_version_str",
+                                      return_value="1.26.63.1"):
+                text = report._collect_game({"game_dir": directory})
+        self.assertIn("did not install", text)
+        self.assertIn("1.26.63.1", text)
 
     def test_the_installed_engine_is_read_from_its_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
