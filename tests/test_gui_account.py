@@ -260,7 +260,7 @@ class RefusedOnlineSignInTests(unittest.TestCase):
     def test_sign_in_again_retires_the_refused_token_first(self):
         with headless_window() as window:
             started = []
-            window.na.start = lambda *args: started.append(args)
+            window.na.start = lambda *args, **kwargs: started.append(args)
             window._refresh_account_row("refused")
             with mock.patch.object(gui, "msa_logout") as logout, \
                     mock.patch.object(gui.threading, "Thread") as thread:

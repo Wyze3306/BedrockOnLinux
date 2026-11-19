@@ -75,6 +75,7 @@ LOG_FILES = (
     ("minecraft.log.prev", "Previous game log", 32_000, False),
     ("store-download.log", "Minecraft download log", 24_000, True),
     ("store-login.log", "Store sign-in log", 16_000, True),
+    ("xbox-login.log", "Xbox Live sign-in log", 16_000, True),
     ("native-login.log", "Online sign-in log", 16_000, True),
     ("injector.log", "DLL injector log", 16_000, True),
     ("slr-locales.log", "Container locales log", 8_000, True),

@@ -106,7 +106,7 @@ WINEGDK_SOURCE_MANIFEST_SHA256 = "1ca76fabc4d841432d58fb7c4faaab7a0eb972b7b7a450
 # release that holds them (scripts/winegdk-release-tag.sh). "stripped"
 # installs Wine's modules without their debugging sections.
 WINEGDK_PREFIX_RECIPE = "stripped"
-WINEGDK_BUILD_REV = "wow64-archs-native27"
+WINEGDK_BUILD_REV = "wow64-archs-native28"
 # native22 carries the ntdll loader patches the Microsoft Store packages need:
 # 0007 maps the main image from a descriptor, 0008 from a path so it survives
 # the Steam Linux Runtime container. Their game executable stays encrypted on
@@ -168,6 +168,11 @@ WINEGDK_BUILD_REV = "wow64-archs-native27"
 # native27 lets ieframe's WebBrowser control give OneAuth its window through
 # SID_SShellBrowser (0020): Education's sign-in stopped on "Something went
 # wrong [9zj22]" right after the e-mail address.
+#
+# native28 lets XUser sign in from the launcher's pre-auth alone (0021): the
+# Xbox Live session is Xodus's now (#386), so there is no OAuth refresh
+# token for the engine to trade, and the title token the pre-auth carries is
+# what lets the game publish its own presence.
 WINEGDK_ARCHIVE_SHA256 = "e8db800b19eacdda97538bd969f5ac07d5859139b2b4aea0e755891f7a469935"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "a052116ecbb041c219fb30b201a0eead9d1a667e9fb5ef17fb5dacd09b59f000"

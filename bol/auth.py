@@ -5,6 +5,7 @@ import concurrent.futures
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import threading
@@ -14,6 +15,7 @@ from pathlib import Path
 
 from .config import (
     DATA,
+    LOGS,
     MSA_CLIENT_ID,
     MSA_DIR,
     MSA_SCOPE,
@@ -85,7 +87,7 @@ def msa_save(tok):
 
 
 def msa_signed_in():
-    return msa_load().get("refresh_token") == "xodus-xbl"
+    return msa_load().get("refresh_token") == XODUS_XBL_TOKEN
 
 
 def msa_gamertag():
@@ -138,20 +140,64 @@ def msa_logout():
     return True
 
 
-def _xodus_xbl_env():
-    """Isolated HOME for xodus-cli Xbox Live auth (separate from store-login)."""
-    XBL_XODUS_HOME.mkdir(parents=True, exist_ok=True)
+# What token.json holds in place of a refresh token once the Xbox Live
+# session is Xodus's: the tokens themselves live in its own keyring, and the
+# engine's XUser reads this value to take the launcher's pre-auth instead of
+# refreshing an OAuth token of its own (winegdk-native5 0021).
+XODUS_XBL_TOKEN = "xodus-xbl"
+
+
+def _xbl_keyring():
+    """The Xbox Live session's keyring (read at call time, for the tests)."""
+    return XBL_XODUS_HOME / ".xodus-keyring.ron"
+
+
+# What the Xbox Live sign-in printed last, for a bug report.
+XBL_LOGIN_LOG_NAME = "xbox-login.log"
+
+
+def _record_xbl_login(tail, outcome):
+    """Keep what the last Xbox Live sign-in printed, for a bug report."""
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with open(LOGS / XBL_LOGIN_LOG_NAME, "w", encoding="utf-8") as log:
+            log.write(f"{time.strftime('%F %T')} xbox sign-in: {outcome}\n")
+            for line in tail:
+                log.write(line + "\n")
+    except OSError:
+        pass
+
+
+def _xodus_xbl_home():
+    """The Xodus home the Xbox Live session lives in, created 0700."""
+    XBL_XODUS_HOME.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         os.chmod(XBL_XODUS_HOME, 0o700)
     except OSError:
         pass
-    env = os.environ.copy()
-    env["HOME"] = str(XBL_XODUS_HOME)
-    return env
+    return XBL_XODUS_HOME
+
+
+def _xodus_xbl_env():
+    """The environment for xodus-cli in the Xbox Live session's own home.
+
+    Everything bol.xodus prepares for the Store sign-in applies here too:
+    the bundled WebKitGTK where the host has none (every subcommand links
+    the webview), the renderer and accessibility workarounds of #186 and
+    #236, the XDG directories pinned inside the home and no inherited
+    XODUS_LOG (#379). Only the home differs, so the two accounts can be
+    switched independently.
+    """
+    from . import xodus
+    return xodus._env(XODUS_BIN, base=_xodus_xbl_home())
 
 
 def _copy_xodus_keyring(src_home, dst_home):
-    """Copy ``.xodus-keyring.ron`` between isolated Xodus homes with 0600 mode."""
+    """Copy ``.xodus-keyring.ron`` between isolated Xodus homes with 0600 mode.
+
+    The device credentials come along, so the copy is the same Store device
+    rather than one more of the ten an account may hold (#198).
+    """
     src = Path(src_home) / ".xodus-keyring.ron"
     if not src.is_file():
         return False
@@ -180,9 +226,18 @@ def _copy_xodus_keyring(src_home, dst_home):
 
 
 def _xodus_xbl_logout():
-    if XODUS_BIN.is_file():
+    """End the Xbox Live session's Xodus sign-in, keeping its device.
+
+    ``xodus-cli logout`` drops the account's tokens and keeps the device
+    credentials, as bol.xodus.logout() does for the Store: deleting the
+    keyring would make the next sign-in register one more Store device on
+    the account, and it may hold ten (#198). Only when xodus-cli cannot run
+    is the file removed, since leaving live tokens behind is worse.
+    """
+    logged_out = False
+    if XODUS_BIN.is_file() and _xbl_keyring().exists():
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 [str(XODUS_BIN), "logout"],
                 env=_xodus_xbl_env(),
                 stdout=subprocess.DEVNULL,
@@ -190,13 +245,18 @@ def _xodus_xbl_logout():
                 timeout=15,
                 check=False,
             )
+            logged_out = proc.returncode == 0
         except Exception:
+            logged_out = False
+    if not logged_out:
+        try:
+            _xbl_keyring().unlink(missing_ok=True)
+        except OSError:
             pass
-    keyring = XBL_XODUS_HOME / ".xodus-keyring.ron"
     try:
-        if keyring.exists():
-            keyring.unlink()
-    except OSError:
+        from . import xodus
+        xodus.reset_webview_state(XBL_XODUS_HOME)
+    except Exception:
         pass
 
 
@@ -207,8 +267,10 @@ def _xodus_xbl_tickets(client_id=MSA_CLIENT_ID):
     proc = subprocess.run(
         [str(XODUS_BIN), "xbl-ticket", "--client-id", client_id],
         env=_xodus_xbl_env(),
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
+        errors="replace",
         timeout=30,
         check=False,
     )
@@ -216,8 +278,12 @@ def _xodus_xbl_tickets(client_id=MSA_CLIENT_ID):
         detail = (proc.stderr or proc.stdout or "").strip()
         if "not logged in" in detail.lower():
             return None, "invalid_grant"
-        raise RuntimeError(detail or f"xodus-cli xbl-ticket exited {proc.returncode}")
-    data = json.loads(proc.stdout)
+        raise RuntimeError(detail.splitlines()[-1] if detail else
+                           f"xodus-cli xbl-ticket exited {proc.returncode}")
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError as exc:
+        raise RuntimeError("xodus-cli xbl-ticket did not answer JSON") from exc
     if not isinstance(data, dict) or not data.get("user_token") or not data.get("device_rps"):
         raise RuntimeError("xodus-cli xbl-ticket returned incomplete JSON")
     return data, None
@@ -230,14 +296,14 @@ def msa_refresh_result(refresh_token, client_id=MSA_CLIENT_ID):
     machine from Microsoft's explicit ``invalid_grant`` response.  Keep this
     detail here rather than making every caller repeat the token endpoint.
     """
-    if refresh_token == "xodus-xbl":
+    if refresh_token == XODUS_XBL_TOKEN:
         tickets, error = _xodus_xbl_tickets(client_id=client_id)
         if error:
             return None, error
         return ({
             "access_token": tickets["user_token"],
             "device_rps": tickets["device_rps"],
-            "refresh_token": "xodus-xbl",
+            "refresh_token": XODUS_XBL_TOKEN,
         }, None)
     t = http_post_form(MSA_TOKEN, {
         "client_id": client_id, "scope": MSA_SCOPE,
@@ -262,7 +328,15 @@ class NativeAuth:
     def signed_in(self):
         return msa_signed_in()
 
-    def start(self, on_auth=None, on_online=None):
+    def start(self, on_auth=None, on_online=None, on_window=None,
+              on_failed=None):
+        """Sign in on a worker thread.
+
+        ``on_window`` is called once the sign-in window is up, so a caller
+        can offer to cancel it; ``on_failed`` once a sign-in that was not
+        stopped ends without an account. ``on_auth`` belonged to the device
+        code this replaced and is never called.
+        """
         if msa_signed_in():
             if on_online:
                 on_online()
@@ -275,39 +349,62 @@ class NativeAuth:
         account_epoch = _account_cache_epoch(DATA / "winegdk-preauth")
         threading.Thread(target=self._flow,
                          args=(on_auth, on_online, account_epoch),
+                         kwargs={"on_window": on_window,
+                                 "on_failed": on_failed},
                          daemon=True).start()
 
-    def _flow(self, on_auth, on_online, account_epoch=None):
+    def _flow(self, on_auth, on_online, account_epoch=None, on_window=None,
+              on_failed=None):
+        linked = False
         try:
             if account_epoch is None:
                 account_epoch = _account_cache_epoch(
                     DATA / "winegdk-preauth")
-            if not XODUS_BIN.is_file():
-                from .xodus import ensure_xodus
-                ensure_xodus()
-            if not XODUS_BIN.is_file():
-                die("xodus-cli is not installed; run setup/update first.")
-            info("Opening Microsoft sign-in window (xodus-cli)...")
-            self._proc = subprocess.Popen(
-                [str(XODUS_BIN), "login"],
-                env=_xodus_xbl_env(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            out, _ = self._proc.communicate()
-            rc = self._proc.returncode
-            self._proc = None
+            from . import xodus
+            binary = xodus.ensure_cli()
+            env = _xodus_xbl_env()
+            # A sign-in abandoned half-way is resumed into by the next one
+            # and loads for ever (#214): start each from nothing.
+            xodus.reset_webview_state(XBL_XODUS_HOME)
+            info("Sign in to your Microsoft account for Xbox Live …")
+            try:
+                self._proc = subprocess.Popen(
+                    [str(binary), "login"], env=env,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True, errors="replace",
+                    # Its own session, so stop() can take the webview's
+                    # children with it; and a private keyring, which Xodus
+                    # writes with a plain fs::write (#379).
+                    start_new_session=True, umask=0o077)
+            except OSError as exc:
+                die(f"Could not start the Microsoft sign-in: {exc}")
+            proc = self._proc
+            if on_window:
+                on_window()
+            try:
+                out, _ = proc.communicate()
+            finally:
+                self._proc = None
+            rc = proc.returncode
+            tail = [line for line in (out or "").splitlines()
+                    if line.strip()][-40:]
+            _record_xbl_login(tail, "linked" if rc == 0 else
+                              "cancelled" if self._stop else
+                              f"not linked (exit {rc})")
             if self._stop:
                 return
             if rc != 0:
-                die(f"Microsoft sign-in failed (xodus-cli exited {rc}): "
-                    f"{(out or '').strip()}")
+                loader = xodus._loader_failure(out or "")
+                die(loader or "Microsoft sign-in did not complete"
+                    + (f": {tail[-1]}" if tail else ".")
+                    + f" Details: {LOGS / XBL_LOGIN_LOG_NAME}")
+            xodus._protect_keyring(_xbl_keyring())
             tickets, error = _xodus_xbl_tickets()
             if error or not tickets:
-                die(f"Could not obtain Windows Xbox Live tickets ({error}).")
+                die("Signed in, but Xbox Live did not hand out its tickets "
+                    f"({error}). Click 'Sign in' again.")
             token = {
-                "refresh_token": "xodus-xbl",
+                "refresh_token": XODUS_XBL_TOKEN,
                 "access_token": tickets["user_token"],
                 "device_rps": tickets["device_rps"],
                 "obtained": int(time.time()),
@@ -319,28 +416,40 @@ class NativeAuth:
             if self._stop or _account_cache_epoch(
                     DATA / "winegdk-preauth") != account_epoch:
                 return
+            # The first sign-in links the download too, so a new player
+            # signs in once; either account can be switched later.
             try:
-                from . import xodus as _xodus
-                if not _xodus.signed_in():
+                if not xodus.signed_in():
                     _copy_xodus_keyring(XBL_XODUS_HOME, XODUS_HOME)
-            except Exception:
-                pass
+            except Exception as exc:
+                warn(f"Could not link the Minecraft download to this "
+                     f"account ({exc}); sign in to it separately.")
+            linked = True
             if on_online:
                 on_online()
-            ok("Microsoft account linked (Windows Xbox Live)")
+            ok("Microsoft account linked (Xbox Live)")
         except BolError:
             pass
         except Exception as ex:
             err(f"Native login error: {ex}")
+        finally:
+            # A window closed, a refusal or a crash: whoever is showing
+            # "Signing in…" has to hear the sign-in is over.
+            if not linked and not self._stop and on_failed:
+                on_failed()
 
     def stop(self):
         self._stop = True
         proc = self._proc
         if proc is not None and proc.poll() is None:
+            # The webview runs in the sign-in's own session; take it along.
             try:
-                proc.terminate()
-            except OSError:
-                pass
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
 
 
 class _HttpResp:
@@ -1020,11 +1129,20 @@ def msa_save_for_account_epoch(token, expected_epoch):
 
 
 def msa_session_snapshot():
-    """Read the refresh token and account generation atomically."""
+    """Read the refresh token and account generation atomically.
+
+    A token from before the Xbox Live session moved to Xodus (#386) is no
+    account at all, as msa_signed_in() says: it was issued to the Android
+    client ID that nothing here speaks to any more, and passing it on would
+    turn "no account linked" into a failed Xbox Live sign-in at every PLAY.
+    """
 
     cache = DATA / "winegdk-preauth"
     with _account_cache_lock(cache):
-        return msa_load(), _account_cache_epoch(cache)
+        token = msa_load()
+        if token.get("refresh_token") != XODUS_XBL_TOKEN:
+            token = {}
+        return token, _account_cache_epoch(cache)
 
 
 def account_epoch_is_current(expected_epoch):

@@ -92,6 +92,8 @@ class ReadyLaunchHarness:
             mock.patch.object(launch, "install_gameinput"),
             mock.patch.object(launch, "wine_reg_set_refresh_token",
                               return_value=True),
+            mock.patch.object(launch, "wine_reg_remove_refresh_token",
+                              return_value=True),
             mock.patch.object(launch, "ensure_login_deps"),
             mock.patch.object(launch, "xbl_preauth", return_value=preauth),
             mock.patch.object(launch, "bump_stack_reserve"),
@@ -151,6 +153,8 @@ class ReadyLaunchHarness:
             mock.patch.object(launch.subprocess, "Popen", side_effect=popen),
             mock.patch.object(launch.discord, "start_session",
                               side_effect=self._announce_presence),
+            mock.patch.object(launch.xbl_presence, "start_session",
+                              side_effect=self._announce_xbl_presence),
             mock.patch.object(launch, "info"),
             mock.patch.object(launch, "ok"),
             mock.patch.object(launch, "warn"),
@@ -163,6 +167,7 @@ class ReadyLaunchHarness:
             self.launch_mocks = {
                 name: getattr(launch, name)
                 for name in ("warn", "info", "wine_reg_set_refresh_token",
+                             "wine_reg_remove_refresh_token",
                              "ensure_login_deps", "xbl_preauth",
                              "hide_signin_button", "apply_branding",
                              "msa_refresh", "seed_default_servers",
@@ -895,6 +900,9 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.launch_mocks["xbl_preauth"].assert_not_called()
         self.launch_mocks["ensure_login_deps"].assert_not_called()
         self.assertNotIn("WINEGDK_PREAUTH_DEVICE", observed["env"])
+        # A token an older release left in the prefix would have the
+        # engine sign in on its own (#386): offline means it is gone.
+        self.launch_mocks["wine_reg_remove_refresh_token"].assert_called_once()
 
     def test_education_is_kept_away_from_the_xbox_account(self):
         """Minecraft Education signs in with a school or work account of its
@@ -1557,9 +1565,24 @@ class XboxPresenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
                 Path(td), lambda *a, **k: self._Process(),
                 lambda: "token", lambda _token: True, **kwargs)
 
-    def test_a_signed_in_session_launches_without_xbl_presence_heartbeat(self):
-        self.assertEqual(self._run(extra_settings={"mc_version": "1.26.40.1"}),
-                         0)
+    def test_a_signed_in_session_is_published_then_taken_down(self):
+        # No title token in the pre-auth: nothing in the game publishes.
+        with mock.patch.object(launch.xbl_presence, "game_publishes",
+                               return_value=False):
+            self.assertEqual(
+                self._run(extra_settings={"mc_version": "1.26.40.1"}), 0)
+        self.assertEqual(len(self.xbl_calls), 1)
+        (settings,), _kwargs = self.xbl_calls[0]
+        self.assertEqual(settings["mc_version"], "1.26.40.1")
+        self.xbl.stop.assert_called_once_with()
+
+    def test_a_game_that_publishes_its_own_presence_is_left_to_it(self):
+        # A title token makes the game's own Rich Presence go through (#386);
+        # a heartbeat would overwrite it with a bare "Minecraft".
+        with mock.patch.object(launch.xbl_presence, "game_publishes",
+                               return_value=True):
+            self.assertEqual(
+                self._run(extra_settings={"mc_version": "1.26.40.1"}), 0)
         self.assertEqual(self.xbl_calls, [])
 
     def test_an_offline_session_tells_xbox_live_nothing(self):

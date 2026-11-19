@@ -1084,6 +1084,8 @@ class NativeAuthCancellationTests(unittest.TestCase):
                     mock.patch.object(auth, "MSA_DIR", msa), \
                     mock.patch.object(auth, "XBL_XODUS_HOME", xodus_home), \
                     mock.patch.object(auth, "XODUS_BIN", fake_bin), \
+                    mock.patch("bol.xodus.ensure_cli", return_value=fake_bin), \
+                    mock.patch.object(auth, "_xodus_xbl_env", return_value={}), \
                     mock.patch.object(auth, "active_prefix",
                                       return_value=prefix), \
                     mock.patch.object(auth, "prefix_operation_lock"), \
@@ -1130,6 +1132,8 @@ class NativeAuthCancellationTests(unittest.TestCase):
                     mock.patch.object(auth, "MSA_DIR", msa), \
                     mock.patch.object(auth, "XBL_XODUS_HOME", xodus_home), \
                     mock.patch.object(auth, "XODUS_BIN", fake_bin), \
+                    mock.patch("bol.xodus.ensure_cli", return_value=fake_bin), \
+                    mock.patch.object(auth, "_xodus_xbl_env", return_value={}), \
                     mock.patch.object(auth.subprocess, "Popen",
                                       return_value=fake_proc), \
                     mock.patch.object(auth, "_xodus_xbl_tickets",
@@ -1140,6 +1144,84 @@ class NativeAuthCancellationTests(unittest.TestCase):
                 native._flow(None, None, epoch)
 
             self.assertFalse((msa / "token.json").exists())
+
+    def _closed_window(self, root, returncode=1, output="Didn't log in\n"):
+        """Run _flow against a sign-in window that ends with ``returncode``."""
+        msa = root / "msa"
+        cache = root / "winegdk-preauth"
+        fake_bin = root / "xodus-cli"
+        fake_bin.write_text("#!/bin/sh\n")
+        cache.mkdir()
+        msa.mkdir()
+        epoch = "c" * 32
+        (cache / ".account-epoch").write_text(epoch + "\n")
+        native = auth.NativeAuth()
+        fake_proc = mock.Mock(pid=1)
+        fake_proc.returncode = returncode
+        fake_proc.communicate.return_value = (output, None)
+        window, failed, online = mock.Mock(), mock.Mock(), mock.Mock()
+        with mock.patch.object(auth, "DATA", root), \
+                mock.patch.object(auth, "LOGS", root / "logs"), \
+                mock.patch.object(auth, "MSA_DIR", msa), \
+                mock.patch.object(auth, "XBL_XODUS_HOME", root / "xbl"), \
+                mock.patch.object(auth, "XODUS_BIN", fake_bin), \
+                mock.patch("bol.xodus.ensure_cli", return_value=fake_bin), \
+                mock.patch.object(auth, "_xodus_xbl_env", return_value={}), \
+                mock.patch.object(auth.subprocess, "Popen",
+                                  return_value=fake_proc) as popen, \
+                mock.patch.object(auth, "_xodus_xbl_tickets",
+                                  return_value=({"user_token": "ut",
+                                                 "device_rps": "dr"}, None)), \
+                mock.patch.object(auth, "_copy_xodus_keyring"), \
+                mock.patch("bol.xodus.signed_in", return_value=True), \
+                mock.patch("bol.log._LOG_SINK", None, create=True), \
+                mock.patch.object(auth, "info"), mock.patch.object(auth, "ok"):
+            native._flow(None, online, epoch, on_window=window,
+                         on_failed=failed)
+        return popen, window, failed, online, msa
+
+    def test_a_closed_sign_in_window_is_reported_as_over(self):
+        # The button sat on "Loading…", which ignores clicks, for good.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            popen, window, failed, online, msa = self._closed_window(root)
+            log = (root / "logs" / auth.XBL_LOGIN_LOG_NAME).read_text()
+        window.assert_called_once()
+        failed.assert_called_once()
+        online.assert_not_called()
+        self.assertFalse((msa / "token.json").exists())
+        self.assertIn("not linked (exit 1)", log)
+        self.assertIn("Didn't log in", log)
+        # The keyring Xodus writes holds the account: private from birth
+        # (#379), and the webview in a session stop() can take down.
+        kwargs = popen.call_args.kwargs
+        self.assertEqual(kwargs["umask"], 0o077)
+        self.assertTrue(kwargs["start_new_session"])
+
+    def test_a_finished_sign_in_is_not_reported_as_failed(self):
+        with tempfile.TemporaryDirectory() as td:
+            _popen, window, failed, online, msa = self._closed_window(
+                Path(td), returncode=0, output="")
+            token = json.loads((msa / "token.json").read_text())
+        window.assert_called_once()
+        failed.assert_not_called()
+        online.assert_called_once()
+        self.assertEqual(token["refresh_token"], auth.XODUS_XBL_TOKEN)
+
+    def test_a_legacy_android_token_is_no_account(self):
+        # Before #386 token.json held a device-code refresh token for the
+        # Android client ID. Launching on it would fail the Xbox sign-in at
+        # every PLAY instead of saying no account is linked.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "msa").mkdir()
+            (root / "msa" / "token.json").write_text(
+                json.dumps({"refresh_token": "M.C5xx-legacy"}))
+            with mock.patch.object(auth, "DATA", root), \
+                    mock.patch.object(auth, "MSA_DIR", root / "msa"):
+                self.assertFalse(auth.msa_signed_in())
+                token, _epoch = auth.msa_session_snapshot()
+        self.assertEqual(token, {})
 
     def test_msa_refresh_result_xodus_xbl_uses_xodus_tickets(self):
         with mock.patch.object(

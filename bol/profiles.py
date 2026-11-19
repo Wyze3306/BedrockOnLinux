@@ -654,8 +654,11 @@ def profile_account(profile_path=None, base_data=None):
     try:
         token = json.loads(
             (home / "msa" / "token.json").read_text(encoding="utf-8"))
+        # The same test as bol.auth.msa_signed_in(), on another profile's
+        # file: a token from before #386 is no account.
+        from .auth import XODUS_XBL_TOKEN
         signed_in = bool(isinstance(token, dict)
-                         and token.get("refresh_token"))
+                         and token.get("refresh_token") == XODUS_XBL_TOKEN)
     except (OSError, ValueError):
         pass
     gamertag = None

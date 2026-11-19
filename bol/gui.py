@@ -822,6 +822,8 @@ class AuthBridge(QObject):
     online = Signal()
     refreshed = Signal()
     refused = Signal()
+    window = Signal()
+    failed = Signal()
 
 
 # ======================================================================
@@ -1725,6 +1727,8 @@ class MainWindow(QMainWindow):
         self._auth_bridge.online.connect(self._on_online)
         self._auth_bridge.refreshed.connect(self._on_refreshed)
         self._auth_bridge.refused.connect(self._on_refused)
+        self._auth_bridge.window.connect(self._on_auth_window)
+        self._auth_bridge.failed.connect(self._on_auth_failed)
 
         self.setWindowTitle(PRETTY)
         self.resize(1120, 700)
@@ -3006,7 +3010,9 @@ class MainWindow(QMainWindow):
             threading.Thread(
                 target=lambda: self.na.start(
                     self._auth_bridge.auth.emit,
-                    self._auth_bridge.online.emit),
+                    self._auth_bridge.online.emit,
+                    on_window=self._auth_bridge.window.emit,
+                    on_failed=self._auth_bridge.failed.emit),
                 daemon=True).start()
 
     # ---------------------------------------------------------- download account
@@ -3256,6 +3262,22 @@ class MainWindow(QMainWindow):
             return
         self._refresh_account_row("auth")
         self._code_dialog(url, code)
+
+    def _on_auth_window(self):
+        # Reached via AuthBridge.window: the sign-in window is up, and the
+        # button offers to cancel it while it is.
+        if not _alive(self):
+            return
+        self._refresh_account_row("auth")
+
+    def _on_auth_failed(self):
+        # Reached via AuthBridge.failed: the window was closed or Microsoft
+        # refused. Without this the button stayed on "Loading…", which
+        # ignores clicks, until the launcher was restarted.
+        if not _alive(self):
+            return
+        self.ui_state.pop("play_after_signin", None)
+        self._refresh_account_row("in" if msa_signed_in() else "out")
 
     def _on_online(self):
         # Reached via AuthBridge.online, already queued onto the UI thread.
@@ -3802,6 +3824,18 @@ class MainWindow(QMainWindow):
                                  "in-game.")
         offline_row.toggled.connect(lambda on: self._save_setting("warn_offline_play", on))
         accounts.addWidget(offline_row)
+
+        presence_row = self._switch("Appear online to your Xbox friends",
+                                  self.settings.get("xbl_presence", True),
+                                  "Minecraft publishes its own presence once "
+                                  "Xbox Live gives it a title token. When "
+                                  "an account signs in without one, the "
+                                  "launcher tells Xbox Live you are playing "
+                                  "instead. Off means your friends then see "
+                                  "you as offline and cannot join your world "
+                                  "or invite you.")
+        presence_row.toggled.connect(lambda on: self._save_setting("xbl_presence", on))
+        accounts.addWidget(presence_row)
 
         v.addStretch(1)
         return w

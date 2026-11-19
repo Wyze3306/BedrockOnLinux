@@ -504,7 +504,7 @@ class StartProfileGameTests(unittest.TestCase):
             (home / "msa").mkdir(parents=True)
             self.assertEqual(profiles.profile_account(home),
                              {"signed_in": False, "gamertag": None})
-            (home / "msa/token.json").write_text('{"refresh_token": "r"}')
+            (home / "msa/token.json").write_text('{"refresh_token": "xodus-xbl"}')
             self.assertEqual(profiles.profile_account(home),
                              {"signed_in": True, "gamertag": None})
             (home / "winegdk-preauth").mkdir()

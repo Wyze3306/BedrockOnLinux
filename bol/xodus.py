@@ -757,22 +757,7 @@ def login(on_line=None):
     if code == 0 and signed_in():
         _record_login_output(tail, "linked")
         ok("Microsoft account linked for the Minecraft download.")
-        try:
-            from . import auth as _auth
-            if not _auth.msa_signed_in():
-                if _auth._copy_xodus_keyring(XODUS_HOME, _auth.XBL_XODUS_HOME):
-                    tickets, err_msg = _auth._xodus_xbl_tickets()
-                    if not err_msg and tickets:
-                        epoch = _auth._account_cache_epoch(
-                            _auth.DATA / "winegdk-preauth")
-                        _auth.msa_save_for_account_epoch({
-                            "refresh_token": "xodus-xbl",
-                            "access_token": tickets["user_token"],
-                            "device_rps": tickets["device_rps"],
-                            "obtained": int(time.time()),
-                        }, epoch)
-        except Exception:
-            pass
+        _link_xbox_live_from_store()
         return True
     _record_login_output(tail, f"not linked (exit {code})")
     if _LOGIN_ABANDONED.search(output):
@@ -785,6 +770,37 @@ def login(on_line=None):
         "Microsoft sign-in for the Minecraft download did not complete"
         + (f": {tail[-1]}" if tail else ".")
     )
+
+
+def _link_xbox_live_from_store():
+    """Link Xbox Live to the account just signed in for the download.
+
+    The first sign-in links both, so a new player signs in once (#386);
+    an Xbox Live account already linked is left alone. Best effort: the
+    download is what this sign-in was for, and it is done.
+    """
+    from . import auth
+    try:
+        if auth.msa_signed_in():
+            return False
+        if not auth._copy_xodus_keyring(XODUS_HOME, auth.XBL_XODUS_HOME):
+            return False
+        epoch = auth._account_cache_epoch(auth.DATA / "winegdk-preauth")
+        tickets, error = auth._xodus_xbl_tickets()
+        if error or not tickets:
+            warn(f"Xbox Live was not linked to this account ({error}); "
+                 "use 'Sign in' to link it.")
+            return False
+        return auth.msa_save_for_account_epoch({
+            "refresh_token": auth.XODUS_XBL_TOKEN,
+            "access_token": tickets["user_token"],
+            "device_rps": tickets["device_rps"],
+            "obtained": int(time.time()),
+        }, epoch)
+    except Exception as exc:  # noqa: BLE001 - the download sign-in is done
+        warn(f"Xbox Live was not linked to this account ({exc}); use "
+             "'Sign in' to link it.")
+        return False
 
 
 def logout(device=False):
@@ -845,16 +861,16 @@ def _xdg_dirs(base=None):
     }
 
 
-def webview_state_dirs():
+def webview_state_dirs(base=None):
     """Where the sign-in window keeps its cache and its page storage.
 
     WebKitGTK names them after the program, which is why they are xodus-cli's
     and not the launcher's.
     """
-    return [parent / "xodus-cli" for parent in _xdg_dirs().values()]
+    return [parent / "xodus-cli" for parent in _xdg_dirs(base).values()]
 
 
-def reset_webview_state():
+def reset_webview_state(base=None):
     """Throw away what the sign-in page left behind last time.
 
     None of it is the account -- the tokens are in the keyring, and this is
@@ -865,7 +881,7 @@ def reset_webview_state():
     from nothing costs one page load and takes that failure off the table.
     """
     cleared = False
-    for path in webview_state_dirs():
+    for path in webview_state_dirs(base):
         try:
             shutil.rmtree(path)
         except FileNotFoundError:
@@ -878,12 +894,16 @@ def reset_webview_state():
     return cleared
 
 
-def _env(binary=None):
+def _env(binary=None, base=None):
     """The environment xodus-cli runs in.
 
     xodus-cli cannot start at all without WebKitGTK -- the login webview is
     linked into every subcommand -- so hosts that ship none get the bundled
     runtime added here rather than at the sign-in alone.
+
+    ``base`` is the Xodus home to run it in, home() unless given: the Xbox
+    Live sign-in keeps a keyring of its own (bol.auth), and needs everything
+    else here just the same.
     """
     env = os.environ.copy()
     # xodus-cli always turns on reqwest's connection_verbose, so at trace
@@ -897,8 +917,12 @@ def _env(binary=None):
         env["XODUS_LOG"] = level
     # Xodus writes its file keyring under $HOME, so $HOME is what decides
     # whether the sign-in outlives the window it was made in: see home().
-    base = home()
-    _protect_keyring()
+    if base is None:
+        base = home()
+        _protect_keyring()
+    else:
+        base = Path(base)
+        _protect_keyring(base / ".xodus-keyring.ron")
     env["HOME"] = str(base)
     for name, path in _xdg_dirs(base).items():
         env[name] = str(path)
@@ -919,7 +943,7 @@ def _xodus_log_level(value):
     return re.sub(r"\btrace\b", "debug", value, flags=re.IGNORECASE)
 
 
-def _protect_keyring():
+def _protect_keyring(keyring=None):
     """Make the keyring 0600 if it is readable by anyone else.
 
     Xodus writes it with a plain fs::write, so a keyring made by a launcher
@@ -928,17 +952,18 @@ def _protect_keyring():
     of a file it overwrites, so tightening it once holds for later rewrites.
     The file is not created when missing: Xodus fails to parse an empty one.
     """
+    keyring = XODUS_KEYRING if keyring is None else Path(keyring)
     try:
-        mode = XODUS_KEYRING.stat().st_mode
+        mode = keyring.stat().st_mode
     except OSError:
         return
     if mode & 0o077:
         try:
-            os.chmod(XODUS_KEYRING, 0o600)
+            os.chmod(keyring, 0o600)
         except OSError as exc:
             if not _WARNED.get("keyring-mode"):
                 _WARNED["keyring-mode"] = True
-                warn(f"Could not make {XODUS_KEYRING} private ({exc}).")
+                warn(f"Could not make {keyring} private ({exc}).")
 
 
 # ---------------------------------------------------------------- install

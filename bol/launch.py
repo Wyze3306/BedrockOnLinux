@@ -18,6 +18,7 @@ from .auth import (
     msa_save_for_account_epoch,
     msa_session_snapshot,
     wine_apply_winegdk_prereqs,
+    wine_reg_remove_refresh_token,
     wine_reg_set_refresh_token,
     xbl_preauth,
     xbl_preauth_diagnostic,
@@ -31,6 +32,7 @@ from . import (
     mods,
     msal_flights,
     packcache,
+    presence as xbl_presence,
     saves,
     slr_locales,
     supervision,
@@ -1184,6 +1186,14 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     if not xbox_live:
         info(EDUCATION_SIGNIN_NOTICE)
     elif not tok:
+        # A token from before #386 can still sit in the prefix, and without a
+        # pre-auth the engine's XUser would refresh it on its own: "no
+        # account" has to mean offline mode, so it goes.
+        try:
+            wine_reg_remove_refresh_token()
+        except Exception as e:
+            warn(f"Could not clear an old Microsoft token from the Wine "
+                 f"prefix ({e}); continuing.")
         warn("No Microsoft account is linked, so Minecraft starts in "
              + _OFFLINE_MODE_NOTICE + " Use 'Sign in' to add one."
              if bedrock else
@@ -1437,6 +1447,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     gpu_marker_token = None
     game_returned = False
     presence = discord.Session()
+    xbl = xbl_presence.Session()
     game_events = gameevents.Forwarder()
     instance = _InstanceSession()
     try:
@@ -1532,6 +1543,13 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         # own name. Settings turns it off, and it never affects the game.
         presence = discord.start_session(s, started_at=started) \
             if bedrock else discord.Session()
+        # Xbox Live presence is the game's own once the pre-auth carries a
+        # title token (#386). An account that signed in without one leaves
+        # nothing in the game saying it plays, and its friends see it
+        # "Offline" and cannot join (#238, #243): the launcher says it.
+        if online and bedrock and not xbl_presence.game_publishes():
+            xbl = xbl_presence.start_session(s)
+            xbl_presence.warn_if_unavailable(xbl, s)
         game_events = gameevents.start_session(event_title)
         announced = False
         # There is no window yet to give Steam's identity to, so this watches
@@ -1589,9 +1607,11 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         # marker below. Both are daemon threads.
         if stopping:
             presence.stop(timeout=0)
+            xbl.stop(timeout=0)
             gameevents.stop_session(game_events, timeout=0)
         else:
             presence.stop()
+            xbl.stop()
             gameevents.stop_session(game_events)
         prefix_idle = None
         if game_returned and gpu_marker_token:

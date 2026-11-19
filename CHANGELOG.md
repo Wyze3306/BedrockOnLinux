@@ -4,6 +4,18 @@
 
 ### Added
 
+- **One Microsoft sign-in, Xbox Rich Presence and joinable worlds (#386).**
+  The Xbox Live account now signs in the way Minecraft for Windows does,
+  through the same Microsoft window as the download, and the first sign-in
+  links both. Each game's own MSA application ID comes from its
+  `MicrosoftGame.Config`, so the pre-auth carries a SISU title token, and
+  with it the game publishes its own presence: friends see "In the menus"
+  or "Playing in Survival" and can join the world. Where an account signs
+  in without a title token, the launcher keeps telling Xbox Live you are
+  playing, as before. An account linked by an earlier version is signed
+  out once and has to sign in again. Engine native28 (XUser signs in from
+  the pre-auth alone) and xodus-cli p15 (`xbl-ticket`). Contributed by
+  @ihsanharh.
 - **Inject during the loading screen (#390).** A new switch under Settings ▸
   Tools ▸ Injector Settings injects the DLL as soon as the injection delay
   has run out, without waiting for the game's window and main menu. Some

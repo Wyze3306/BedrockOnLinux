@@ -89,6 +89,26 @@ def presence_enabled(settings=None, environ=None):
     return bool((settings or {}).get("xbl_presence", True))
 
 
+def game_publishes(path=None):
+    """Whether the game publishes its own presence this session.
+
+    With a SISU title token in the pre-auth, the XSTS tokens the engine hands
+    the game carry Minecraft's title claims, and the game's own presence
+    writes go through: "In the menus", "Playing in Survival" and a world
+    friends can join (#386). The launcher's heartbeat would only overwrite
+    that with a bare "Minecraft". Without one -- an account whose SISU calls
+    are refused and that signs in over plain XSTS (#149) -- nothing in the
+    game says it is playing, and the heartbeat is all there is.
+    """
+    path = preauth_path() if path is None else path
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError, TypeError):
+        return False
+    token = payload.get("title_token") if isinstance(payload, dict) else None
+    return isinstance(token, str) and bool(token)
+
+
 class Credentials:
     """The three pre-auth fields a presence heartbeat needs."""
 
@@ -430,6 +450,8 @@ def presence_summary(settings=None, environ=None, path=None):
     run precisely when the network is the thing they suspect.
     """
     environ = os.environ if environ is None else environ
+    if game_publishes(path):
+        return "published by the game itself (Rich Presence)"
     if not presence_enabled(settings, environ):
         return ("off (Settings > Accounts) — friends see this account as "
                 "offline while you play")
@@ -444,6 +466,8 @@ def presence_summary(settings=None, environ=None, path=None):
 def presence_problem(settings=None, environ=None, path=None):
     """What to warn about, if anything, alongside the summary line."""
     environ = os.environ if environ is None else environ
+    if game_publishes(path):
+        return None
     if not presence_enabled(settings, environ):
         return ("Xbox Live presence is switched off, so your account stays "
                 "'Offline' to your friends while you play and they cannot "
