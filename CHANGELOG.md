@@ -22,6 +22,20 @@
   Wine prefix, names it when the prefix or the game fails, lists it in
   `doctor`, and gives the command that fixes it. Wine's own errors are no
   longer silenced in the prefix log.
+- **Ubuntu 24.04 and its derivatives: "bwrap: setting up uid map:
+  Permission denied" now says why (#384).** AppArmor's
+  `kernel.apparmor_restrict_unprivileged_userns` keeps bubblewrap from
+  building the Steam Linux Runtime container that Proton runs in, and Steam
+  only installs an exception for its own copy of that runtime. The launcher
+  names the setting and the command that allows it when the Wine prefix
+  cannot be made.
+- **Guix and NixOS: xodus-cli no longer stops on the bundled WebKitGTK
+  (#249).** When the system's WebKitGTK loads but a probe sends the sign-in
+  to the bundled runtime, a bundle that cannot load or be downloaded used to
+  stop every Store command; the system's library is now kept instead.
+- **"Report a problem" describes the game when none is selected yet.** The
+  Minecraft section of such a report read "unavailable: AttributeError"
+  instead of the builds on disk.
 
 ## 3.0.0 — 2026-11-14 (pre-release)
 

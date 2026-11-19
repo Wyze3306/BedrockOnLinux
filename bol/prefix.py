@@ -14,7 +14,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import selinux
+from . import selinux, userns
 from .archive import safe_extract_tar
 from .config import (
     CACHE,
@@ -520,6 +520,16 @@ def runtime_setup_pending():
         return True
 
 
+def _attempt_log(log_path: Path, offset=0, limit=4 << 20):
+    """The start of this attempt's own section of the wineboot log."""
+    try:
+        with log_path.open("rb") as log:
+            log.seek(max(0, offset))
+            return log.read(limit).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
 def _wineboot_hit_rng_abort(log_path: Path, offset=0):
     """Whether this attempt's own log section shows the cryptbase RNG abort.
 
@@ -689,10 +699,17 @@ def boot_prefix(prefix=None):
                      "advapi32.SystemFunction036 (RtlGenRandom → cryptbase) "
                      "forward, so the prefix could never finish.")
         else:
+            # Ubuntu 24.04's AppArmor keeps bubblewrap from building the
+            # runtime container before Wine runs at all (#384).
+            userns_problem = userns.problem(
+                _attempt_log(log_path, attempt_offset))
             # A stock openSUSE refuses Wine execmod, and Proton's first
             # process dies on it without a word (#380).
-            selinux_problem = selinux.problem(failed=True)
-            if selinux_problem:
+            selinux_problem = ("" if userns_problem
+                               else selinux.problem(failed=True))
+            if userns_problem:
+                cause = " " + userns_problem
+            elif selinux_problem:
                 cause = " " + selinux_problem
         LAST_BOOT_PROBLEM = f"wineboot {failure}.{cause}"
         warn(f"Wine prefix initialisation failed: wineboot {failure}.{cause} "
