@@ -757,6 +757,22 @@ def login(on_line=None):
     if code == 0 and signed_in():
         _record_login_output(tail, "linked")
         ok("Microsoft account linked for the Minecraft download.")
+        try:
+            from . import auth as _auth
+            if not _auth.msa_signed_in():
+                if _auth._copy_xodus_keyring(XODUS_HOME, _auth.XBL_XODUS_HOME):
+                    tickets, err_msg = _auth._xodus_xbl_tickets()
+                    if not err_msg and tickets:
+                        epoch = _auth._account_cache_epoch(
+                            _auth.DATA / "winegdk-preauth")
+                        _auth.msa_save_for_account_epoch({
+                            "refresh_token": "xodus-xbl",
+                            "access_token": tickets["user_token"],
+                            "device_rps": tickets["device_rps"],
+                            "obtained": int(time.time()),
+                        }, epoch)
+        except Exception:
+            pass
         return True
     _record_login_output(tail, f"not linked (exit {code})")
     if _LOGIN_ABANDONED.search(output):

@@ -743,7 +743,7 @@ class OnlinePreauthPayloadTests(unittest.TestCase):
             for url, request in requests[3:]:
                 self.assertEqual(
                     url, "https://sisu.xboxlive.com/authorize")
-                self.assertEqual(request["AppId"], "0000000048183522")
+                self.assertEqual(request["AppId"], "0000000040159362")
                 self.assertEqual(
                     request["AccessToken"], "t=fresh-access-token")
             stored = json.loads((cache / "device.json").read_text())
@@ -1058,6 +1058,9 @@ class NativeAuthCancellationTests(unittest.TestCase):
             cache = root / "winegdk-preauth"
             msa = root / "msa"
             prefix = root / "pfx"
+            xodus_home = root / "xbl-xodus-home"
+            fake_bin = root / "xodus-cli"
+            fake_bin.write_text("#!/bin/sh\n")
             cache.mkdir()
             msa.mkdir()
             prefix.mkdir()
@@ -1066,25 +1069,30 @@ class NativeAuthCancellationTests(unittest.TestCase):
             native = auth.NativeAuth()
             online = mock.Mock()
 
-            def post(url, _data):
-                if url == auth.MSA_CONNECT:
-                    return self._device_response()
-                # Sign out completes while the token POST is in flight.
-                auth.msa_logout()
-                return {"refresh_token": "must-not-survive"}
+            fake_proc = mock.Mock()
+            fake_proc.returncode = 0
+            fake_proc.poll.return_value = 0
 
-            # Without an active_prefix() override msa_logout() reaches the
-            # machine's real prefix: it would attempt a registry write on it,
-            # and the failure that follows makes the sign-out fail closed
-            # before it can rotate the generation this test asserts on.
+            def communicate():
+                # Sign out completes while xodus-cli login is in flight.
+                auth.msa_logout()
+                return ("", "")
+
+            fake_proc.communicate.side_effect = communicate
+
             with mock.patch.object(auth, "DATA", root), \
                     mock.patch.object(auth, "MSA_DIR", msa), \
+                    mock.patch.object(auth, "XBL_XODUS_HOME", xodus_home), \
+                    mock.patch.object(auth, "XODUS_BIN", fake_bin), \
                     mock.patch.object(auth, "active_prefix",
                                       return_value=prefix), \
                     mock.patch.object(auth, "prefix_operation_lock"), \
-                    mock.patch.object(auth, "http_post_form",
-                                      side_effect=post), \
-                    mock.patch.object(auth.time, "sleep"), \
+                    mock.patch.object(auth.subprocess, "Popen",
+                                      return_value=fake_proc), \
+                    mock.patch.object(auth, "_xodus_xbl_tickets",
+                                      return_value=({"user_token": "ut",
+                                                     "device_rps": "dr"},
+                                                    None)), \
                     mock.patch.object(auth, "warn"), \
                     mock.patch.object(auth, "info"):
                 native._flow(None, online, epoch)
@@ -1099,27 +1107,75 @@ class NativeAuthCancellationTests(unittest.TestCase):
             root = Path(td)
             cache = root / "winegdk-preauth"
             msa = root / "msa"
+            xodus_home = root / "xbl-xodus-home"
+            fake_bin = root / "xodus-cli"
+            fake_bin.write_text("#!/bin/sh\n")
             cache.mkdir()
             msa.mkdir()
             epoch = "b" * 32
             (cache / ".account-epoch").write_text(epoch + "\n")
             native = auth.NativeAuth()
 
-            def post(url, _data):
-                if url == auth.MSA_CONNECT:
-                    return self._device_response()
+            fake_proc = mock.Mock()
+            fake_proc.returncode = 0
+            fake_proc.poll.return_value = 0
+
+            def communicate():
                 native.stop()
-                return {"refresh_token": "cancelled"}
+                return ("", "")
+
+            fake_proc.communicate.side_effect = communicate
 
             with mock.patch.object(auth, "DATA", root), \
                     mock.patch.object(auth, "MSA_DIR", msa), \
-                    mock.patch.object(auth, "http_post_form",
-                                      side_effect=post), \
-                    mock.patch.object(auth.time, "sleep"), \
+                    mock.patch.object(auth, "XBL_XODUS_HOME", xodus_home), \
+                    mock.patch.object(auth, "XODUS_BIN", fake_bin), \
+                    mock.patch.object(auth.subprocess, "Popen",
+                                      return_value=fake_proc), \
+                    mock.patch.object(auth, "_xodus_xbl_tickets",
+                                      return_value=({"user_token": "ut",
+                                                     "device_rps": "dr"},
+                                                    None)), \
                     mock.patch.object(auth, "info"):
                 native._flow(None, None, epoch)
 
             self.assertFalse((msa / "token.json").exists())
+
+    def test_msa_refresh_result_xodus_xbl_uses_xodus_tickets(self):
+        with mock.patch.object(
+            auth, "_xodus_xbl_tickets",
+            return_value=({"user_token": "ut-win", "device_rps": "dr-win"},
+                          None),
+        ) as tickets_mock:
+            fresh, err = auth.msa_refresh_result("xodus-xbl")
+        self.assertIsNone(err)
+        self.assertEqual(fresh, {
+            "access_token": "ut-win",
+            "device_rps": "dr-win",
+            "refresh_token": "xodus-xbl",
+        })
+        tickets_mock.assert_called_once_with(client_id="0000000040159362")
+
+    def test_msa_app_id_reads_microsoft_game_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            gd = Path(td)
+            (gd / "MicrosoftGame.Config").write_text(
+                "<Game><MSAAppId>000000004C123456</MSAAppId></Game>",
+                encoding="utf-8",
+            )
+            self.assertEqual(auth.msa_app_id(gd), "000000004c123456")
+            self.assertEqual(auth.msa_app_id(gd / "missing"), auth.MSA_CLIENT_ID)
+
+    def test_copy_xodus_keyring_preserves_0600_mode(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src"
+            dst = Path(td) / "dst"
+            src.mkdir()
+            (src / ".xodus-keyring.ron").write_text("{}")
+            self.assertTrue(auth._copy_xodus_keyring(src, dst))
+            copied = dst / ".xodus-keyring.ron"
+            self.assertEqual(copied.read_text(), "{}")
+            self.assertEqual(copied.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

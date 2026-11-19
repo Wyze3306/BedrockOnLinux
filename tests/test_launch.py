@@ -151,8 +151,6 @@ class ReadyLaunchHarness:
             mock.patch.object(launch.subprocess, "Popen", side_effect=popen),
             mock.patch.object(launch.discord, "start_session",
                               side_effect=self._announce_presence),
-            mock.patch.object(launch.xbl_presence, "start_session",
-                              side_effect=self._announce_xbl_presence),
             mock.patch.object(launch, "info"),
             mock.patch.object(launch, "ok"),
             mock.patch.object(launch, "warn"),
@@ -1559,13 +1557,10 @@ class XboxPresenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
                 Path(td), lambda *a, **k: self._Process(),
                 lambda: "token", lambda _token: True, **kwargs)
 
-    def test_a_signed_in_session_is_published_then_taken_down(self):
+    def test_a_signed_in_session_launches_without_xbl_presence_heartbeat(self):
         self.assertEqual(self._run(extra_settings={"mc_version": "1.26.40.1"}),
                          0)
-        self.assertEqual(len(self.xbl_calls), 1)
-        (settings,), _kwargs = self.xbl_calls[0]
-        self.assertEqual(settings["mc_version"], "1.26.40.1")
-        self.xbl.stop.assert_called_once_with()
+        self.assertEqual(self.xbl_calls, [])
 
     def test_an_offline_session_tells_xbox_live_nothing(self):
         # No pre-auth, no token to publish with (#160).

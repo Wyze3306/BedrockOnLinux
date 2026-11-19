@@ -365,6 +365,7 @@ WINEGDK_NATIVE_PROVENANCE_FILES=(
   0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch
   0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch
   0020-ieframe-serve-SID_SShellBrowser-from-the-WebBrowser-control.patch
+  0021-xgameruntime-use-preauth-without-oauth-refresh.patch
 )
 
 verify_sha256() {
@@ -420,7 +421,7 @@ verify_winegdk_source_provenance() {
     "4413fceb6f16fbb2c6b75fee9ca6a393cbcebe67de200e7e81602ce0559f743c" \
     "WineGDK native5 source-delta README"
   verify_sha256 "$native_root/SOURCE-SHA256SUMS" \
-    "e57757381892620d207d5228a098e4fabfc813851801067648c3c6651a6834ba" \
+    "1ca76fabc4d841432d58fb7c4faaab7a0eb972b7b7a450e633b21e991135904c" \
     "WineGDK native5 source hash lock"
   verify_sha256 \
     "$native_root/0001-winegdk-native5-Xbox-and-file-picker-runtime.patch" \
@@ -502,6 +503,10 @@ verify_winegdk_source_provenance() {
     "$native_root/0020-ieframe-serve-SID_SShellBrowser-from-the-WebBrowser-control.patch" \
     "b53e95a2d11125744c5abd25ad60c53d32b35adae0c451b4ff85b47b94e4c215" \
     "WineGDK ieframe shell browser window"
+  verify_sha256 \
+    "$native_root/0021-xgameruntime-use-preauth-without-oauth-refresh.patch" \
+    "8150133ce0f6bb7ac6d4c8076730539ee8a66d4e764a0990ae194f46731e9fe4" \
+    "WineGDK xgameruntime preauth bypass"
 }
 
 has_marker() {
@@ -1007,6 +1012,7 @@ for relative_root, names in (
         "native5/0018-jscript-add-the-Intl-object-Internet-Explorer-11-has.patch",
         "native5/0019-jscript-call-not-get-when-METHOD-PROPERTYGET-carries-arguments.patch",
         "native5/0020-ieframe-serve-SID_SShellBrowser-from-the-WebBrowser-control.patch",
+        "native5/0021-xgameruntime-use-preauth-without-oauth-refresh.patch",
     )),
     (gdk_proton_provenance_root, ("provenance.env",)),
 ):

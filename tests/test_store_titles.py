@@ -472,9 +472,12 @@ class StoreTitleLaunchTests(ReadyLaunchHarness, unittest.TestCase):
             self.assertEqual(Path(exe), root / "content" / "Dungeons.exe")
             self.assertEqual(started[0][:2], ["xodus-cli", "run"])
             # None of what the launcher does to Minecraft itself.
-            for name in ("hide_signin_button", "apply_branding",
-                         "xbl_preauth"):
+            for name in ("hide_signin_button", "apply_branding"):
                 self.launch_mocks[name].assert_not_called()
+            self.launch_mocks["xbl_preauth"].assert_called_once()
+            self.assertFalse(
+                self.launch_mocks["xbl_preauth"].call_args.kwargs[
+                    "require_bedrock_audiences"])
             levi.assert_not_called()
             inject.assert_not_called()
             self.assertEqual(self.options_calls, [])

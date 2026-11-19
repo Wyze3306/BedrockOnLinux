@@ -63,6 +63,8 @@ readonly VENDORED_CALL_FLAGS_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/00
 readonly VENDORED_CALL_FLAGS_PATCH_SHA256="8e5c60b1eb3e9494abab7ff61f3e4cc8eed1f1d73a31623d76d07f24a35086fb"
 readonly VENDORED_SHELL_BROWSER_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0020-ieframe-serve-SID_SShellBrowser-from-the-WebBrowser-control.patch"
 readonly VENDORED_SHELL_BROWSER_PATCH_SHA256="b53e95a2d11125744c5abd25ad60c53d32b35adae0c451b4ff85b47b94e4c215"
+readonly VENDORED_PREAUTH_BYPASS_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0021-xgameruntime-use-preauth-without-oauth-refresh.patch"
+readonly VENDORED_PREAUTH_BYPASS_PATCH_SHA256="8150133ce0f6bb7ac6d4c8076730539ee8a66d4e764a0990ae194f46731e9fe4"
 readonly SOURCE_SHA256SUMS="$PROJECT_ROOT/third_party/winegdk-native5/SOURCE-SHA256SUMS"
 readonly NTSYNC_UAPI_HEADER="$PROJECT_ROOT/third_party/linux-uapi/ntsync.h"
 readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b10ac534c6ef9e78296262"
@@ -315,6 +317,16 @@ echo "== Applying the ieframe shell browser window fix"
 git -C "$SRC" apply --check "$VENDORED_SHELL_BROWSER_PATCH" \
   || { echo "!! ieframe shell browser patch does not apply" >&2; exit 1; }
 git -C "$SRC" apply "$VENDORED_SHELL_BROWSER_PATCH"
+
+echo "== Applying the xgameruntime preauth bypass fix"
+[ -f "$VENDORED_PREAUTH_BYPASS_PATCH" ] \
+  || { echo "!! missing xgameruntime preauth bypass patch" >&2; exit 1; }
+[ "$(sha256sum "$VENDORED_PREAUTH_BYPASS_PATCH" | cut -d' ' -f1)" = \
+  "$VENDORED_PREAUTH_BYPASS_PATCH_SHA256" ] \
+  || { echo "!! xgameruntime preauth bypass patch hash mismatch" >&2; exit 1; }
+git -C "$SRC" apply --check "$VENDORED_PREAUTH_BYPASS_PATCH" \
+  || { echo "!! xgameruntime preauth bypass patch does not apply" >&2; exit 1; }
+git -C "$SRC" apply "$VENDORED_PREAUTH_BYPASS_PATCH"
 
 echo "== Verifying reviewed source hashes"
 [ -f "$SOURCE_SHA256SUMS" ] || { echo "!! missing SOURCE-SHA256SUMS" >&2; exit 1; }

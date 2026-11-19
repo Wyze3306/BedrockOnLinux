@@ -70,13 +70,13 @@ MINGW_CURL = "https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-curl-8.17.
 MINGW_CURL_SHA256 = "928d63a65f2b47c313b2b8b5f34fe5bb5be2f388a00c1d32088d1b05cdb9c564"
 CACERT_URL = "https://curl.se/ca/cacert.pem"
 
-# WineGDK reads the refresh token from this registry key and requires its
-# hardcoded MSA application ID.
-MSA_CLIENT_ID = "0000000048183522"
+# Minecraft for Windows MSA application ID (matches MicrosoftGame.Config <MSAAppId>).
+MSA_CLIENT_ID = "0000000040159362"
 MSA_SCOPE = "service::user.auth.xboxlive.com::MBI_SSL"
 MSA_CONNECT = "https://login.live.com/oauth20_connect.srf"
 MSA_TOKEN = "https://login.live.com/oauth20_token.srf"
 WINEGDK_REG = r"Software\Wine\WineGDK"
+XBL_XODUS_HOME = DATA / "xbl-xodus-home"
 
 # Exact WineGDK source used for the reviewed native-online engine.
 WINEGDK_SOURCE_COMMIT = "75637b674e1f191e65753663c4c0c32bea05ba6e"
@@ -100,7 +100,7 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 # match the reviewed pins below.
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
 # The commit alone does not identify vendored follow-up patches.
-WINEGDK_SOURCE_MANIFEST_SHA256 = "e57757381892620d207d5228a098e4fabfc813851801067648c3c6651a6834ba"
+WINEGDK_SOURCE_MANIFEST_SHA256 = "1ca76fabc4d841432d58fb7c4faaab7a0eb972b7b7a450e633b21e991135904c"
 # How the WineGDK prefix is built from that source, when not the way it first
 # was: it is part of what the bytes are, so it is part of the name of the
 # release that holds them (scripts/winegdk-release-tag.sh). "stripped"
@@ -207,7 +207,7 @@ XODUS_SOURCE_COMMIT = "64d39eb87a56c7d0d7e7fde0b233654ac5477b0f"
 # way, so adding a patch there and forgetting this makes the build produce an
 # archive the workflow's assert cannot find -- which is the intended failure,
 # not a silent replacement of a published one.
-XODUS_REV = "64d39eb87a56-p14"
+XODUS_REV = "64d39eb87a56-p15"
 # Integrity pin from the reviewed candidate build of the p14 archive.
 # https://github.com/Wyze3306/BedrockOnLinux/actions/runs/43299041916
 XODUS_ARCHIVE_SHA256 = "4a3cd8888924f419470172a15ca06911b476e68b60203c433cf7d1a3b77db8d2"

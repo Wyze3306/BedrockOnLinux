@@ -86,11 +86,14 @@ CALL_FLAGS_PATCH = (
 SHELL_BROWSER_PATCH = (
     DELTA / "0020-ieframe-serve-SID_SShellBrowser-from-the-WebBrowser-control.patch"
 )
+PREAUTH_BYPASS_PATCH = (
+    DELTA / "0021-xgameruntime-use-preauth-without-oauth-refresh.patch"
+)
 # The follow-ups after 0013. They were first applied around the manifest so
 # that native22 kept verifying; native23 pins every file they change.
 LATE_PATCHES = (FSYNC_PATCH, VM_COUNTERS_PATCH, TIME_ZONE_PATCH,
                 GAME_EVENT_PATCH, INTL_PATCH, CALL_FLAGS_PATCH,
-                SHELL_BROWSER_PATCH)
+                SHELL_BROWSER_PATCH, PREAUTH_BYPASS_PATCH)
 SOURCE_SUMS = DELTA / "SOURCE-SHA256SUMS"
 CHANGED_FILES = {
     "dlls/combase/combase.c",
