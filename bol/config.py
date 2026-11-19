@@ -173,7 +173,7 @@ WINEGDK_BUILD_REV = "wow64-archs-native28"
 # Xbox Live session is Xodus's now (#386), so there is no OAuth refresh
 # token for the engine to trade, and the title token the pre-auth carries is
 # what lets the game publish its own presence.
-WINEGDK_ARCHIVE_SHA256 = "e8db800b19eacdda97538bd969f5ac07d5859139b2b4aea0e755891f7a469935"
+WINEGDK_ARCHIVE_SHA256 = "1dfbacaced7a2a3e3fcc4e23a1727ee82b3a98f0fa88fc6bcf0675c7c9c66fb0"
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "fb562934c3974c58f7b1676d1a2fc1e408128280b846e6caeb7f6beb2add881e"
 
