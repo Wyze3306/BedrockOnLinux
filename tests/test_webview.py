@@ -601,6 +601,49 @@ class OldGlibcTests(unittest.TestCase):
             webview.restore_env(env, previous)
             self.assertEqual(env, {"PATH": "/usr/bin"})
 
+    def test_a_host_webkitgtk_is_kept_whatever_stops_the_bundle(self):
+        # Guix and NixOS: the host's library loads (wrapped by the package),
+        # a probe still sends the sign-in to the bundle, and the bundle has
+        # no FHS loader to start with (#249). xodus-cli must keep running.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            binary = base / "xodus-cli"
+            binary.write_text(
+                f"#!{SH}\n"
+                f'case "$LD_LIBRARY_PATH" in *"{base}/bundle/lib"*)\n'
+                "  echo 'cannot execute: required file not found' >&2\n"
+                "  exit 127;;\n"
+                "esac\nexit 0\n")
+            binary.chmod(0o755)
+            env = {"PATH": "/usr/bin"}
+            with mock.patch.object(webview, "host_tls_available",
+                                   return_value=False), \
+                    mock.patch.object(webview, "prepare",
+                                      return_value=base / "bundle"), \
+                    mock.patch.object(webview, "info") as said:
+                previous = webview.apply(binary, env)
+            self.assertNotIn("LD_LIBRARY_PATH", env)
+            self.assertIn("keeping the system's WebKitGTK",
+                          said.call_args.args[0])
+            webview.restore_env(env, previous)
+            self.assertEqual(env, {"PATH": "/usr/bin"})
+
+    def test_a_host_webkitgtk_is_kept_when_the_bundle_cannot_be_fetched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "xodus-cli"
+            binary.write_text(f"#!{SH}\nexit 0\n")
+            binary.chmod(0o755)
+            env = {"PATH": "/usr/bin"}
+            with mock.patch.object(webview, "host_tls_available",
+                                   return_value=False), \
+                    mock.patch.object(webview, "prepare",
+                                      side_effect=webview.BolError("offline")), \
+                    mock.patch.object(webview, "info") as said:
+                previous = webview.apply(binary, env)
+            self.assertIn("offline", said.call_args.args[0])
+            webview.restore_env(env, previous)
+            self.assertEqual(env, {"PATH": "/usr/bin"})
+
     def test_no_host_webkitgtk_and_a_bundle_too_new_names_the_package(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

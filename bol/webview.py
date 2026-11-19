@@ -854,20 +854,35 @@ def apply(binary, env, force=False):
     try:
         root = prepare()
     except BolError as exc:
+        if host_loads:
+            # Same reasoning as a bundle that does not load, below: one that
+            # cannot be fetched is no reason to refuse the host's library.
+            info(f"The bundled WebKitGTK runtime is unavailable ({exc}); "
+                 "keeping the system's WebKitGTK.")
+            return previous
         restore_env(env, previous)
         raise BolError(missing_message(str(exc))) from exc
     _, replaced = runtime_env(env, root)
     failure = load_failure(binary, env)
     if failure is not None:
         too_old = glibc_too_old_message(failure, root)
-        if host_loads and too_old:
+        if host_loads:
             # The bundle was only meant to stand in for a host WebKitGTK that
             # cannot sign in, and it cannot even load here: the host's still
             # runs the download and the game, and at worst the sign-in shows
-            # the problem named above.
+            # the problem named above. That holds whatever stopped the
+            # bundle -- an old glibc, or a distribution such as Guix or NixOS
+            # with no FHS loader paths for it (#249) -- so a probe's verdict
+            # on the host's library never costs a host that loads it the
+            # whole of xodus-cli.
             restore_env(env, replaced)
-            info("The bundled WebKitGTK runtime needs a newer glibc than "
-                 "this system has; keeping the system's WebKitGTK.")
+            if too_old:
+                info("The bundled WebKitGTK runtime needs a newer glibc than "
+                     "this system has; keeping the system's WebKitGTK.")
+            else:
+                info("The bundled WebKitGTK runtime did not load on this "
+                     "system (" + failure.splitlines()[0] + "); keeping the "
+                     "system's WebKitGTK.")
             return previous
         previous.update(replaced)
         restore_env(env, previous)
