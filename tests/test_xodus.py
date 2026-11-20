@@ -493,6 +493,20 @@ class InstallErrorTests(unittest.TestCase):
             with self.assertRaises(xodus.NotOwned) as raised:
                 xodus.install("9NBLGGH2JHXJ", Path(tmp))
         self.assertIn("does not own", str(raised.exception))
+        # Its steps are the player's: another account, another platform.
+        self.assertTrue(raised.exception.player_fixable)
+        self.assertIn("sign out of Download Minecraft", str(raised.exception))
+
+    def test_device_limit_and_full_disk_are_the_players_to_fix(self):
+        from bol.log import is_fixable
+        for text in (["Device group is full"],
+                     ["not enough free disk space on /home: need 2 bytes"]):
+            ensure, signed, stream, size = self._patched(1, text)
+            with tempfile.TemporaryDirectory() as tmp, \
+                    ensure, signed, stream, size:
+                with self.assertRaises(xodus.XodusError) as raised:
+                    xodus.install("9NBLGGH2JHXJ", Path(tmp))
+            self.assertTrue(is_fixable(raised.exception), text)
 
     def test_expired_session_is_reported_as_sign_in(self):
         ensure, signed, stream, size = self._patched(1, ["Invalid STS token"])

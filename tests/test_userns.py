@@ -70,8 +70,13 @@ class PrefixTests(unittest.TestCase):
                     mock.patch.object(prefix, "warn"):
                 self.assertFalse(prefix.boot_prefix(Path(td) / "pfx"))
                 problem = prefix.LAST_BOOT_PROBLEM
+                fixable = prefix.LAST_BOOT_FIXABLE
+                said = prefix.boot_failure_message("Minecraft was not started")
         self.assertIn(userns.SYSCTL_NAME, problem)
         self.assertNotIn("SELINUX", problem)
+        # A sysctl to change is the player's to do: no report asked for.
+        self.assertTrue(fixable)
+        self.assertNotIn("Report a problem", said)
 
 
 if __name__ == "__main__":

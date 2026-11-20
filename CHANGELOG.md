@@ -25,6 +25,14 @@
 
 ### Fixed
 
+- **"Report a problem" is offered only for what the launcher may have got
+  wrong.** When PLAY stops on something the player fixes from the message
+  itself (a Microsoft account that does not own the game, the ten-device
+  limit, a refused Store session, a full disk, the AppArmor or SELinux
+  setting that keeps Wine from starting), the error now says what to do
+  and has no report button. The "does not own" error now names the usual
+  causes: the copy is on another Microsoft account, or was bought for a
+  console, a phone or Java only (#381, #382).
 - **Three hardening gaps around the Store sign-in and the changelog.** A
   link in either changelog tab now opens only if it is http or https: the
   text comes off the network, and a `file:`, `smb:`, `ssh:` or `steam:` link

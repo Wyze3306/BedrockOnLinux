@@ -296,6 +296,15 @@ class LauncherWindowTests(unittest.TestCase):
         box.assert_called_once_with("Minecraft could not start",
                                     "Game closed (exit 139)", report=True)
 
+    def test_a_failure_the_player_fixes_offers_no_report(self):
+        with headless_window() as window, \
+                mock.patch.object(gui, "gpu_crash_acknowledgement_status",
+                                  return_value=None), \
+                mock.patch.object(window, "error_box") as box:
+            window._play_failed_fixable("Free up some space")
+        box.assert_called_once_with("Minecraft could not start",
+                                    "Free up some space", report=False)
+
     def test_the_error_box_button_opens_it_with_the_error(self):
         def click_report(box):
             report_button = next(b for b in box.buttons()

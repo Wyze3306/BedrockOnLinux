@@ -2114,3 +2114,12 @@ class BootFailureMessageTests(unittest.TestCase):
         self.assertIn("foo.dll not found", said)
         self.assertEqual(said.count("timed out"), 1)
         self.assertIn("Report a problem", said)
+
+    def test_a_cause_the_player_fixes_asks_for_no_report(self):
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(prefix, "LOGS", Path(td)), \
+                mock.patch.object(prefix, "LAST_BOOT_PROBLEM", "SELinux…"), \
+                mock.patch.object(prefix, "LAST_BOOT_FIXABLE", True):
+            said = prefix.boot_failure_message("Minecraft was not started")
+        self.assertNotIn("Report a problem", said)
+        self.assertIn("then click PLAY again", said)

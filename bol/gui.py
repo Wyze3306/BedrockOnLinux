@@ -51,7 +51,7 @@ from .launch import direct_launch_readiness, launch, single_window_session
 from . import saves
 from .navigation import ControllerNav
 from . import log, supervision
-from .log import BolError, _LEVELS, desktop_notify, warn
+from .log import BolError, _LEVELS, desktop_notify, is_fixable, warn
 from .prefix import _mc_running, kill_wine, prefix_operation_lock, reset_prefix
 from .profiles import (
     create_profile, current_profile_info, current_profile_name, delete_profile,
@@ -1608,6 +1608,10 @@ class LaunchWorker(QThread):
     # it is reported apart from failed() rather than being recovered by
     # matching on the message text.
     needs_store_signin = Signal(str)
+    # A failure whose message already says what the player does about it
+    # (bol.log.fixable): shown without "Report a problem", since there is
+    # nothing for the launcher's side to look into.
+    fixable_failure = Signal(str)
     # qint64: this is the signal that carries the Minecraft download, and that
     # package is well past the 2 GiB a Qt `int` holds (#216).
     progress = Signal("qint64", "qint64")
@@ -1654,6 +1658,8 @@ class LaunchWorker(QThread):
             from .xodus import NotSignedIn
             if isinstance(exc, NotSignedIn):
                 self.needs_store_signin.emit(message)
+            elif is_fixable(exc):
+                self.fixable_failure.emit(message)
             else:
                 self.failed.emit(message)
 
@@ -3480,6 +3486,7 @@ class MainWindow(QMainWindow):
         w.progress.connect(self.set_progress)
         w.done.connect(self._play_finished)
         w.failed.connect(self._play_failed)
+        w.fixable_failure.connect(self._play_failed_fixable)
         w.needs_store_signin.connect(self._store_signin_needed)
         w.close_window.connect(self._close_for_game)
         w.step_aside.connect(self._step_aside_for_game)
@@ -3567,7 +3574,11 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         self._offer_pending_restart()
 
-    def _play_failed(self, message):
+    def _play_failed_fixable(self, message):
+        """A failure the player resolves from the message itself."""
+        self._play_failed(message, report=False)
+
+    def _play_failed(self, message, report=True):
         self.ui_state["launch_active"] = False
         self.ui_state.pop("store_signin_offered", None)
         log._LOG_SINK(f"xx {message}")
@@ -3591,8 +3602,10 @@ class MainWindow(QMainWindow):
                                  then=self._play_again_after_ack)
         else:
             # With the way to report it one click away (see error_box).
+            # With the way to report it one click away (see error_box), but
+            # only for what the launcher may have got wrong.
             self.error_box("Minecraft could not start", message[:2000],
-                           report=True)
+                           report=report)
         self._offer_pending_restart()
 
     def open_report(self, title="", comment=""):

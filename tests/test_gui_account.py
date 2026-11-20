@@ -293,6 +293,17 @@ class DownloadSignInIsOfferedWhereItIsMissedTests(unittest.TestCase):
         self.assertEqual(seen["failed"], [])
         self.assertEqual(seen["offer"], ["no account"])
 
+    def test_a_failure_the_player_fixes_is_reported_apart(self):
+        worker = gui.LaunchWorker({"edition": {"id": "release"}, "tag": "1.0"})
+        seen = {"failed": [], "fixable": []}
+        worker.failed.connect(seen["failed"].append)
+        worker.fixable_failure.connect(seen["fixable"].append)
+        with mock.patch.object(gui, "setup_or_join",
+                               side_effect=xodus.NotOwned("not owned")):
+            worker.run()
+        self.assertEqual(seen["failed"], [])
+        self.assertEqual(seen["fixable"], ["not owned"])
+
     def test_any_other_failure_still_fails(self):
         worker = gui.LaunchWorker({"edition": {"id": "release"}, "tag": "1.0"})
         seen = {"failed": [], "offer": []}

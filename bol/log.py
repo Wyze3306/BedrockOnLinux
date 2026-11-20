@@ -120,11 +120,29 @@ def desktop_notify(message, summary=None):
 
 
 class BolError(Exception):
-    pass
+    # A failure the player resolves themself, the steps being in the
+    # message itself: a full disk, an account that does not own the game, a
+    # system setting to change. The window shows it without offering
+    # "Report a problem", which is for what the launcher got wrong; a report
+    # of a message that already says what to do only meant the message did
+    # not say it plainly enough.
+    player_fixable = False
 
 
-def die(m):
+def fixable(exc):
+    """Mark ``exc`` as a failure the player fixes from its message alone."""
+    exc.player_fixable = True
+    return exc
+
+
+def is_fixable(exc):
+    """Whether ``exc`` was marked by fixable() or its class says so."""
+    return bool(getattr(exc, "player_fixable", False))
+
+
+def die(m, fixable=False):
     err(m)
     exc = BolError(m)
     exc.reported = True
+    exc.player_fixable = fixable
     raise exc

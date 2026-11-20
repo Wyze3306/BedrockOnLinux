@@ -50,7 +50,7 @@ from .config import (
     XODUS_KEYRING,
     XODUS_REV,
 )
-from .log import BolError, info, ok, warn
+from .log import BolError, fixable, info, ok, warn
 from .util import _fetch_with_fallback, asset_url, download, gh_releases
 
 
@@ -64,6 +64,8 @@ class NotSignedIn(XodusError):
 
 class NotOwned(XodusError):
     """The linked account does not own the requested edition."""
+
+    player_fixable = True
 
 
 class LoginCancelled(XodusError):
@@ -1318,17 +1320,36 @@ def _unresolved_advice(hosts):
             "another DNS server, lets the download through.")
 
 
+def not_owned_message(title=None):
+    """What to do when Microsoft says the account owns no copy (#381, #382).
+
+    "Buy or redeem it" alone sent people who do own Minecraft to "Report a
+    problem": almost always the copy is on another Microsoft account, or is
+    one for a console, a phone or Java that does not include Windows.
+    """
+    game = title if title else "this edition of Minecraft"
+    return (
+        "The Microsoft account you signed in with under Download Minecraft "
+        f"does not own {game} for Windows, so Microsoft will not let it be "
+        "downloaded. Nothing is wrong with the launcher or your computer.\n\n"
+        "\u2022 Bought it with another Microsoft account? Open the account "
+        "menu, sign out of Download Minecraft, and sign in with that one.\n"
+        "\u2022 A copy for Xbox, PlayStation, Switch, Android or iPhone does "
+        "not include the Windows one.\n"
+        "\u2022 Minecraft: Java Edition counts only when the account shows "
+        "\"Minecraft: Java & Bedrock Edition for PC\" at "
+        "https://www.minecraft.net/msaprofile.\n\n"
+        "Otherwise buy or redeem it on that account, then click PLAY again.")
+
+
 def _raise_unretryable(text, dest=None, needed=0, title=None):
     """Raise for the download failures another mirror cannot fix."""
     if _DEVICE_LIMIT.search(text):
-        raise XodusError(_DEVICE_LIMIT_MESSAGE)
+        raise fixable(XodusError(_DEVICE_LIMIT_MESSAGE))
     if _NOT_OWNED.search(text):
-        raise NotOwned(
-            "The linked Microsoft account does not own "
-            + (title if title else "this edition of Minecraft")
-            + ". Buy or redeem it on the same account, then try again.")
+        raise NotOwned(not_owned_message(title))
     if _SESSION_REFUSED.search(text) and not _NO_NETWORK.search(text):
-        raise XodusError(_SESSION_REFUSED_MESSAGE)
+        raise fixable(XodusError(_SESSION_REFUSED_MESSAGE))
     if _NO_CREDENTIALS.search(text):
         raise NotSignedIn(
             "The Microsoft session for the download expired. Sign in again.")
@@ -1341,13 +1362,13 @@ def _raise_unretryable(text, dest=None, needed=0, title=None):
         free = _free_space(dest)
         # xodus-cli measured the room itself, so this one is settled.
         if _NO_ROOM.search(text):
-            raise XodusError(_no_room_message(dest, needed, free))
+            raise fixable(XodusError(_no_room_message(dest, needed, free)))
         # A short cache is what a full disk looks like from inside the parse,
         # and only the arithmetic can tell that from a write that failed for
         # some other reason -- so it is fatal only when the room really is
         # missing, and otherwise stays worth asking another mirror about.
         if _CACHE_SHORT.search(text) and _short_of_room(needed, free):
-            raise XodusError(_no_room_message(dest, needed, free))
+            raise fixable(XodusError(_no_room_message(dest, needed, free)))
     loader = _loader_failure(text)
     if loader:
         raise XodusError(loader)
@@ -1412,7 +1433,7 @@ def install(product, dest: Path, progress=None, exe=BEDROCK_EXE, title=None):
         needed = _room_needed(_package_size(sources))
         free = _free_space(dest)
         if _short_of_room(needed, free):
-            raise XodusError(_no_room_message(dest, needed, free))
+            raise fixable(XodusError(_no_room_message(dest, needed, free)))
 
     # Every mirror once, plus a few goes at whichever one loses the cache
     # race, which is the same package either way.

@@ -589,6 +589,9 @@ def _run_wineboot(pfx: Path, log_path: Path, native_cryptbase):
 
 # Why the last boot_prefix() returned False, in a sentence; "" otherwise.
 LAST_BOOT_PROBLEM = ""
+# Whether that cause is a system setting the player changes themself (the
+# AppArmor and SELinux rules below), the command being in the sentence.
+LAST_BOOT_FIXABLE = False
 
 
 def _log_tail(path, lines=6, width=200):
@@ -615,15 +618,20 @@ def boot_failure_message(what):
     tail = _log_tail(log_path)
     if tail:
         parts.append("Last lines of the log:\n" + "\n".join(tail))
-    parts.append(f"Full log: {log_path}. Use 'Report a problem' to send it "
-                 "with your system details, then try PLAY again.")
+    if LAST_BOOT_FIXABLE:
+        parts.append(f"Full log: {log_path}. Change the setting named above, "
+                     "then click PLAY again.")
+    else:
+        parts.append(f"Full log: {log_path}. Use 'Report a problem' to send "
+                     "it with your system details, then try PLAY again.")
     return "\n\n".join(parts)
 
 
 def boot_prefix(prefix=None):
     """Ensure Wine created system32 and its persistent registry hives."""
-    global LAST_BOOT_PROBLEM
+    global LAST_BOOT_PROBLEM, LAST_BOOT_FIXABLE
     LAST_BOOT_PROBLEM = ""
+    LAST_BOOT_FIXABLE = False
     pfx = Path(prefix or active_prefix())
     _prepare_managed_prefix_layout(pfx)
     if prefix_ready(pfx):
@@ -711,6 +719,7 @@ def boot_prefix(prefix=None):
                 cause = " " + userns_problem
             elif selinux_problem:
                 cause = " " + selinux_problem
+            LAST_BOOT_FIXABLE = bool(userns_problem or selinux_problem)
         LAST_BOOT_PROBLEM = f"wineboot {failure}.{cause}"
         warn(f"Wine prefix initialisation failed: wineboot {failure}.{cause} "
              f"Details: {log_path}")

@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from . import hostarch, selinux
+from . import prefix as prefix_mod
 from .auth import msa_signed_in
 from .config import DATA, LOGS
 from .deps import ensure_login_deps
@@ -174,8 +175,10 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
     elif xbox_live:
         install_ca_bundle(gd)
     if not boot_prefix():
-        raise BolError(boot_failure_message(
+        exc = BolError(boot_failure_message(
             "setup stopped before installing GameInput"))
+        exc.player_fixable = prefix_mod.LAST_BOOT_FIXABLE
+        raise exc
     install_gameinput(active_prefix(), gd)
     if not xbox_live:
         ok("Setup complete — click PLAY, then sign in to Minecraft Education "

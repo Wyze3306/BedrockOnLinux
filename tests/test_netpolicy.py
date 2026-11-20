@@ -20,6 +20,7 @@ NOT_CONTACTED = {
     "vortex.microsoft.com", "licensing.xboxlive.com", "licensing",
     "wyze3306.github.io", "discord.gg", "www.nayuki.io", "fex-emu.com",
     "example.com", "docs.levimc.org", "snapshot.debian.org",
+    "www.minecraft.net",
 }
 
 

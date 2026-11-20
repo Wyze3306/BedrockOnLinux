@@ -32,6 +32,7 @@ from . import (
     mods,
     msal_flights,
     packcache,
+    prefix as prefix_mod,
     presence as xbl_presence,
     saves,
     slr_locales,
@@ -1162,7 +1163,8 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     refresh = _start_msa_refresh(tok, client_id=app_id)
     try:
         if not boot_prefix():
-            die(boot_failure_message("Minecraft was not started"))
+            die(boot_failure_message("Minecraft was not started"),
+                fixable=prefix_mod.LAST_BOOT_FIXABLE)
         wine_apply_winegdk_prereqs()
         _install_cryptbase_in_prefix()
         try:
