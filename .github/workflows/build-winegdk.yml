@@ -161,12 +161,22 @@ jobs:
             # First pass of the two-pass pin: nothing to compare with yet.
             echo "::warning::$pin_name is empty: pin $sha and run again to publish."
             publishable=false
+          elif [ "$sha" != "$pin" ] && [ "$ARCH" = aarch64 ]; then
+            # Still upload it, with the per-file list, so the two builds can
+            # be compared; the step after the upload fails the run.
+            echo "::error::$pin_name does not match: the build did not reproduce the pinned prefix."
+            publishable=false
+            echo "MISMATCH=true" >> "$GITHUB_ENV"
           elif [ "$sha" != "$pin" ]; then
             echo "::error::WineGDK prefix SHA-256 does not match WINEGDK_PREFIX_SHA256;" \
                  "the build did not reproduce the reviewed prefix." >&2
             exit 1
           fi
           echo "$sha  $out" > "$out.sha256"
+          if [ "$ARCH" = aarch64 ]; then
+            ( cd /mnt/engine && find prefix -type f -print0 | sort -z \
+                | xargs -0 sha256sum ) > "$out.files.sha256"
+          fi
           {
             echo "sha256=$sha"
             echo "commit=$commit"
@@ -191,8 +201,13 @@ jobs:
           path: |
             ${{ env.TARBALL }}
             ${{ env.TARBALL }}.sha256
+            ${{ env.TARBALL }}.files.sha256
           if-no-files-found: error
           retention-days: 7
+
+      - name: Fail a prefix that did not reproduce its pin
+        if: ${{ env.MISMATCH == 'true' }}
+        run: exit 1
 
       - name: Refuse to replace a published ARM64 prefix
         if: ${{ inputs.publish && env.ARCH == 'aarch64' && steps.pack.outputs.publishable == 'true' }}
