@@ -5,7 +5,10 @@ import json
 import os
 import zipfile
 
+import pytest
+
 from bol import content
+from bol.log import BolError
 
 _USERS_RELATIVE = (
     "drive_c/users/steamuser/AppData/Roaming/Minecraft Bedrock/Users"
@@ -290,3 +293,119 @@ def test_a_pack_named_through_its_translations_gets_its_real_name(tmp_path):
     result = content.import_content(archive, prefix=prefix)
 
     assert result == ["resource pack: Primal Tamers"]
+
+
+def _world_zip(path, folder="", extra=()):
+    with zipfile.ZipFile(path, "w") as package:
+        package.writestr(folder + "level.dat", "")
+        package.writestr(folder + "levelname.txt", "Fish")
+        package.writestr(folder + "db/CURRENT", "")
+        for member in extra:
+            package.writestr(folder + member, "{}")
+    return path
+
+
+def test_a_web_page_saved_as_mcworld_is_named_for_what_it_is(tmp_path):
+    prefix = tmp_path / "prefix"
+    page = tmp_path / "LE FISH (24).mcworld"
+    page.write_text("<!DOCTYPE html><html><head><title>Download</title>")
+
+    with pytest.raises(BolError, match="web page"):
+        content.import_content(page, prefix=prefix)
+
+
+def test_a_download_cut_short_is_named_for_what_it_is(tmp_path):
+    prefix = tmp_path / "prefix"
+    whole = _world_zip(tmp_path / "whole.mcworld").read_bytes()
+    cut = tmp_path / "cut.mcworld"
+    cut.write_bytes(whole[:len(whole) // 2])
+    empty = tmp_path / "empty.mcpack"
+    empty.write_bytes(b"")
+
+    with pytest.raises(BolError, match="cut short"):
+        content.import_content(cut, prefix=prefix)
+    with pytest.raises(BolError, match="empty"):
+        content.import_content(empty, prefix=prefix)
+
+
+def test_a_zip_with_data_after_its_end_is_still_imported(tmp_path):
+    prefix = tmp_path / "prefix"
+    account = _signed_in(prefix)
+    padded = tmp_path / "Padded.mcworld"
+    padded.write_bytes(_world_zip(tmp_path / "w.zip").read_bytes()
+                       + b"\0" * 200_000)
+    assert not zipfile.is_zipfile(padded)
+
+    assert content.import_content(padded, prefix=prefix) == ["world: Padded"]
+    assert (account / "minecraftWorlds" / "Padded" / "level.dat").is_file()
+
+
+def test_a_world_in_a_plain_zip_is_imported_as_a_world(tmp_path):
+    prefix = tmp_path / "prefix"
+    account = _signed_in(prefix)
+    archive = _world_zip(tmp_path / "Lava Fishing.zip", folder="Lava/",
+                         extra=["behavior_packs/bp/manifest.json"])
+
+    result = content.import_content(archive, prefix=prefix)
+
+    # The world's own packs stay inside it: no separate behaviour pack.
+    assert result == ["world: Lava Fishing"]
+    world = account / "minecraftWorlds" / "Lava Fishing"
+    assert (world / "behavior_packs" / "bp" / "manifest.json").is_file()
+
+
+def test_an_unpacked_folder_is_imported(tmp_path):
+    prefix = tmp_path / "prefix"
+    account = _signed_in(prefix)
+    world = tmp_path / "My Map"
+    (world / "db").mkdir(parents=True)
+    (world / "level.dat").write_bytes(b"")
+    pack = tmp_path / "Cool Pack"
+    pack.mkdir()
+    (pack / "manifest.json").write_text(json.dumps(
+        _pack_manifest("Cool Pack", "resources")))
+
+    assert content.import_content(world, prefix=prefix) == ["world: My Map"]
+    assert content.import_content(pack, prefix=prefix) == \
+        ["resource pack: Cool Pack"]
+    assert (account / "minecraftWorlds" / "My Map" / "level.dat").is_file()
+    # The original folders are copied, not moved.
+    assert (world / "level.dat").is_file() and (pack / "manifest.json").is_file()
+
+
+def test_something_that_is_no_minecraft_content_says_where_to_look(tmp_path):
+    prefix = tmp_path / "prefix"
+    archive = tmp_path / "sodium.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("fabric.mod.json", "{}")
+
+    with pytest.raises(BolError, match="no manifest.json"):
+        content.import_content(archive, prefix=prefix)
+
+
+def test_java_edition_mods_are_named_as_such(tmp_path):
+    archive = tmp_path / "Lava Fishing-EXTRACT_ME.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("lavafishing-1.21.1-all.jar", "PK")
+
+    with pytest.raises(BolError, match="Java Edition"):
+        content.import_content(archive, prefix=tmp_path / "prefix")
+
+
+def test_a_levilamina_mod_or_a_dll_is_sent_to_the_mods_page(tmp_path):
+    prefix = tmp_path / "prefix"
+    archive = tmp_path / "LeviOptimize.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("LeviOptimize/manifest.json", json.dumps(
+            {"name": "LeviOptimize", "entry": "LeviOptimize.dll",
+             "type": "native"}))
+        package.writestr("LeviOptimize/LeviOptimize.dll", "MZ")
+    dll = tmp_path / "client.mcpack"
+    dll.write_bytes(b"MZ\x90\x00" + b"\0" * 100)
+
+    with pytest.raises(BolError, match="LeviLamina mod"):
+        content.import_content(archive, prefix=prefix)
+    with pytest.raises(BolError, match="Windows program"):
+        content.import_content(dll, prefix=prefix)
+    # Nothing landed among the packs.
+    assert not (content._mojang_dir(prefix) / "resource_packs").exists()

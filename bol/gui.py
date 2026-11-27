@@ -1078,6 +1078,48 @@ class SettingSpinBox(QSpinBox):
             event.ignore()
 
 
+def pick_paths(parent, title, name_filter, on_chosen, multiple=True,
+               folder=False, start=""):
+    """Ask for files (or a folder) without blocking the launcher.
+
+    QFileDialog's static functions run an application-modal loop: when the
+    dialog never reaches the screen -- placed off-screen or behind the
+    window by the compositor, as reported on KDE Plasma (#368) -- every
+    window stays blocked and the launcher looks frozen until it is killed.
+    This one is modeless: the launcher keeps working, and asking again
+    brings the same dialog back instead of opening a second one.
+    ``on_chosen`` gets a list of paths, never an empty one.
+    """
+    dialog = getattr(parent, "_bol_path_picker", None)
+    if dialog is not None and _alive(dialog) and dialog.isVisible():
+        dialog.showNormal()
+        dialog.raise_()
+        dialog.activateWindow()
+        return dialog
+    dialog = QFileDialog(parent, title, start or str(Path.home()),
+                         name_filter)
+    if folder:
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+    else:
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles if multiple
+                           else QFileDialog.FileMode.ExistingFile)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    dialog.setWindowModality(Qt.WindowModality.NonModal)
+
+    def chosen(paths):
+        paths = [p for p in paths if p]
+        if paths:
+            on_chosen(paths)
+
+    dialog.filesSelected.connect(chosen)
+    parent._bol_path_picker = dialog
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+    return dialog
+
+
 def tool_row(text, cmd, tip=None, danger=False) -> QPushButton:
     """A full-width, left-aligned action row for Settings ▸ Tools."""
     return btn(text, cmd, kind="toolrow-danger" if danger else "toolrow", h=44, tip=tip)
@@ -1698,6 +1740,7 @@ def _version_label(v):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setAcceptDrops(True)
         self.settings = load_settings()
         self.theme = Theme(dark=not self.settings.get("light_theme", False),
                             beta=self.settings.get("ui_is_beta", False))
@@ -2141,6 +2184,27 @@ class MainWindow(QMainWindow):
         if self.mods_page is None or \
                 self.stack.currentWidget() is not self.mods_page:
             self.toggle_mods()
+
+    # Files dropped anywhere on the window are imported into the game, the
+    # way the Add-ons & Maps page imports them.
+    def dragEnterEvent(self, event):  # noqa: N802 - Qt override
+        from .gui_content import dropped_paths  # noqa: PLC0415
+        if dropped_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):  # noqa: N802 - Qt override
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):  # noqa: N802 - Qt override
+        from .gui_content import dropped_paths  # noqa: PLC0415
+        paths = dropped_paths(event.mimeData())
+        if not paths:
+            return
+        event.acceptProposedAction()
+        self.open_content()
+        self.content_page.import_files(paths)
 
     def open_content(self, kind=None, query=None, slug=None):
         """Show the Add-ons & Maps page, optionally on a kind, a search or
@@ -4762,11 +4826,12 @@ class MainWindow(QMainWindow):
                 "Minecraft's own ray tracing shaders are back." if changed
                 else "BetterRTX is not installed in this Minecraft version."))
 
-    def _do_import(self):
-        files, _ = QFileDialog.getOpenFileNames(
-            self, "Import Minecraft content", "",
-            "Minecraft content (*.mcpack *.mcaddon *.mcworld *.mctemplate *.mcskin);;All files (*.*)")
+    def _do_import(self, files=None):
         if not files:
+            pick_paths(self, "Import Minecraft content",
+                       "Minecraft content (*.mcpack *.mcaddon *.mcworld "
+                       "*.mctemplate *.mcskin *.zip);;All files (*.*)",
+                       self._do_import)
             return
         self.tools_status_label.setText("Importing…")
 
@@ -4777,17 +4842,13 @@ class MainWindow(QMainWindow):
                     done.extend(import_content(f))
                 except Exception as e:
                     errs.append(f"{Path(f).name}: {e}")
-            return done, errs
+            return done, errs, bool(done) and _mc_running()
 
         def finished(result):
-            done, errs = result
+            from .gui_content import import_summary  # noqa: PLC0415
+            done, errs, running = result
             self.tools_status_label.setText("")
-            msg = f"Imported {len(done)} item(s)." if done else "Nothing imported."
-            if errs:
-                msg += "\n\nProblems:\n• " + "\n• ".join(errs)
-            if _mc_running():
-                msg += "\n\nMinecraft is running — restart it to see the new content."
-            self.info_box("Import", msg)
+            self.info_box("Import", import_summary(done, errs, running))
 
         def failed(message):
             self.tools_status_label.setText("")

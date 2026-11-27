@@ -249,72 +249,277 @@ def _expand_nested(root: Path, depth=3):
     return worlds
 
 
+_ARCHIVE_KINDS = (
+    (b"Rar!\x1a\x07", "RAR"),
+    (b"7z\xbc\xaf\x27\x1c", "7-Zip"),
+    (b"\x1f\x8b", "gzip"),
+    (b"\xfd7zXZ\x00", "xz"),
+    (b"BZh", "bzip2"),
+)
+
+
+def _sniff(src: Path):
+    """(kind, what to tell the player) for a file that is not a zip."""
+    try:
+        size = src.stat().st_size
+        with open(src, "rb") as stream:
+            head = stream.read(512)
+    except OSError as exc:
+        return "unreadable", f"{src.name} cannot be read ({exc})."
+    if size == 0:
+        return "empty", (f"{src.name} is empty: its download did not "
+                         "finish. Download it again.")
+    if head.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return "damaged-zip", (
+            f"{src.name} is cut short: its download stopped before the end, "
+            "or the file was damaged on the way. Download it again.")
+    for magic, kind in _ARCHIVE_KINDS:
+        if head.startswith(magic):
+            return kind, None
+    if head[257:262] == b"ustar":
+        return "tar", None
+    if head.startswith(b"MZ"):
+        return "windows", (
+            f"{src.name} is a Windows program or DLL, not Minecraft content. "
+            "LeviLamina mods go on the Mods page; other client DLLs in "
+            "Settings ▸ Tools ▸ Inject.")
+    text = head.lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    if text.startswith((b"<!doctype", b"<html", b"<head", b"<?xml",
+                        b"<meta", b"<script")):
+        return "web-page", (
+            f"{src.name} is a web page, not the content: the site sent "
+            "its download page instead of the file (a link shortener or an "
+            "advert page in between). Open the page in your browser, use its "
+            "real download button, and import the file that gives.")
+    return "unknown", (
+        f"{src.name} is not a Minecraft file: .mcpack, .mcaddon, .mcworld "
+        "and .mctemplate files are zip archives, and this one is not. If it "
+        "came in another archive, extract it first, then import what it "
+        "holds (or its folder).")
+
+
+def _repair_zip(src: Path, work: Path):
+    """A readable copy of a zip with something stuck after its end, or None.
+
+    Python only looks for a zip's directory in the last 64 KiB, so a zip a
+    download tool padded or appended to reads as "not a zip" although every
+    byte of it is there.
+    """
+    import mmap  # noqa: PLC0415
+    try:
+        with open(src, "rb") as stream, \
+                mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            end = data.rfind(b"PK\x05\x06")
+            if end < 0 or end + 22 > len(data):
+                return None
+            comment = int.from_bytes(data[end + 20:end + 22], "little")
+            fixed = work / ("repaired" + src.suffix.lower())
+            with open(fixed, "wb") as out:
+                out.write(data[:min(len(data), end + 22 + comment)])
+    except (OSError, ValueError):
+        return None
+    return fixed if zipfile.is_zipfile(fixed) else None
+
+
+def _extract_with_tool(src: Path, kind: str, dest: Path):
+    """Unpack a RAR/7-Zip/tar archive with whatever the system has.
+
+    Returns False when no tool for it is installed. Links are removed
+    afterwards: no world or pack needs one, and one could point outside.
+    """
+    import subprocess  # noqa: PLC0415
+    tools = [("bsdtar", ["-xf", str(src), "-C", str(dest)])]
+    if kind in ("RAR", "7-Zip"):
+        for name in ("7z", "7zz", "7za"):
+            tools.append((name, ["x", "-y", f"-o{dest}", str(src)]))
+    if kind == "RAR":
+        tools.append(("unrar", ["x", "-o+", "-y", str(src), str(dest) + "/"]))
+    if kind in ("tar", "gzip", "xz", "bzip2"):
+        tools.append(("tar", ["-xf", str(src), "-C", str(dest),
+                              "--no-same-owner"]))
+    for name, arguments in tools:
+        exe = shutil.which(name)
+        if not exe:
+            continue
+        result = subprocess.run([exe, *arguments], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, check=False)
+        if result.returncode == 0:
+            for path in sorted(dest.rglob("*"), reverse=True):
+                if path.is_symlink():
+                    path.unlink()
+            return True
+        die(f"{src.name} could not be unpacked ({kind}): "
+            + (result.stderr.decode("utf-8", "replace").strip()
+               .splitlines() or ["unknown error"])[-1])
+    return False
+
+
+def _is_levilamina_mod(manifest_path: Path):
+    """A LeviLamina mod's manifest: name, entry and type, no pack header."""
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig",
+                                                      errors="ignore"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(manifest, dict) and "header" not in manifest and \
+        "entry" in manifest
+
+
+def _shallowest(root: Path, name: str):
+    found = [p for p in root.rglob(name) if p.is_file()
+             and "__MACOSX" not in p.parts]
+    return min(found, key=lambda p: len(p.parts)) if found else None
+
+
+def _is_template(world: Path):
+    try:
+        manifest = json.loads((world / "manifest.json").read_text(
+            encoding="utf-8", errors="ignore"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(manifest, dict) and \
+        _pack_subfolder(manifest) == "world_templates"
+
+
+def _install_world(root: Path, name: str, template: bool, prefix,
+                   destinations):
+    sub = "world_templates" if template else "minecraftWorlds"
+    dest = _unique_path(_content_dir(sub, prefix) / sub
+                        / _safe_component(name))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(root), str(dest))
+    shutil.rmtree(dest / "__MACOSX", ignore_errors=True)
+    kind = "world template" if template else "world"
+    if destinations is not None:
+        destinations.append(dest)
+    ok(f"Imported {kind} → {dest}")
+    _report_shared_leftovers(sub, prefix)
+    return f"{kind}: {dest.name}"
+
+
+def _import_unpacked(tmp: Path, name: str, ext: str, prefix, destinations):
+    """Import what was unpacked into ``tmp`` (ours to move things out of)."""
+    level = (tmp / "level.dat") if (tmp / "level.dat").is_file() else None
+    if level is None and ext in (".mcworld", ".mctemplate"):
+        # Zipped from the folder above the world, or deeper still.
+        level = _shallowest(tmp, "level.dat")
+    if level is None:
+        _hoist_single_folder(tmp, "level.dat")
+        if (tmp / "level.dat").is_file():
+            level = tmp / "level.dat"
+    if level is not None:
+        world = level.parent
+        template = ext == ".mctemplate" or (ext != ".mcworld" and
+                                            _is_template(world))
+        return [_install_world(world, name, template, prefix, destinations)]
+    if ext in (".mcworld", ".mctemplate"):
+        die(f"{name}{ext} has no level.dat: it is not a world.")
+
+    results = []
+    worlds = _expand_nested(tmp)
+    for world in worlds:
+        results += import_content(world, prefix, destinations)
+    # World folders packed as they are (a .zip of a map, a folder of maps).
+    world_dirs = []
+    for level in sorted(tmp.rglob("level.dat"), key=lambda p: len(p.parts)):
+        folder = level.parent
+        if "__MACOSX" in folder.parts or any(
+                folder == d or d in folder.parents for d in world_dirs):
+            continue
+        world_dirs.append(folder)
+    manifests = sorted(tmp.rglob("manifest.json"), key=lambda p: len(p.parts))
+    claimed, roots, mods = [], [], []
+    for mf in manifests:
+        r = mf.parent
+        if "__MACOSX" in r.parts:
+            continue
+        # A world's own packs travel with the world.
+        if any(r == d or d in r.parents for d in world_dirs):
+            continue
+        if any(str(r).startswith(str(c) + os.sep) for c in claimed):
+            continue
+        claimed.append(r)
+        if _is_levilamina_mod(mf):
+            mods.append(r)
+            continue
+        roots.append(r)
+    if not roots and not worlds and not world_dirs:
+        if mods:
+            die(f"{name}{ext} is a LeviLamina mod, not an add-on: install it "
+                "on the Mods page (Installed ▸ Import mod…).")
+        if any(tmp.rglob("*.jar")):
+            die(f"{name}{ext} holds Java Edition mods (.jar files). They only "
+                "run on Minecraft: Java Edition, not on Bedrock.")
+        die(f"{name}{ext} holds no Minecraft pack or world: no manifest.json "
+            "and no level.dat. It may be a mod for another program (Java "
+            "Edition, LeviLamina: see the Mods page) or need extracting "
+            "first.")
+    for folder in world_dirs:
+        label = folder.name if folder != tmp else name
+        results.append(_install_world(folder, label, _is_template(folder),
+                                      prefix, destinations))
+    for r in roots:
+        sub, dest = _install_pack_tree(r, prefix, name)
+        if destinations is not None:
+            destinations.append(dest)
+        label = sub.rstrip("s").replace("_", " ")
+        results.append(f"{label}: {dest.name}")
+        ok(f"Imported {label} → {dest}")
+    return results
+
+
 def import_content(src, prefix=None, destinations=None):
     """Import a .mcpack/.mcaddon/.mcworld/.mctemplate/.mcskin into the game.
 
-    Returns a list of human-readable result strings. A list passed as
-    ``destinations`` receives the folder each item was unpacked into, for a
-    caller that wants to take them out again (bol.catalog).
+    Also takes a .zip of any of those, an unpacked pack or world folder, and
+    archives the system can unpack (RAR, 7-Zip, tar). Returns a list of
+    human-readable result strings. A list passed as ``destinations``
+    receives the folder each item was unpacked into, for a caller that wants
+    to take them out again (bol.catalog).
     """
+    import tempfile  # noqa: PLC0415
     src = Path(src).expanduser()
-    if not src.is_file():
+    if not src.exists():
         die(f"File not found: {src}")
-    if not zipfile.is_zipfile(src):
-        die(f"Not a Minecraft content file (not a zip): {src.name}")
-    ext = src.suffix.lower()
-    stem = src.stem
-    results = []
-
-    if ext in (".mcworld", ".mctemplate"):
-        sub = "minecraftWorlds" if ext == ".mcworld" else "world_templates"
-        dest = _unique_path(_content_dir(sub, prefix) / sub
-                            / _safe_component(stem))
-        dest.mkdir(parents=True, exist_ok=True)
-        _extract(src, dest)
-        _hoist_single_folder(dest, "level.dat")
-        kind = "world" if ext == ".mcworld" else "world template"
-        if destinations is not None:
-            destinations.append(dest)
-        results.append(f"{kind}: {dest.name}")
-        ok(f"Imported {kind} → {dest}")
-        _report_shared_leftovers(sub, prefix)
-        return results
-
-    tmp = _mojang_dir(prefix) / ".bol-import-tmp"
-    shutil.rmtree(tmp, ignore_errors=True)
-    tmp.mkdir(parents=True, exist_ok=True)
+    ext = "" if src.is_dir() else src.suffix.lower()
+    name = src.name if src.is_dir() else src.stem
+    base = _mojang_dir(prefix)
+    base.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=".bol-import-", dir=base))
     try:
-        _extract(src, tmp)
-        worlds = _expand_nested(tmp)
-        for world in worlds:
-            results += import_content(world, prefix, destinations)
-        manifests = sorted(tmp.rglob("manifest.json"),
-                           key=lambda p: len(p.parts))
-        claimed, roots = [], []
-        for mf in manifests:
-            r = mf.parent
-            if any(str(r).startswith(str(c) + os.sep) for c in claimed):
-                continue
-            claimed.append(r)
-            roots.append(r)
-        if not roots and not worlds:
-            die(f"No manifest.json in {src.name} — not a valid pack/addon.")
-        for r in roots:
-            sub, dest = _install_pack_tree(r, prefix, stem)
-            if destinations is not None:
-                destinations.append(dest)
-            label = sub.rstrip("s").replace("_", " ")
-            results.append(f"{label}: {dest.name}")
-            ok(f"Imported {label} → {dest}")
+        tmp = work / "content"
+        if src.is_dir():
+            shutil.copytree(src, tmp, symlinks=False)
+        elif zipfile.is_zipfile(src):
+            tmp.mkdir()
+            _extract(src, tmp)
+        else:
+            kind, problem = _sniff(src)
+            repaired = _repair_zip(src, work) if kind == "damaged-zip" \
+                else None
+            if repaired is not None:
+                warn(f"{src.name} had extra data after its end; imported "
+                     "what the archive holds.")
+                tmp.mkdir()
+                _extract(repaired, tmp)
+            elif problem is None:
+                tmp.mkdir()
+                if not _extract_with_tool(src, kind, tmp):
+                    die(f"{src.name} is a {kind} archive, not a Minecraft "
+                        "file. Extract it with your archive manager, then "
+                        "import what it holds (or its folder).")
+            else:
+                die(problem)
+        return _import_unpacked(tmp, name, ext, prefix, destinations)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-    return results
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def cmd_import(paths):
     if not paths:
         die("Usage: bedrock-on-linux import "
-            "<file.mcpack|.mcworld|.mcaddon|.mctemplate|.mcskin> …")
+            "<file.mcpack|.mcworld|.mcaddon|.mctemplate|.mcskin|.zip|folder> …")
     if _mc_running():
         warn("Minecraft appears to be running — close it before importing so "
              "the game picks up new content on next launch.")

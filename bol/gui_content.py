@@ -21,7 +21,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
-    QButtonGroup, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea,
     QSizePolicy, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
@@ -502,6 +502,55 @@ class ContentDetails(QDialog):
             if installed else ""))
 
 
+# ---------------------------------------------------------------- import
+
+IMPORT_HINT = (".mcpack, .mcaddon, .mcworld, .mctemplate, .mcskin, a .zip of "
+               "those, or an unpacked pack or world folder. You can also drop "
+               "files on this page.")
+
+_WHERE = {
+    "world": "Worlds: Play ▸ Worlds.",
+    "world template": "World templates: Play ▸ Create New ▸ Create New "
+                      "World ▸ templates.",
+    "behavior pack": "Behavior packs: a world's Edit ▸ Behavior Packs ▸ "
+                     "Available, then Activate. Many add-ons also need "
+                     "the world's Experiments switched on.",
+    "resource pack": "Resource packs: Settings ▸ Global Resources, or a "
+                     "world's Edit ▸ Resource Packs.",
+    "skin pack": "Skins: Dressing Room ▸ Classic Skins ▸ Owned.",
+}
+
+
+def dropped_paths(mime):
+    """Local files and folders in a drop, as paths."""
+    if mime is None or not mime.hasUrls():
+        return []
+    return [url.toLocalFile() for url in mime.urls()
+            if url.isLocalFile() and url.toLocalFile()]
+
+
+def import_summary(done, errors, running=False):
+    """What an import did, and where the player finds each kind in game."""
+    if done:
+        lines = ["Imported:"] + [f"• {item}" for item in done]
+        kinds = []
+        for item in done:
+            kind = item.split(":", 1)[0]
+            if kind in _WHERE and kind not in kinds:
+                kinds.append(kind)
+        if kinds:
+            lines += ["", "Where to find them in Minecraft:"]
+            lines += [f"• {_WHERE[kind]}" for kind in kinds]
+    else:
+        lines = ["Nothing imported."]
+    if errors:
+        lines += ["", "Problems:"] + [f"• {e}" for e in errors]
+    if done and running:
+        lines += ["", "Minecraft is running: restart it to see the new "
+                      "content."]
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- page
 
 class ContentPage(QFrame):
@@ -541,8 +590,7 @@ class ContentPage(QFrame):
         head.addWidget(sub)
         head.addStretch(1)
         head.addWidget(_button("Import file…", "Ghost", self.import_files,
-                               tip=".mcpack, .mcaddon, .mcworld, "
-                                   ".mctemplate or .mcskin"))
+                               tip=IMPORT_HINT))
         head.addWidget(_button("Game folder", "Ghost", self._open_game_folder,
                                tip="The game's com.mojang folder"))
         outer.addLayout(head)
@@ -565,6 +613,24 @@ class ContentPage(QFrame):
         self.op_bar.hide()
         foot.addWidget(self.op_bar)
         outer.addLayout(foot)
+        # Files and folders dropped anywhere on the page are imported.
+        self.setAcceptDrops(True)
+
+    # ------------------------------------------------------------ drops
+    def dragEnterEvent(self, event):  # noqa: N802 - Qt override
+        if dropped_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):  # noqa: N802 - Qt override
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):  # noqa: N802 - Qt override
+        paths = dropped_paths(event.mimeData())
+        if paths:
+            event.acceptProposedAction()
+            self.import_files(paths)
 
     # ------------------------------------------------------------ layout
     def _build_discover(self):
@@ -670,6 +736,13 @@ class ContentPage(QFrame):
         bar.addWidget(_button("↻", "IconBtn", self.load_library, width=34,
                               tip="Look again"))
         v.addLayout(bar)
+        hint = QLabel("Your own add-ons: drop .mcpack, .mcaddon, .mcworld, "
+                      ".mctemplate, .mcskin or .zip files (or an unpacked "
+                      "pack or world folder) on this page, or use Import "
+                      "file… above.")
+        hint.setObjectName("Muted")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
         area = QScrollArea()
         area.setWidgetResizable(True)
         area.setFrameShape(QFrame.NoFrame)
@@ -930,14 +1003,21 @@ class ContentPage(QFrame):
         if self._run("content-install", work, done, on_fail=failed):
             self._set_busy(True)
 
-    def import_files(self):
-        files, _ = QFileDialog.getOpenFileNames(
-            self.win, "Import Minecraft content", "",
-            "Minecraft content (*.mcpack *.mcaddon *.mcworld *.mctemplate "
-            "*.mcskin *.zip);;All files (*.*)")
+    def import_files(self, files=None):
         if not files:
+            from .gui import pick_paths  # noqa: PLC0415 - avoids a cycle
+            pick_paths(self.win, "Import Minecraft content",
+                       "Minecraft content (*.mcpack *.mcaddon *.mcworld "
+                       "*.mctemplate *.mcskin *.zip);;All files (*.*)",
+                       self.import_files)
+            return
+        if self.busy:
+            QMessageBox.information(self.win, "Import",
+                                    "Wait for the current install to finish, "
+                                    "then import again.")
             return
         from .content import import_content  # noqa: PLC0415
+        from .prefix import _mc_running  # noqa: PLC0415
 
         def work():
             done, errors = [], []
@@ -946,16 +1026,15 @@ class ContentPage(QFrame):
                     done.extend(import_content(f))
                 except Exception as exc:  # noqa: BLE001 - listed to the user
                     errors.append(f"{Path(f).name}: {exc}")
-            return done, errors
+            return done, errors, bool(done) and _mc_running()
 
         def finished(result):
-            done, errors = result
+            done, errors, running = result
             self._set_busy(False)
             self._set_op(f"Imported {len(done)} item(s)." if done
                          else "Nothing imported.")
-            if errors:
-                QMessageBox.warning(self.win, "Import",
-                                    "Problems:\n• " + "\n• ".join(errors))
+            QMessageBox.information(self.win, "Import",
+                                    import_summary(done, errors, running))
             self.load_library()
 
         self._set_op("Importing…")
