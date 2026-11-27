@@ -1958,3 +1958,106 @@ class StallWatchTests(unittest.TestCase):
         said = " ".join(call.args[0] for call in warned.call_args_list)
         self.assertIn("Retrying from another Microsoft mirror", said)
         self.assertIn("Nothing reached the download", said)
+
+
+class CancelDownloadTests(unittest.TestCase):
+    """KILL stops a download, not only Wine (#202).
+
+    A build picked by mistake went on downloading while the player pressed
+    KILL: the button stopped the prefix's processes, and a download is none of
+    them.
+    """
+
+    setUp = StallWatchTests.setUp
+    _binary = StallWatchTests._binary
+    _limits = StallWatchTests._limits
+    _FRAME = StallWatchTests._FRAME
+
+    def _install_in_thread(self, binary, dest, progress=None):
+        outcome = {}
+
+        def run():
+            try:
+                outcome["result"] = xodus.install(
+                    ["http://assets1.xboxlive.com/p.msixvc",
+                     "http://assets2.xboxlive.com/p.msixvc"], dest, progress)
+            except BaseException as exc:  # Cancelled is not an Exception
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        return thread, outcome
+
+    def _patched(self, binary):
+        stack = contextlib.ExitStack()
+        stack.enter_context(self._limits(notice=60, limit=120))
+        stack.enter_context(
+            mock.patch.object(xodus, "ensure_cli", return_value=binary))
+        stack.enter_context(
+            mock.patch.object(xodus, "signed_in", return_value=True))
+        stack.enter_context(
+            mock.patch.object(xodus, "_package_size", return_value=0))
+        return stack
+
+    def test_nothing_to_stop_when_no_download_runs(self):
+        self.assertFalse(xodus.cancel_download())
+        # And a stop asked for with nothing running is not left armed for
+        # the next download.
+        self.assertFalse(xodus._download_cancelled())
+
+    def test_a_stopped_download_ends_at_once_and_tries_no_other_mirror(self):
+        dest = self.tmp / "1.26.63.1"
+        binary = self._binary(self._FRAME + "exec sleep 30\n")
+        with self._patched(binary):
+            started = time.monotonic()
+            thread, outcome = self._install_in_thread(binary, dest)
+            deadline = time.monotonic() + 10
+            while xodus._DOWNLOAD["proc"] is None \
+                    and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(xodus.cancel_download())
+            thread.join(15)
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertIsInstance(outcome.get("error"), xodus.Cancelled)
+        self.assertEqual(str(outcome["error"]),
+                         xodus.DOWNLOAD_CANCELLED_MESSAGE)
+        # A build that was not here before is not left half-there, where the
+        # version list could take it for an installed one.
+        self.assertFalse(dest.exists())
+        log = (self.tmp / "store-download.log").read_text()
+        self.assertIn("attempt 1", log)
+        self.assertNotIn("attempt 2", log)
+        self.assertFalse(xodus.cancel_download())
+
+    def test_a_stop_from_the_progress_callback_kills_the_downloader(self):
+        dest = self.tmp / "1.26.63.1"
+        binary = self._binary(
+            "while :; do\n  " + self._FRAME + "  sleep 0.1\ndone\n")
+
+        def progress(got, total):
+            raise xodus.Cancelled(xodus.DOWNLOAD_CANCELLED_MESSAGE)
+
+        with self._patched(binary):
+            started = time.monotonic()
+            thread, outcome = self._install_in_thread(binary, dest, progress)
+            thread.join(15)
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertIsInstance(outcome.get("error"), xodus.Cancelled)
+        self.assertFalse(dest.exists())
+
+    def test_stopping_an_update_keeps_the_build_already_there(self):
+        dest = self.tmp / "1.26.65.1"
+        _install_build(dest)
+        binary = self._binary(self._FRAME + "exec sleep 30\n")
+        with self._patched(binary):
+            thread, outcome = self._install_in_thread(binary, dest)
+            deadline = time.monotonic() + 10
+            while xodus._DOWNLOAD["proc"] is None \
+                    and time.monotonic() < deadline:
+                time.sleep(0.05)
+            xodus.cancel_download()
+            thread.join(15)
+        self.assertIsInstance(outcome.get("error"), xodus.Cancelled)
+        self.assertIsNotNone(xodus.game_root(dest))

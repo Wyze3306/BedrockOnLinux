@@ -50,7 +50,7 @@ from .config import (
     XODUS_KEYRING,
     XODUS_REV,
 )
-from .log import BolError, fixable, info, ok, warn
+from .log import BolError, Cancelled, fixable, info, ok, warn
 from .util import _fetch_with_fallback, asset_url, download, gh_releases
 
 
@@ -1414,6 +1414,7 @@ def install(product, dest: Path, progress=None, exe=BEDROCK_EXE, title=None):
                else [str(source) for source in product])
     if not sources:
         raise XodusError("This Minecraft build has no download location.")
+    created = not dest.exists()
     dest.mkdir(parents=True, exist_ok=True)
 
     # A package cache with no build beside it is what an attempt that never
@@ -1440,11 +1441,23 @@ def install(product, dest: Path, progress=None, exe=BEDROCK_EXE, title=None):
     plan = list(sources)
     races_left = _CACHE_RACE_RETRIES
     log = _open_download_log(dest)
+    with _DOWNLOAD_LOCK:
+        _DOWNLOAD.update(active=True, proc=None, cancelled=False)
     try:
         return _stream_until_installed(
             binary, dest, plan, races_left, needed, progress, log,
             exe=exe, title=title)
+    except Cancelled:
+        # What a stopped download leaves cannot be resumed (see _drop_cache),
+        # and a build that was not here before it started is not here now:
+        # leave no folder the version list could take for one.
+        _drop_cache(dest, exe)
+        if created and game_root(dest, exe) is None:
+            shutil.rmtree(dest, ignore_errors=True)
+        raise
     finally:
+        with _DOWNLOAD_LOCK:
+            _DOWNLOAD.update(active=False, proc=None, cancelled=False)
         if log:
             try:
                 log.close()
@@ -1468,6 +1481,9 @@ def _stream_until_installed(binary, dest, plan, races_left, needed, progress,
         _note(log, f"\n== attempt {attempt}: {source}")
         code, tail = _run_streaming(cmd, progress, record)
         _note(log, f"-- exit {code}")
+        if _download_cancelled():
+            _note(log, "-- stopped from the launcher")
+            raise Cancelled(DOWNLOAD_CANCELLED_MESSAGE)
         root = game_root(dest, exe)
         if code == 0 and root is not None and has_package_cache(dest):
             _note(log, "-- installed")
@@ -1570,6 +1586,34 @@ def _drawable_term(env):
 # mirror gets its turn.
 _STALL_NOTICE = 90
 _STALL_LIMIT = 600
+
+# The download running now, so the window's KILL can stop it (#202). KILL used
+# to stop only Wine, and a download is not Wine: a build picked by mistake went
+# on downloading in front of the player. "active" spans the whole run of
+# mirrors, not just one xodus-cli, so a stop between two attempts holds too.
+DOWNLOAD_CANCELLED_MESSAGE = "The download was stopped."
+_DOWNLOAD = {"active": False, "proc": None, "cancelled": False}
+_DOWNLOAD_LOCK = threading.Lock()
+
+
+def cancel_download():
+    """Stop the download in progress; whether there was one to stop."""
+    with _DOWNLOAD_LOCK:
+        if not _DOWNLOAD["active"]:
+            return False
+        _DOWNLOAD["cancelled"] = True
+        proc = _DOWNLOAD["proc"]
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    return True
+
+
+def _download_cancelled():
+    with _DOWNLOAD_LOCK:
+        return _DOWNLOAD["cancelled"]
 _WRITE_ERROR = re.compile(r"Error write file (?P<error>.+?) waiting \d+s")
 
 
@@ -1640,6 +1684,11 @@ def _run_streaming(cmd, progress=None, record=None):
         raise XodusError(f"Could not start the Minecraft downloader: {exc}") \
             from exc
     os.close(slave)
+    with _DOWNLOAD_LOCK:
+        _DOWNLOAD["proc"] = proc
+        stop = _DOWNLOAD["cancelled"]
+    if stop:
+        proc.kill()
     buffer = ""
     # A process that has exited is not a stream that has ended: what it wrote
     # on its way out is still in the pty, and a panic message is written
@@ -1684,9 +1733,16 @@ def _run_streaming(cmd, progress=None, record=None):
                      "own and carries on when the connection comes back; "
                      f"after {_duration(_STALL_LIMIT)} without anything, it "
                      "starts again from another Microsoft mirror.")
+    except BaseException:
+        # A stop raised from the progress callback, or anything else leaving
+        # early: wait() below would otherwise sit out the rest of the download.
+        proc.kill()
+        raise
     finally:
         os.close(master)
         proc.wait()
+        with _DOWNLOAD_LOCK:
+            _DOWNLOAD["proc"] = None
     if buffer:
         _consume(_ANSI.sub("", buffer), tail, progress, recorded)
     if stalled:

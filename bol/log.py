@@ -129,6 +129,15 @@ class BolError(Exception):
     player_fixable = False
 
 
+class Cancelled(BaseException):
+    """The player stopped what PLAY was doing, a download most of all (#202).
+
+    Not an Exception: the downloads retry on any Exception, from another
+    mirror or after a pause, and a stop taken for one more failure is the
+    download that "would not stop and just continued".
+    """
+
+
 def fixable(exc):
     """Mark ``exc`` as a failure the player fixes from its message alone."""
     exc.player_fixable = True

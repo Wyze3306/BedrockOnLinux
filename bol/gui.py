@@ -51,7 +51,7 @@ from .launch import direct_launch_readiness, launch, single_window_session
 from . import saves
 from .navigation import ControllerNav
 from . import log, supervision
-from .log import BolError, _LEVELS, desktop_notify, is_fixable, warn
+from .log import BolError, Cancelled, _LEVELS, desktop_notify, is_fixable, warn
 from .prefix import _mc_running, kill_wine, prefix_operation_lock, reset_prefix
 from .profiles import (
     create_profile, current_profile_info, current_profile_name, delete_profile,
@@ -1663,17 +1663,46 @@ class LaunchWorker(QThread):
     # What the session left the player to know, said in a dialog rather than
     # in a log nobody has open when the game closes.
     session_notice = Signal(str)
+    # The player pressed KILL before the game was started: nothing failed.
+    cancelled = Signal(str)
 
     def __init__(self, ver, editor=False, hidden=False):
         super().__init__()
         self._ver = ver
         self._editor = editor
         self._hidden = hidden
+        self._setting_up = True
+        self._stop = False
+
+    def cancel(self):
+        """Stop the download or setup still ahead of the game (#202).
+
+        False once the game has been started: what is running then is Wine,
+        and KILL stops Wine as it always has.
+        """
+        if not self._setting_up:
+            return False
+        self._stop = True
+        from .xodus import cancel_download
+        cancel_download()
+        return True
+
+    def _progress(self, got, total):
+        # Every downloader reports here, so this is where any of them stops:
+        # the engine, a Windows Update package, another title's files.
+        if self._stop:
+            from .xodus import DOWNLOAD_CANCELLED_MESSAGE
+            raise Cancelled(DOWNLOAD_CANCELLED_MESSAGE)
+        self.progress.emit(got, total)
 
     def run(self):
         try:
             setup_or_join(self._ver["edition"], self._ver["tag"],
-                          progress=lambda g, t: self.progress.emit(g, t))
+                          progress=self._progress)
+            if self._stop:
+                from .xodus import DOWNLOAD_CANCELLED_MESSAGE
+                raise Cancelled(DOWNLOAD_CANCELLED_MESSAGE)
+            self._setting_up = False
             action = window_action_for_launch(load_settings(), single_window_session())
 
             def on_started():
@@ -1694,6 +1723,9 @@ class LaunchWorker(QThread):
             for notice in notices:
                 self.session_notice.emit(notice)
             self.done.emit("closed")
+        except Cancelled as exc:
+            self.come_back.emit()
+            self.cancelled.emit(str(exc))
         except Exception as exc:
             self.come_back.emit()
             message = str(exc) or type(exc).__name__
@@ -3556,6 +3588,7 @@ class MainWindow(QMainWindow):
         w.step_aside.connect(self._step_aside_for_game)
         w.come_back.connect(self._come_back_from_game)
         w.session_notice.connect(self._show_session_notice)
+        w.cancelled.connect(self._play_cancelled)
         self.ui_state["launch_active"] = True
         if not self._start_worker("play", w):
             # The previous launch thread is still on its way out. Leaving the
@@ -3641,6 +3674,27 @@ class MainWindow(QMainWindow):
     def _play_failed_fixable(self, message):
         """A failure the player resolves from the message itself."""
         self._play_failed(message, report=False)
+
+    def _kill_clicked(self):
+        """KILL: stop the download PLAY is still on, or else the game (#202)."""
+        worker = self._workers.get("play")
+        if isinstance(worker, LaunchWorker) and worker.isRunning() \
+                and worker.cancel():
+            self.set_status("Stopping the download…", self.theme.gold)
+            return
+        kill_wine()
+
+    def _play_cancelled(self, message):
+        self.ui_state["launch_active"] = False
+        self.ui_state.pop("store_signin_offered", None)
+        log._LOG_SINK(f"!! {message}")
+        if self.ui_state.get("window_gone"):
+            QApplication.instance().quit()
+            return
+        self.end_progress()
+        self._set_busy(False)
+        self.set_status(message, self.theme.gold)
+        self._offer_pending_restart()
 
     def _play_failed(self, message, report=True):
         self.ui_state["launch_active"] = False
@@ -3728,7 +3782,7 @@ class MainWindow(QMainWindow):
             self.play_btn.setObjectName("Kill")
             self.play_btn.setText("⏹  KILL")
             self.play_btn.clicked.disconnect()
-            self.play_btn.clicked.connect(kill_wine)
+            self.play_btn.clicked.connect(self._kill_clicked)
         else:
             self.play_btn.setObjectName("Play")
             self.play_btn.setText("▶  PLAY")

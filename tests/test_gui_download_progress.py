@@ -109,3 +109,49 @@ class ProgressReadoutTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KillStopsTheDownloadTests(unittest.TestCase):
+    """KILL during PLAY's download stops the download (#202)."""
+
+    def test_a_stop_ends_the_download_at_its_next_progress_report(self):
+        from unittest import mock
+        from bol.log import Cancelled
+        qt_app()
+        worker = gui.LaunchWorker({"edition": None, "tag": "1.26.63.1"})
+        seen = []
+        worker.progress.connect(lambda got, total: seen.append(got))
+        worker._progress(1, PACKAGE_BYTES)
+        with mock.patch("bol.xodus.cancel_download") as stop:
+            self.assertTrue(worker.cancel())
+        stop.assert_called_once_with()
+        with self.assertRaises(Cancelled):
+            worker._progress(2, PACKAGE_BYTES)
+        self.assertEqual(seen, [1])
+
+    def test_a_stop_after_setup_never_starts_the_game(self):
+        from unittest import mock
+        qt_app()
+        worker = gui.LaunchWorker({"edition": None, "tag": "1.26.63.1"})
+        stopped, failed = [], []
+        worker.cancelled.connect(stopped.append)
+        worker.failed.connect(failed.append)
+
+        def setup(*args, **kwargs):
+            # The stop arrives while setup is busy with something that never
+            # reports progress, a prefix being made, say.
+            worker.cancel()
+
+        with mock.patch.object(gui, "setup_or_join", side_effect=setup), \
+                mock.patch("bol.xodus.cancel_download"), \
+                mock.patch.object(gui, "launch") as launch:
+            worker.run()
+        launch.assert_not_called()
+        self.assertEqual(len(stopped), 1)
+        self.assertEqual(failed, [])
+
+    def test_once_the_game_runs_kill_is_for_wine_again(self):
+        qt_app()
+        worker = gui.LaunchWorker({"edition": None, "tag": "1.26.63.1"})
+        worker._setting_up = False
+        self.assertFalse(worker.cancel())
