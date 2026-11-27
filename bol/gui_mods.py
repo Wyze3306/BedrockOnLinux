@@ -18,7 +18,7 @@ from PySide6.QtCore import QObject, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QPainter, QPainterPath, QPalette,
                            QPixmap, QTextDocument)
 from PySide6.QtWidgets import (
-    QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea,
     QSizePolicy, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
@@ -331,7 +331,7 @@ class InstalledRow(QFrame):
                                item["enabled"],
                                "Load this mod when the game starts",
                                theme=page.win.theme)
-            switch.setFixedWidth(118)
+            switch.setMinimumWidth(118)
             switch.switch.toggled.connect(
                 lambda on, s=switch: self._toggle(on, s))
             switch.setEnabled(not page.busy)
@@ -607,7 +607,9 @@ class ModsPage(QFrame):
         row.addWidget(self.play_build_btn)
         self.ll_action = self._small("Install LeviLamina", "Primary",
                                      self._ll_action)
-        self.ll_action.setFixedWidth(150)
+        # A minimum, not a fixed width: with larger fonts or a HiDPI scale
+        # a fixed 150 px cut "Install LeviLamina" to "nstall LeviLamin".
+        self.ll_action.setMinimumWidth(150)
         row.addWidget(self.ll_action)
         self.ll_remove = self._small("Uninstall", "DangerSmall",
                                      self._ll_remove)
@@ -694,7 +696,8 @@ class ModsPage(QFrame):
                                       self._import)
         self.import_btn.setToolTip(
             "Add a mod of your own: a .zip with a LeviLamina manifest.json, "
-            "a mod folder, or a lone .dll")
+            "a mod folder, or a lone .dll. A LeviLamina release .zip from "
+            "GitHub installs LeviLamina itself.")
         bar.addWidget(self.import_btn)
         self.import_dir_btn = self._small("Import folder…", "Ghost",
                                           lambda: self._import(folder=True))
@@ -970,7 +973,9 @@ class ModsPage(QFrame):
                 + (" (trying anyway)" if forced else ""))
             self.status_detail.setText(
                 "The mod loader goes in this build's folder and starts with "
-                "the game. Installing any mod installs it too.")
+                "the game. Installing any mod installs it too. Downloaded "
+                "LeviLamina yourself? Import its release .zip from the "
+                "Installed tab.")
             self.ll_action.setText("Install LeviLamina")
             self.ll_action.setObjectName("Primary")
         else:
@@ -1266,7 +1271,7 @@ class ModsPage(QFrame):
         self._on_build()
 
     def _ll_action(self):
-        self.install([mods.LEVILAMINA + "#client"], "LeviLamina")
+        self.install([mods.LEVILAMINA], "LeviLamina")
 
     def _ll_remove(self):
         if QMessageBox.question(
@@ -1289,18 +1294,24 @@ class ModsPage(QFrame):
                             d, progress=progress, log=log),
                         success)
 
-    def _import(self, folder=False):
-        if folder:
-            path = QFileDialog.getExistingDirectory(self.win,
-                                                    "Import a mod folder")
-        else:
-            path, _ = QFileDialog.getOpenFileName(
-                self.win, "Import a mod", str(Path.home()),
-                "LeviLamina mods (*.zip *.dll);;All files (*)")
-        if not path:
+    def _import(self, folder=False, path=None):
+        if path is None:
+            from .gui import pick_paths  # noqa: PLC0415 - avoids a cycle
+            pick_paths(self.win,
+                       "Import a mod folder" if folder else "Import a mod",
+                       "LeviLamina mods or a LeviLamina release (*.zip *.dll);;"
+                       "All files (*)",
+                       lambda paths: self._import(folder, paths[0]),
+                       multiple=False, folder=folder)
             return
 
         def work(d, log, progress):
+            # A LeviLamina release downloaded by hand: installed like the
+            # button does, with PreLoader and the runtime data it needs.
+            if not folder and mods.levilamina_release(path):
+                mods.import_levilamina(d, path, progress=progress, log=log)
+                return ("levilamina", "LeviLamina was installed from "
+                                      f"{Path(path).name}.")
             try:
                 return mods.import_mod(d, path)
             except mods.ModError as exc:
@@ -1310,7 +1321,8 @@ class ModsPage(QFrame):
 
         def success(result):
             if isinstance(result, tuple):
-                QTimer.singleShot(0, lambda: self._import_overwrite(path))
+                if result[0] == "exists":
+                    QTimer.singleShot(0, lambda: self._import_overwrite(path))
                 return result[1]
             return f"Imported {result}."
 

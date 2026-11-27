@@ -279,6 +279,118 @@ def test_installing_a_mod_brings_levilamina_its_preloader_and_the_loader(
         "catalogue"
 
 
+def _add_levilamina_by_side(registry, version):
+    """LeviLamina as 26.60.9 lays it out: no "client" label, both builds in
+    the default variant, told apart by side."""
+    server = dict(_entry(deps={"github.com/LiteLDev/bds": "1.26.60"}),
+                  side="server")
+    client = _entry(
+        deps={"github.com/LiteLDev/PreLoader": "1.16.8",
+              "github.com/LiteLDev/PeEditor": "3.9.*"},
+        assets=[{"type": "zip", "urls": [f"https://ll/{version}"],
+                 "place": [{"src": "LeviLamina/",
+                            "dest": "mods/LeviLamina/"}]}])
+    registry.add(LL, version, {"": [server, client]}, {
+        f"https://ll/{version}": _zip({
+            "LeviLamina/manifest.json": json.dumps(
+                {"name": "LeviLamina", "entry": "LeviLamina.dll",
+                 "type": "preload-native"}),
+            "LeviLamina/LeviLamina.dll": version.encode()})})
+
+
+def test_a_levilamina_without_a_client_label_installs_by_side(
+        tmp_path, registry):
+    _add_levilamina_by_side(registry, "26.60.9")
+    game = _game(tmp_path)
+    with mock.patch.object(mods, "levilamina_versions",
+                           lambda game, refresh=False: ["26.60.9"]):
+        changed = mods.install(game, ["github.com/Example/Mod"],
+                               log=lambda m: 0)
+
+    # The mod's "LeviLamina#client" is met by the default variant, and
+    # LeviLamina still comes before the mod that needs it.
+    assert changed == ["github.com/LiteLDev/PreLoader", LL,
+                       "github.com/Example/Mod#client"]
+    assert (game / "mods/LeviLamina/LeviLamina.dll").read_bytes() == \
+        b"26.60.9"
+    assert mods.has_levilamina(game)
+    # The server build's dependencies are not the client's.
+    assert "github.com/LiteLDev/bds" not in str(mods.packages(game))
+
+
+def test_levilamina_moving_from_client_label_to_default_is_an_upgrade(
+        tmp_path, registry):
+    game = _game(tmp_path)
+    mods.install(game, ["github.com/Example/Mod"], log=lambda m: 0)
+    assert LL + "#client" in mods.packages(game)
+
+    _add_levilamina_by_side(registry, "26.60.9")
+    with mock.patch.object(mods, "levilamina_versions",
+                           lambda game, refresh=False:
+                           ["26.60.9", "26.60.6", "26.60.5"]):
+        mods.update_all(game, log=lambda m: 0)
+
+    state = mods.packages(game)
+    assert LL in state and LL + "#client" not in state
+    assert state[LL]["version"] == "26.60.9"
+    assert state[LL]["explicit"]
+    assert (game / "mods/LeviLamina/LeviLamina.dll").read_bytes() == \
+        b"26.60.9"
+    # The mod still counts LeviLamina as what it needs.
+    mods.uninstall(game, "github.com/Example/Mod")
+    assert mods.has_levilamina(game)
+
+
+def test_a_levilamina_release_zip_installs_levilamina_not_a_bare_mod(
+        tmp_path, registry, monkeypatch):
+    monkeypatch.setattr(mods, "MOD_CACHE", tmp_path / "cache")
+    # Nothing would download: the file given is what gets installed.
+    del registry.assets["https://ll/26.60.6"]
+    real = registry.download
+
+    def download(urls, label, progress=None):
+        cached = mods._asset_cache_path(urls[0])
+        if cached.is_file():
+            return cached, urls[0]
+        return real(urls, label, progress)
+
+    monkeypatch.setattr(mods, "_download_asset", download)
+    release = tmp_path / "levilamina-v26.60.6-client-release-windows-x64.zip"
+    release.write_bytes(_zip({
+        "LeviLamina/manifest.json": json.dumps(
+            {"name": "LeviLamina", "entry": "LeviLamina.dll",
+             "version": "26.60.6", "type": "preload-native"}),
+        "LeviLamina/LeviLamina.dll": b"by hand"}))
+    game = _game(tmp_path)
+
+    assert mods.levilamina_release(release) == "26.60.6"
+    mods.import_levilamina(game, release, log=lambda m: 0)
+
+    assert (game / "mods/LeviLamina/LeviLamina.dll").read_bytes() == \
+        b"by hand"
+    assert (game / "PreLoader.dll").is_file()
+    assert mods.has_levilamina(game)
+    # As a plain mod it would sit there without PreLoader: refused.
+    with pytest.raises(mods.ModError, match="not imported as a mod"):
+        mods.import_mod(game, release)
+
+
+def test_a_levilamina_release_for_another_build_is_refused(
+        tmp_path, registry):
+    release = tmp_path / "levilamina-v26.51.0-client-release-windows-x64.zip"
+    release.write_bytes(_zip({"LeviLamina/manifest.json": json.dumps(
+        {"name": "LeviLamina", "entry": "LeviLamina.dll",
+         "version": "26.51.0"})}))
+    game = _game(tmp_path)
+    with pytest.raises(mods.ModError, match="not made for Minecraft"):
+        mods.import_levilamina(game, release, log=lambda m: 0)
+    server = tmp_path / "levilamina-v26.60.6-server-release-windows-x64.zip"
+    server.write_bytes(release.read_bytes())
+    with pytest.raises(mods.ModError, match="Dedicated Server"):
+        mods.import_levilamina(game, server)
+    assert mods.levilamina_release(tmp_path) is None
+
+
 def test_a_mod_for_another_minecraft_is_refused_with_the_reason(
         tmp_path, registry):
     game = _game(tmp_path)

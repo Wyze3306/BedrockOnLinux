@@ -596,6 +596,42 @@ def pick_variant(document, wanted=None):
     return None
 
 
+def client_variant(document, variant):
+    """(label, entry) of the client build that ``variant`` asks for.
+
+    "client" is where client builds lived until packages started keeping
+    both builds in the default variant and letting lip pick by side
+    (LeviLamina from 26.60.9: ``[[variants.""]]`` with a server and a client
+    entry). A request for "client" is met by the default variant's client
+    entry when the package has no "client" label. (None, None) when neither
+    is there.
+    """
+    entry = client_entry(document, variant)
+    if entry is None and variant == "client":
+        variant, entry = "", client_entry(document, "")
+    return (variant, entry) if entry is not None else (None, None)
+
+
+_CLIENT_LABELS = ("client", "")
+
+
+def _dep_targets(dep, variant, keys):
+    """The identities among ``keys`` that a dependency on ``dep#variant``
+    names. A dependency on LeviLamina, with or without "#client", is met by
+    whichever label its client build has; any "#client" one is met by the
+    default variant once a package moved its client build there."""
+    if dep == LEVILAMINA:
+        variant = None
+    if variant is not None:
+        labels = _CLIENT_LABELS if variant == "client" else (variant,)
+        for label in labels:
+            key = identity(dep, label)
+            if key in keys:
+                return [key]
+        return []
+    return sorted(k for k in keys if split_key(k)[0] == dep)[:1]
+
+
 # ---------------------------------------------------------------- catalogue
 
 def catalogue(refresh=False):
@@ -971,11 +1007,12 @@ class _Resolver:
                         raise ModError(
                             f"{package_id} {version} has nothing to install "
                             "on the Windows client.")
-                entry = client_entry(document, variant)
+                asked = variant
+                variant, entry = client_variant(document, variant)
                 if entry is None:
                     raise ModError(
                         f"{package_id} {version} has no client variant "
-                        f"{variant!r} for Windows.")
+                        f"{asked!r} for Windows.")
                 key = identity(package_id, variant)
                 if key in new:
                     new[key]["explicit"] |= explicit
@@ -998,21 +1035,12 @@ class _Resolver:
         for key, node in nodes.items():
             by_id.setdefault(node["id"], []).append(key)
 
-        def targets(key):
-            dep, variant = split_key(key)
-            if dep == LEVILAMINA:
-                variant = "client"
-            if variant is not None:
-                wanted = identity(dep, variant)
-                return [wanted] if wanted in nodes else []
-            return by_id.get(dep, [])[:1]
-
         def visit(key, depth=0):
             if key in seen or depth > 64:
                 return
             seen.add(key)
             for dep_key in nodes[key]["entry"]["deps"]:
-                for target in targets(dep_key):
+                for target in _dep_targets(*split_key(dep_key), nodes):
                     visit(target, depth + 1)
             out.append(nodes[key])
 
@@ -1041,15 +1069,24 @@ def _expand(template, package_id, version):
             .replace("{{version}}", version))
 
 
+def _https(url):
+    return url if url.startswith("https://") else \
+        "https://" + url.split("://", 1)[-1]
+
+
+def _asset_cache_path(url):
+    url = _https(url)
+    return MOD_CACHE / "assets" / (_slug(url) + "-" +
+                                   (Path(url).name or "asset"))
+
+
 def _download_asset(urls, label, progress=None):
     """The first of ``urls`` that downloads, as a file in the cache."""
     from .util import download  # noqa: PLC0415 - heavy import, GUI-free path
     last = None
     for url in urls:
-        if not url.startswith("https://"):
-            url = "https://" + url.split("://", 1)[-1]
-        target = MOD_CACHE / "assets" / (_slug(url) + "-" +
-                                         (Path(url).name or "asset"))
+        url = _https(url)
+        target = _asset_cache_path(url)
         if target.is_file() and target.stat().st_size:
             return target, url
         try:
@@ -1367,10 +1404,12 @@ def _refuse_while_running(game_dir):
         raise ModError("Close Minecraft before changing its mods.")
 
 
-def install(game_dir, package_ids, progress=None, log=None, update=False):
+def install(game_dir, package_ids, progress=None, log=None, update=False,
+            levilamina=None):
     """Install packages (and what they need) into a build; LeviLamina comes
     with the first. ``update`` moves everything to the newest versions that
-    still fit. Returns the identities of what was installed or changed."""
+    still fit; ``levilamina`` holds LeviLamina to that one version. Returns
+    the identities of what was installed or changed."""
     log = log or info
     _refuse_while_running(game_dir)
     _check_build(game_dir)
@@ -1393,12 +1432,15 @@ def install(game_dir, package_ids, progress=None, log=None, update=False):
         else:
             roots[(package_id, variant)] = "*"
     roots = {k: v for k, v in roots.items() if k[0] != LEVILAMINA}
-    roots[(LEVILAMINA, "client")] = "*"
+    roots[(LEVILAMINA, "client")] = levilamina or "*"
     pins = {} if update else _pins(state)
     for package_id, _variant in requested:
         pins.pop(package_id, None)
+    if levilamina:
+        pins.pop(LEVILAMINA, None)
     plan = resolver.resolve([(pid, variant, rng)
                              for (pid, variant), rng in roots.items()], pins)
+    _rekey_client_builds(state, plan)
     changed = []
     total = len(plan)
     for index, package in enumerate(plan):
@@ -1415,6 +1457,26 @@ def install(game_dir, package_ids, progress=None, log=None, update=False):
     if state.get("enabled", True):
         install_loader(game_dir)
     return changed
+
+
+def _rekey_client_builds(state, plan):
+    """Carry a package's record over when its client build changes label.
+
+    LeviLamina 26.60.6 was "LeviLamina#client", 26.60.9 is plain
+    "LeviLamina": the same files under a new identity. Without moving the
+    record, the new version would refuse to overwrite files "belonging to"
+    the old one, and the old record would linger as a second LeviLamina.
+    """
+    for package in plan:
+        key = package["identity"]
+        if key in state["packages"] or package["variant"] not in \
+                _CLIENT_LABELS:
+            continue
+        for label in _CLIENT_LABELS:
+            old = identity(package["id"], label)
+            if old != key and old in state["packages"]:
+                state["packages"][key] = state["packages"].pop(old)
+                break
 
 
 def update_all(game_dir, progress=None, log=None):
@@ -1455,14 +1517,7 @@ def _needed(state):
             continue
         needed.add(current)
         for dep_key in state["packages"].get(current, {}).get("deps", {}):
-            dep, variant = split_key(dep_key)
-            if dep == LEVILAMINA:
-                variant = "client"
-            if variant is not None:
-                candidates = [identity(dep, variant)]
-            else:
-                candidates = [k for k in keys if split_key(k)[0] == dep][:1]
-            frontier.extend(c for c in candidates if c in keys)
+            frontier.extend(_dep_targets(*split_key(dep_key), keys))
     return needed
 
 
@@ -1682,6 +1737,66 @@ def _valid_mod_name(name):
         and str(name).strip() not in (".", "..")
 
 
+def levilamina_release(source):
+    """The version of a LeviLamina release .zip (as GitHub hands it out),
+    or None when ``source`` is something else."""
+    source = Path(source)
+    try:
+        if source.is_dir() or not zipfile.is_zipfile(source):
+            return None
+        with zipfile.ZipFile(source) as archive:
+            names = {n.replace("\\", "/").lower(): n
+                     for n in archive.namelist()}
+            member = names.get("levilamina/manifest.json") or \
+                names.get("manifest.json")
+            if member is None:
+                return None
+            manifest = json.loads(archive.read(member).decode("utf-8-sig"))
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return None
+    if not isinstance(manifest, dict) or \
+            str(manifest.get("name", "")).lower() != "levilamina":
+        return None
+    return str(manifest.get("version") or "").lstrip("v") or None
+
+
+def import_levilamina(game_dir, source, progress=None, log=None):
+    """Install LeviLamina from a release .zip downloaded by hand.
+
+    LeviLamina alone does not load: PreLoader.dll, the runtime data of this
+    Minecraft build and the loader in front of the game come with it. So the
+    archive is not copied into mods/ like a mod: it takes the place of the
+    download in a normal install, and the rest comes from GitHub as usual.
+    """
+    source = Path(source)
+    version = levilamina_release(source)
+    if not version:
+        raise ModError(f"{source.name} is not a LeviLamina release.")
+    if "server" in source.name.lower():
+        raise ModError(f"{source.name} is LeviLamina for Bedrock Dedicated "
+                       "Server. Minecraft needs the client build "
+                       "(levilamina-…-client-release-windows-x64.zip).")
+    _refuse_while_running(game_dir)
+    build = _check_build(game_dir)
+    allowed = levilamina_versions(build)
+    if version not in allowed:
+        raise ModError(
+            f"LeviLamina {version} is not made for Minecraft {build}; this "
+            f"build takes LeviLamina {', '.join(allowed[:3])}.")
+    _label, entry = client_variant(package_file(LEVILAMINA, version),
+                                   "client")
+    if entry is None or not entry["assets"] or \
+            not entry["assets"][0]["urls"]:
+        raise ModError(f"LeviLamina {version} has no client build to "
+                       "install.")
+    url = _expand(entry["assets"][0]["urls"][0], LEVILAMINA, version)
+    target = _asset_cache_path(url)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    return install(game_dir, [LEVILAMINA], progress=progress, log=log,
+                   levilamina=version)
+
+
 def import_mod(game_dir, source, overwrite=False):
     """Add a mod from a .zip, a folder or a .dll. Returns its folder name.
 
@@ -1725,6 +1840,12 @@ def import_mod(game_dir, source, overwrite=False):
         if not _valid_mod_name(name) or not entry:
             raise ModError(f"The manifest.json of {source.name} needs a "
                            "\"name\" and an \"entry\".")
+        if str(name).lower() == "levilamina":
+            raise ModError(
+                "LeviLamina is not imported as a mod: it needs PreLoader and "
+                "the runtime data of this build to load. Use Install "
+                "LeviLamina, or import its release .zip as it was "
+                "downloaded.")
         if not (root / str(entry).replace("\\", "/")).exists():
             raise ModError(f"{source.name} does not contain its entry "
                            f"{entry}.")
