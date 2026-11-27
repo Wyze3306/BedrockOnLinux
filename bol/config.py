@@ -177,6 +177,19 @@ WINEGDK_ARCHIVE_SHA256 = "1dfbacaced7a2a3e3fcc4e23a1727ee82b3a98f0fa88fc6bcf0675
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "fb562934c3974c58f7b1676d1a2fc1e408128280b846e6caeb7f6beb2add881e"
 
+# Experimental ARM64EC engine for aarch64 hosts (#250, docs/ARM64EC.md):
+# the same WineGDK source built for arm64ec+aarch64(+i386, x86_64) on the
+# GE-Proton11 aarch64 base, so Wine, vkd3d-proton, DXVK and the GPU driver
+# run natively and FEX-Emu, inside the prefix, translates only the x64 game.
+# Its revisions are counted on their own (arm64ec-native<n>) and name one set
+# of bytes each, like the x86 ones. An empty rev means there is no published
+# ARM engine and the launcher offers none; build-winegdk.yml and
+# build-engine.yml read these pins when called with arch: aarch64.
+WINEGDK_ARM64_BUILD_REV = ""
+WINEGDK_ARM64_ARCHIVE_SHA256 = ""
+WINEGDK_ARM64_PREFIX_SHA256 = ""
+WINEGDK_ARM64_OUT = PROTON_DIR / "GDK-Proton-xuser-arm64"
+
 SELF_REPO = WINEGDK_PREBUILT_REPO
 
 # Where the launcher points people who ask where it came from -- the two
