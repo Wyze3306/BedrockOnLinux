@@ -186,7 +186,7 @@ WINEGDK_PREFIX_SHA256 = "fb562934c3974c58f7b1676d1a2fc1e408128280b846e6caeb7f6be
 # ARM engine and the launcher offers none; build-winegdk.yml and
 # build-engine.yml read these pins when called with arch: aarch64.
 WINEGDK_ARM64_BUILD_REV = "arm64ec-native1"
-WINEGDK_ARM64_ARCHIVE_SHA256 = ""
+WINEGDK_ARM64_ARCHIVE_SHA256 = "cafdfed7fab5ca0dff7d7e00cfc5e7bbb9aec25656a50dc92acdc4fcd499a118"
 WINEGDK_ARM64_PREFIX_SHA256 = "1d9cf00b2dfd6e6e471edcdde79ced7e6a6f3213cd01c77123c70d54c2e5eab2"
 WINEGDK_ARM64_OUT = PROTON_DIR / "GDK-Proton-xuser-arm64"
 

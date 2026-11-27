@@ -62,7 +62,7 @@ readonly GDK_NAME="GDK-Proton10-32"
 readonly GDK_SHA256="1e80f4e714f877f42101d5775bd38ca0a15a38d304e24af1f15c6deec4ebac2d"
 readonly GDK_THREADING_SHA256="4c3e3faf5bcd86779e4a69677902dd8b36a16e1136a5901e616c36d8a02b68f6"
 readonly PROTON_PATCH="$SRC/third_party/gdk-proton-arm64/0001-proton-install-the-GDK-runtime.patch"
-readonly PROTON_PATCH_SHA256="aba6a4fd8c33c5990c57d3eb32c596b951ecb5f6cb5853f1986d4ba282b45f3e"
+readonly PROTON_PATCH_SHA256="12056680a35ed2b6519dad1bc05eb23ba099c25b3db52d44cd505c418e34d923"
 readonly EPOCH="1784308597"
 readonly TOP="GDK-Proton-xuser-arm64"
 # The x64 PE files GDK-Proton's proton script copies into system32, less the
@@ -253,6 +253,8 @@ for pair in aarch64-windows:"$VKD3D_ARM64X_DIR/aarch64" \
   done
 done
 # Proton reads its vkd3d version from here for the log; say which it is.
+# (GE ships its own read-only.)
+rm -f "$VKD3D_ROOT/version"
 printf 'vkd3d-proton 3.0.1-bol-dgc (ARM64X: %s)\n' \
   "$(sha "$SRC/third_party/vkd3d-proton-arm64x/OUTPUT-SHA256SUMS" | cut -c1-12)" \
   > "$VKD3D_ROOT/version"
