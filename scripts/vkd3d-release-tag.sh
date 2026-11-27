@@ -8,7 +8,21 @@
 # a release of its own instead of replacing the bytes that earlier engine
 # revisions were assembled from, and reusing a release by name can never pick
 # up a payload the committed OUTPUT-SHA256SUMS does not describe.
+#
+# "vkd3d-release-tag.sh aarch64" names the experimental ARM64EC engine's ARM64X
+# payload instead (third_party/vkd3d-proton-arm64x), after its own output lock.
 set -euo pipefail
+
+if [[ "${1:-}" == aarch64 ]]; then
+  ARM_HASHES="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/third_party/vkd3d-proton-arm64x/OUTPUT-SHA256SUMS"
+  [[ -s "$ARM_HASHES" ]] || {
+    echo "!! no ARM64X OUTPUT-SHA256SUMS yet: the payload is not pinned" >&2
+    exit 1
+  }
+  read -r arm_lock _ < <(sha256sum "$ARM_HASHES")
+  echo "vkd3d-arm64x-3.0.1-nv-dgc-${arm_lock:0:12}"
+  exit 0
+fi
 
 PROVENANCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/third_party/vkd3d-proton-universal"
 LOCK_FILE="$PROVENANCE_DIR/provenance.env"
