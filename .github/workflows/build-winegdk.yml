@@ -10,6 +10,12 @@
 #
 # Reusable (workflow_call) so the engine workflow can rebuild from source on
 # demand, and standalone (workflow_dispatch) to publish + attest a release.
+#
+# arch: aarch64 builds the experimental ARM64EC engine's prefix instead
+# (#250, docs/ARM64EC.md) on an ARM runner, in Valve's steamrt4 arm64 SDK image
+# pinned by digest. It is named and pinned apart from the x86_64 one
+# (WINEGDK_ARM64_PREFIX_SHA256): while that pin is empty, a run prints the
+# SHA-256 and uploads the artifact but publishes nothing.
 
 name: Build WineGDK
 
@@ -20,10 +26,14 @@ on:
         description: "Publish + attest the prefix as a release"
         type: boolean
         default: false
+      arch:
+        description: "x86_64, or aarch64 for the experimental ARM64EC engine"
+        type: string
+        default: x86_64
     outputs:
       artifact:
         description: "Name of the uploaded WineGDK prefix artifact"
-        value: winegdk-prefix
+        value: ${{ jobs.build.outputs.artifact }}
       sha256:
         description: "SHA-256 of the packed WineGDK prefix"
         value: ${{ jobs.build.outputs.sha256 }}
@@ -33,13 +43,20 @@ on:
         description: "Publish + attest the prefix as a release on this fork"
         type: boolean
         default: true
+      arch:
+        description: "x86_64, or aarch64 for the experimental ARM64EC engine"
+        type: choice
+        options: [x86_64, aarch64]
+        default: x86_64
 
 permissions:
   contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    env:
+      ARCH: ${{ inputs.arch || 'x86_64' }}
     permissions:
       contents: write
       id-token: write
@@ -48,10 +65,20 @@ jobs:
       sha256: ${{ steps.pack.outputs.sha256 }}
       commit: ${{ steps.pack.outputs.commit }}
       short: ${{ steps.pack.outputs.short }}
+      artifact: ${{ steps.pack.outputs.artifact }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+
+      - name: Make room on the ARM runner
+        if: ${{ env.ARCH == 'aarch64' }}
+        run: |
+          df -h / /mnt 2>/dev/null || df -h /
+          # Four Wine architectures need far more than the guaranteed 14 GB.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /opt/hostedtoolcache /usr/local/share/boost /usr/local/.ghcup
+          df -h / /mnt 2>/dev/null || df -h /
 
       - name: Prepare work area on the large /mnt volume
         run: |
@@ -69,6 +96,7 @@ jobs:
           git -C /mnt/engine/WineGDK branch bol-target FETCH_HEAD
 
       - name: Build WineGDK in a Debian 11 (Bullseye) container
+        if: ${{ env.ARCH == 'x86_64' }}
         run: |
           docker run --rm \
             -v "$PWD:/repo:ro" \
@@ -79,6 +107,21 @@ jobs:
             scripts/build-winegdk-container.sh /winegdk-src /prefix
           # docker writes as root; hand the prefix back to the runner user.
           sudo chown -R "$(id -u):$(id -g)" /mnt/engine/prefix
+
+      - name: Build WineGDK (ARM64EC) in the steamrt4 arm64 SDK container
+        if: ${{ env.ARCH == 'aarch64' }}
+        run: |
+          docker run --rm \
+            -e BOL_WINEGDK_TARGET=aarch64 \
+            -v "$PWD:/repo:ro" \
+            -v "/mnt/engine/WineGDK:/winegdk-src:ro" \
+            -v "/mnt/engine/wg-work:/winegdk" \
+            -v "/mnt/engine/prefix:/prefix" \
+            -w /repo registry.gitlab.steamos.cloud/proton/steamrt4/sdk/arm64-llvm@sha256:3a8199ffdd54c51f47e1b0d059e6fe583745214043f1f8c2e2e18377e72a3776 \
+            scripts/build-winegdk-container.sh /winegdk-src /prefix
+          sudo chown -R "$(id -u):$(id -g)" /mnt/engine/prefix
+          sudo rm -rf /mnt/engine/wg-work
+          df -h / /mnt 2>/dev/null || df -h /
 
       - name: Pack the prefix deterministically
         id: pack
@@ -95,6 +138,13 @@ jobs:
           # Named after the commit, the patch manifest and the build recipe
           # (scripts/winegdk-release-tag.sh).
           tag="$(scripts/winegdk-release-tag.sh)"
+          pin_name=WINEGDK_PREFIX_SHA256
+          artifact=winegdk-prefix
+          if [ "$ARCH" = aarch64 ]; then
+            tag="$tag-aarch64"
+            pin_name=WINEGDK_ARM64_PREFIX_SHA256
+            artifact=winegdk-prefix-aarch64
+          fi
           out="winegdk-prefix-${tag#winegdk-}.tar.gz"
           # Deterministic tar + gzip -n so the prefix tarball is reproducible.
           # Includes the .bol-winegdk-* provenance dotfiles the packager requires.
@@ -103,10 +153,15 @@ jobs:
             -C /mnt/engine -cf - prefix | gzip -n -6 > "$out"
           sha="$(sha256sum "$out" | cut -d' ' -f1)"
           # Fail closed unless the prefix reproduces the committed pin.
-          pin="$(grep -m1 '^WINEGDK_PREFIX_SHA256 = ' bol/config.py | cut -d'"' -f2)"
+          pin="$(grep -m1 "^$pin_name = " bol/config.py | cut -d'"' -f2)"
           echo "pinned : $pin"
           echo "built  : $sha"
-          if [ "$sha" != "$pin" ]; then
+          publishable=true
+          if [ "$ARCH" = aarch64 ] && [ -z "$pin" ]; then
+            # First pass of the two-pass pin: nothing to compare with yet.
+            echo "::warning::$pin_name is empty: pin $sha and run again to publish."
+            publishable=false
+          elif [ "$sha" != "$pin" ]; then
             echo "::error::WineGDK prefix SHA-256 does not match WINEGDK_PREFIX_SHA256;" \
                  "the build did not reproduce the reviewed prefix." >&2
             exit 1
@@ -117,33 +172,55 @@ jobs:
             echo "commit=$commit"
             echo "short=$short"
             echo "manifest_short=$manifest_short"
+            echo "artifact=$artifact"
+            echo "publishable=$publishable"
           } >> "$GITHUB_OUTPUT"
           {
             echo "TARBALL=$out"
             echo "PREFIX_TAG=$tag"
             echo "SHORT=$short"
             echo "MANIFEST_SHORT=$manifest_short"
+            echo "ARTIFACT=$artifact"
           } >> "$GITHUB_ENV"
           echo "built WineGDK prefix: $out  sha256=$sha"
 
       - name: Upload prefix artifact (reuse within a run)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: winegdk-prefix
+          name: ${{ env.ARTIFACT }}
           path: |
             ${{ env.TARBALL }}
             ${{ env.TARBALL }}.sha256
           if-no-files-found: error
           retention-days: 7
 
+      - name: Refuse to replace a published ARM64 prefix
+        if: ${{ inputs.publish && env.ARCH == 'aarch64' && steps.pack.outputs.publishable == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILT_SHA256: ${{ steps.pack.outputs.sha256 }}
+        run: |
+          # A tag names one set of bytes. Re-running a pinned build is fine; a
+          # different archive under an existing tag never is.
+          if gh release view "$PREFIX_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/published"
+            gh release download "$PREFIX_TAG" -R "$GITHUB_REPOSITORY" \
+              -p "$(basename "$TARBALL").sha256" -D "$RUNNER_TEMP/published"
+            published="$(cut -d' ' -f1 "$RUNNER_TEMP/published/$(basename "$TARBALL").sha256")"
+            [ "$published" = "$BUILT_SHA256" ] || {
+              echo "::error::$PREFIX_TAG already holds $published" >&2
+              exit 1
+            }
+          fi
+
       - name: Attest build provenance
-        if: ${{ inputs.publish }}
+        if: ${{ inputs.publish && steps.pack.outputs.publishable == 'true' }}
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: ${{ env.TARBALL }}
 
       - name: Publish the WineGDK prefix release
-        if: ${{ inputs.publish }}
+        if: ${{ inputs.publish && steps.pack.outputs.publishable == 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ env.PREFIX_TAG }}
@@ -152,8 +229,9 @@ jobs:
           make_latest: false
           prerelease: true
           body: >
-            Reproducible WineGDK build (debian:bullseye container) from source
-            commit ${{ steps.pack.outputs.commit }}. SHA-256
+            Reproducible WineGDK build (${{ env.ARCH == 'aarch64' && 'experimental
+            ARM64EC engine, steamrt4 arm64 SDK container' || 'debian:bullseye container' }})
+            from source commit ${{ steps.pack.outputs.commit }}. SHA-256
             ${{ steps.pack.outputs.sha256 }}. Verify provenance with:
             gh attestation verify <file> --repo ${{ github.repository }}
           files: |
