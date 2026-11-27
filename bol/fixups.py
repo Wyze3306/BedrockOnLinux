@@ -642,7 +642,12 @@ def _install_cryptbase_in_prefix(pfx=None):
         # shim lives in a separate XCurl.dll and is unaffected.
         from .proton import proton_path
         pp = proton_path()
-        builtin = (pp / "files/lib/wine/x86_64-windows/cryptbase.dll") if pp else None
+        # The prefix's system32 is filled from the engine's host directory:
+        # aarch64-windows for the ARM64EC engine, x86_64-windows otherwise.
+        from .engine_arch import engine_for_path
+        eng = engine_for_path(pp) if pp else None
+        pe_dir = eng.host_pe_dir if eng else "files/lib/wine/x86_64-windows"
+        builtin = (pp / pe_dir / "cryptbase.dll") if pp else None
         if not (builtin and builtin.is_file() and not builtin.is_symlink()):
             return False
         src = builtin

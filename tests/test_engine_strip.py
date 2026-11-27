@@ -95,3 +95,48 @@ class RecipeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+COFF_STAMP = ROOT / "scripts/coff-stamp.py"
+
+
+def _member(name, body):
+    header = b"%-16s%-12d%-6d%-6d%-8s%-10d`\n" % (name, 0, 0, 0, b"644",
+                                                  len(body))
+    return header + body + (b"\n" if len(body) & 1 else b"")
+
+
+def _archive(timestamp):
+    obj = struct.pack("<HHIIIHH", 0xA641, 1, timestamp, 0, 0, 0, 0) + b"x" * 7
+    # Import-library short objects already carry no build time; left as is.
+    short_import = struct.pack("<HHHHIIHH", 0, 0xFFFF, 0, 0xAA64,
+                               0, 4, 0, 0) + b"f\0d\0"
+    return (b"!<arch>\n" + _member(b"/", b"\0" * 4)
+            + _member(b"a.o/", obj) + _member(b"b.o/", short_import))
+
+
+class CoffStampTests(unittest.TestCase):
+    """The ARM64EC build's static libraries keep no build time (#250)."""
+
+    def test_two_builds_end_as_the_same_archive(self):
+        with tempfile.TemporaryDirectory() as td:
+            outputs = []
+            for when in (1795803463, 1795807370):
+                folder = Path(td) / str(when)
+                folder.mkdir()
+                (folder / "libx.a").write_bytes(_archive(when))
+                done = subprocess.run(
+                    [sys.executable, str(COFF_STAMP), "1784308597", folder],
+                    capture_output=True, text=True, check=True)
+                self.assertIn("stamped 1 COFF objects in 1 archives",
+                              done.stdout)
+                outputs.append((folder / "libx.a").read_bytes())
+            self.assertEqual(outputs[0], outputs[1])
+            self.assertEqual(len(outputs[0]), len(_archive(0)))
+            self.assertIn(struct.pack("<I", 1784308597), outputs[0])
+
+    def test_only_the_arm_build_runs_it(self):
+        text = (ROOT / "scripts/build-winegdk-container.sh").read_text()
+        at = text.index("coff-stamp.py")
+        self.assertIn('if [ "$TARGET" = aarch64 ]; then',
+                      text[text.rindex("\nif ", 0, at):at])

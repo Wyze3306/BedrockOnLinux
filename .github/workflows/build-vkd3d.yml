@@ -9,6 +9,12 @@
 # The compile runs inside a debian:trixie container via `docker run` while the
 # JS actions (checkout, upload, attest) run on the host, avoiding the need for
 # Node.js inside the minimal container.
+#
+# arch: aarch64 builds the experimental ARM64EC engine's payload instead
+# (#250, third_party/vkd3d-proton-arm64x): the same source as ARM64X, on an ARM
+# runner in Valve's steamrt4 arm64 SDK image. Until its OUTPUT-SHA256SUMS is
+# committed a run prints the DLL hashes and uploads the artifact, and publishes
+# nothing.
 
 name: Build vkd3d-proton
 
@@ -19,10 +25,14 @@ on:
         description: "Publish + attest the payload as a release"
         type: boolean
         default: false
+      arch:
+        description: "x86_64, or aarch64 for the experimental ARM64EC engine"
+        type: string
+        default: x86_64
     outputs:
       artifact:
         description: "Name of the uploaded vkd3d artifact"
-        value: vkd3d-universal
+        value: ${{ jobs.build.outputs.artifact }}
       sha256:
         description: "SHA-256 of the packed vkd3d payload"
         value: ${{ jobs.build.outputs.sha256 }}
@@ -32,25 +42,34 @@ on:
         description: "Publish + attest the payload as a release on this fork"
         type: boolean
         default: true
+      arch:
+        description: "x86_64, or aarch64 for the experimental ARM64EC engine"
+        type: choice
+        options: [x86_64, aarch64]
+        default: x86_64
 
 permissions:
   contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    env:
+      ARCH: ${{ inputs.arch || 'x86_64' }}
     permissions:
       contents: write
       id-token: write
       attestations: write
     outputs:
       sha256: ${{ steps.pack.outputs.sha256 }}
+      artifact: ${{ steps.pack.outputs.artifact }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
 
       - name: Build universal vkd3d-proton in a pinned Trixie container
+        if: ${{ env.ARCH == 'x86_64' }}
         run: |
           mkdir -p "$RUNNER_TEMP/vkout"
           # The image is digest-pinned and apt is pinned to a snapshot.debian.org
@@ -93,16 +112,51 @@ jobs:
           # docker writes as root; hand the tree back to the runner user.
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/vkout"
 
+      - name: Build vkd3d-proton as ARM64X in the steamrt4 arm64 SDK container
+        if: ${{ env.ARCH == 'aarch64' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/vkout"
+          image="$(grep -m1 '^VKD3D_ARM64X_SDK_IMAGE=' third_party/vkd3d-proton-arm64x/provenance.env | cut -d"'" -f2)"
+          docker run --rm \
+            -v "$PWD:/src:ro" \
+            -v "$RUNNER_TEMP/vkout:/out" \
+            "$image" \
+            bash -euo pipefail -c '
+              # The same git settings the x86 recipe needs to regenerate the
+              # vendored NV-DGC revert byte for byte.
+              git config --global core.whitespace "-blank-at-eof,-blank-at-eol,-space-before-tab"
+              git config --global core.abbrev 7
+              git config --global --add safe.directory "*"
+              /src/scripts/build-vkd3d-arm64x.sh /out
+            '
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/vkout"
+
       - name: Name the release after the output hash lock
         run: |
           # A rebuilt payload gets a release of its own rather than replacing
           # the bytes earlier engine revisions were assembled from.
-          echo "VKD3D_TAG=$(scripts/vkd3d-release-tag.sh)" >> "$GITHUB_ENV"
+          if [ "$ARCH" = aarch64 ]; then
+            if tag="$(scripts/vkd3d-release-tag.sh aarch64)"; then
+              echo "VKD3D_TAG=$tag" >> "$GITHUB_ENV"
+              echo "PUBLISHABLE=true" >> "$GITHUB_ENV"
+            else
+              echo "::warning::ARM64X OUTPUT-SHA256SUMS is not committed: pin the hashes above and run again to publish."
+              echo "PUBLISHABLE=false" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "VKD3D_TAG=$(scripts/vkd3d-release-tag.sh)" >> "$GITHUB_ENV"
+            echo "PUBLISHABLE=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Pack the vkd3d output deterministically
         id: pack
         run: |
           out="vkd3d-universal-3.0.1-nv-dgc.tar.gz"
+          artifact=vkd3d-universal
+          if [ "$ARCH" = aarch64 ]; then
+            out="vkd3d-arm64x-3.0.1-nv-dgc.tar.gz"
+            artifact=vkd3d-arm64x
+          fi
           tar --sort=name --format=gnu --hard-dereference \
             --mtime=@1784308597 --owner=0 --group=0 --numeric-owner \
             -C "$RUNNER_TEMP/vkout/vkd3d-build-output" -cf - vkd3d-proton-3.0.1-nv-dgc \
@@ -110,32 +164,51 @@ jobs:
           sha="$(sha256sum "$out" | cut -d' ' -f1)"
           echo "$sha  $out" > "$out.sha256"
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "TARBALL=$out" >> "$GITHUB_ENV"
+          echo "ARTIFACT=$artifact" >> "$GITHUB_ENV"
           echo "built vkd3d payload: $out  sha256=$sha"
 
       - name: Upload vkd3d artifact (reuse within a run)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: vkd3d-universal
+          name: ${{ env.ARTIFACT }}
           path: |
             ${{ env.TARBALL }}
             ${{ env.TARBALL }}.sha256
           if-no-files-found: error
           retention-days: 7
 
+      - name: Refuse to replace a published ARM64X payload
+        if: ${{ inputs.publish && env.ARCH == 'aarch64' && env.PUBLISHABLE == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILT_SHA256: ${{ steps.pack.outputs.sha256 }}
+        run: |
+          if gh release view "$VKD3D_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/published"
+            gh release download "$VKD3D_TAG" -R "$GITHUB_REPOSITORY" \
+              -p "$TARBALL.sha256" -D "$RUNNER_TEMP/published"
+            published="$(cut -d' ' -f1 "$RUNNER_TEMP/published/$TARBALL.sha256")"
+            [ "$published" = "$BUILT_SHA256" ] || {
+              echo "::error::$VKD3D_TAG already holds $published" >&2
+              exit 1
+            }
+          fi
+
       - name: Attest build provenance
-        if: ${{ inputs.publish }}
+        if: ${{ inputs.publish && env.PUBLISHABLE == 'true' }}
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: ${{ env.TARBALL }}
 
       - name: Publish the vkd3d payload release
-        if: ${{ inputs.publish }}
+        if: ${{ inputs.publish && env.PUBLISHABLE == 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ env.VKD3D_TAG }}
           target_commitish: ${{ github.sha }}
-          name: vkd3d-proton universal DGC 3.0.1
+          name: ${{ env.ARCH == 'aarch64' && 'vkd3d-proton universal DGC 3.0.1 (ARM64X, experimental)' || 'vkd3d-proton universal DGC 3.0.1' }}
           make_latest: false
           prerelease: true
           body: >

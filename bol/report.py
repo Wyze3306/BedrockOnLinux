@@ -561,8 +561,10 @@ def _collect_components(settings):
     if settings.get("proton"):
         engine_name = Path(settings["proton"]).name
     xodus_installed = _read(XODUS_DIR / ".rev").strip() or "not installed"
+    from . import engine_arch
     rows = [
         ("engine pinned", WINEGDK_BUILD_REV),
+        ("engine arch", _safely(lambda: engine_arch.summary(settings))),
         ("engine installed", f"{rev or 'no manifest'} ({engine_name}, "
                              f"source {settings.get('proton_source') or '?'})"),
         ("graphics payload", ", ".join(

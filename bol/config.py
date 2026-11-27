@@ -177,6 +177,19 @@ WINEGDK_ARCHIVE_SHA256 = "1dfbacaced7a2a3e3fcc4e23a1727ee82b3a98f0fa88fc6bcf0675
 # Build workflows verify this deterministic intermediate before reusing it.
 WINEGDK_PREFIX_SHA256 = "fb562934c3974c58f7b1676d1a2fc1e408128280b846e6caeb7f6beb2add881e"
 
+# Experimental ARM64EC engine for aarch64 hosts (#250, docs/ARM64EC.md):
+# the same WineGDK source built for arm64ec+aarch64(+i386, x86_64) on the
+# GE-Proton11 aarch64 base, so Wine, vkd3d-proton, DXVK and the GPU driver
+# run natively and FEX-Emu, inside the prefix, translates only the x64 game.
+# Its revisions are counted on their own (arm64ec-native<n>) and name one set
+# of bytes each, like the x86 ones. An empty rev means there is no published
+# ARM engine and the launcher offers none; build-winegdk.yml and
+# build-engine.yml read these pins when called with arch: aarch64.
+WINEGDK_ARM64_BUILD_REV = "arm64ec-native1"
+WINEGDK_ARM64_ARCHIVE_SHA256 = "cafdfed7fab5ca0dff7d7e00cfc5e7bbb9aec25656a50dc92acdc4fcd499a118"
+WINEGDK_ARM64_PREFIX_SHA256 = "1d9cf00b2dfd6e6e471edcdde79ced7e6a6f3213cd01c77123c70d54c2e5eab2"
+WINEGDK_ARM64_OUT = PROTON_DIR / "GDK-Proton-xuser-arm64"
+
 SELF_REPO = WINEGDK_PREBUILT_REPO
 
 # Where the launcher points people who ask where it came from -- the two
@@ -216,6 +229,10 @@ XODUS_REV = "64d39eb87a56-p15"
 # Integrity pin from the reviewed candidate build of the p15 archive.
 # https://github.com/Wyze3306/BedrockOnLinux/actions/runs/44551780138
 XODUS_ARCHIVE_SHA256 = "438a4b7189043b1a82a062ebd059fffedcc30741352ad8ddcb43ed1a03f5c42b"
+# The same rev built for aarch64 (experimental ARM64EC engine, #250), released
+# under xodus-<rev>-aarch64 as xodus-cli-<rev>-aarch64.tar.gz. Empty = never
+# published: the launcher then offers no native xodus-cli on ARM.
+XODUS_ARM64_ARCHIVE_SHA256 = "9720e533f3e464be4c58a92695a91f173f2515091f030cf2fdbfd07d7c02d4fe"
 XODUS_DIR = DATA / "xodus"
 XODUS_BIN = XODUS_DIR / "xodus-cli"
 # xodus-cli links wry/tao unconditionally, so libwebkit2gtk-4.1 has to be
@@ -248,6 +265,10 @@ XODUS_WEBVIEW_SHA256 = "9685289ff178beaa74a6e8f1eea78e55c202176eadf25445d2e1670c
 # builds drop the WEBKIT_EXEC_PATH override (it is developer-mode only), so the
 # bundled library carries this literal and the launcher rewrites it in place.
 XODUS_WEBVIEW_EXEC_DIR = "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+# The aarch64 runtime (xodus-webview-<rev>-aarch64.tar.xz, released beside the
+# aarch64 xodus-cli) and the helper directory its library carries.
+XODUS_WEBVIEW_ARM64_SHA256 = "ed7fa489eca994680c2743d84ca35023a6a8831fc78ae5e6368cf8ebda9e8187"
+XODUS_WEBVIEW_ARM64_EXEC_DIR = "/usr/lib/aarch64-linux-gnu/webkit2gtk-4.1"
 # Xodus keeps its tokens in a file keyring (built with --features
 # key-chain-file) instead of a D-Bus secret service, which does not exist in a
 # Game Mode session or inside a Flatpak sandbox. It puts that file in $HOME,

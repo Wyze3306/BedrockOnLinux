@@ -1,0 +1,207 @@
+Backport of upstream vkd3d-proton 20c0ab2095 ("Support hybrid_patchable on
+the command queue vtable", 2026-08-16) onto v3.0.1 (3b10bd7a7ec6) with the
+NV-DGC revert and both fixes applied. ARM64X build only (#250).
+
+Under ARM64EC an x64 hook on ID3D12CommandQueue (OptiScaler, overlays,
+LeviLamina or injected clients hooking ExecuteCommandLists) would write x86
+code over the ARM64 function the vtable points to. hybrid_patchable makes
+each vtable entry an x64 fast-forward sequence that such hooks can patch.
+The changed lines are upstream's; only the command.c context moved.
+
+diff --git a/include/vkd3d_windows.h b/include/vkd3d_windows.h
+index 399f4e9..d06fd8d 100644
+--- a/include/vkd3d_windows.h
++++ b/include/vkd3d_windows.h
+@@ -216,10 +216,31 @@ typedef struct SECURITY_ATTRIBUTES SECURITY_ATTRIBUTES;
+ # define IsEqualGUID(guid1, guid2) (!memcmp(guid1, guid2, sizeof(GUID)))
+ #endif
+ 
++/* Entrypoint definitions to match win32 side */
++# define VKD3D_METHODENTRYBASE(return_type, qual, attribute) qual return_type attribute STDMETHODCALLTYPE
++# define VKD3D_METHODENTRY(return_type) VKD3D_METHODENTRYBASE(return_type, static, )
++# define VKD3D_METHODENTRY_NONSTATIC(return_type) VKD3D_METHODENTRYBASE(return_type, , )
++
+ #elif !defined(__WIDL__)
+ 
+ # include <windows.h>
+ 
++/* ARM64ec entrypoints in vtables need to be tagged with the `hybrid_patchable` attribute.
++ * This attribute can't be used with static qualifiers as it can only be used with
++ * functions that have external linkage.
++ * On non-arm64ec platforms, the static qualifier is desired even with vtable entries.
++ */
++# define VKD3D_METHODENTRYBASE(return_type, qual, attribute) qual return_type attribute STDMETHODCALLTYPE
++#ifdef __arm64ec__
++/* Remove static qualifier and add hybrid_patchable */
++# define VKD3D_METHODENTRY(return_type) VKD3D_METHODENTRYBASE(return_type, , __attribute__((hybrid_patchable)))
++# define VKD3D_METHODENTRY_NONSTATIC(return_type) VKD3D_METHODENTRYBASE(return_type, , __attribute__((hybrid_patchable)))
++#else
++/* Attribute is avoided and static is used if desired */
++# define VKD3D_METHODENTRY(return_type) VKD3D_METHODENTRYBASE(return_type, static, )
++# define VKD3D_METHODENTRY_NONSTATIC(return_type) VKD3D_METHODENTRYBASE(return_type, , )
++#endif
++
+ #endif  /* _WIN32 */
+ 
+ /* Define min() & max() macros */
+diff --git a/libs/vkd3d/command.c b/libs/vkd3d/command.c
+index 9bd4ed6..72842e6 100644
+--- a/libs/vkd3d/command.c
++++ b/libs/vkd3d/command.c
+@@ -21808,7 +21808,7 @@ static inline struct d3d12_command_queue *impl_from_ID3D12CommandQueue(ID3D12Com
+     return CONTAINING_RECORD(iface, struct d3d12_command_queue, ID3D12CommandQueue_iface);
+ }
+ 
+-HRESULT STDMETHODCALLTYPE d3d12_command_queue_QueryInterface(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY_NONSTATIC(HRESULT) d3d12_command_queue_QueryInterface(ID3D12CommandQueue *iface,
+         REFIID riid, void **object)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+@@ -21856,7 +21856,7 @@ HRESULT STDMETHODCALLTYPE d3d12_command_queue_QueryInterface(ID3D12CommandQueue
+     return E_NOINTERFACE;
+ }
+ 
+-ULONG STDMETHODCALLTYPE d3d12_command_queue_AddRef(ID3D12CommandQueue *iface)
++VKD3D_METHODENTRY_NONSTATIC(ULONG) d3d12_command_queue_AddRef(ID3D12CommandQueue *iface)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+     ULONG refcount = InterlockedIncrement(&command_queue->refcount);
+@@ -21866,7 +21866,7 @@ ULONG STDMETHODCALLTYPE d3d12_command_queue_AddRef(ID3D12CommandQueue *iface)
+     return refcount;
+ }
+ 
+-ULONG STDMETHODCALLTYPE d3d12_command_queue_Release(ID3D12CommandQueue *iface)
++VKD3D_METHODENTRY_NONSTATIC(ULONG) d3d12_command_queue_Release(ID3D12CommandQueue *iface)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+     ULONG refcount = InterlockedDecrement(&command_queue->refcount);
+@@ -21905,7 +21905,7 @@ ULONG STDMETHODCALLTYPE d3d12_command_queue_Release(ID3D12CommandQueue *iface)
+     return refcount;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_command_queue_GetPrivateData(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(HRESULT) d3d12_command_queue_GetPrivateData(ID3D12CommandQueue *iface,
+         REFGUID guid, UINT *data_size, void *data)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+@@ -21915,7 +21915,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_queue_GetPrivateData(ID3D12Comman
+     return vkd3d_get_private_data(&command_queue->private_store, guid, data_size, data);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_command_queue_SetPrivateData(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(HRESULT) d3d12_command_queue_SetPrivateData(ID3D12CommandQueue *iface,
+         REFGUID guid, UINT data_size, const void *data)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+@@ -21926,7 +21926,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_queue_SetPrivateData(ID3D12Comman
+             NULL, NULL);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_command_queue_SetPrivateDataInterface(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(HRESULT) d3d12_command_queue_SetPrivateDataInterface(ID3D12CommandQueue *iface,
+         REFGUID guid, const IUnknown *data)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+@@ -21937,7 +21937,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_queue_SetPrivateDataInterface(ID3
+             NULL, NULL);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_command_queue_GetDevice(ID3D12CommandQueue *iface, REFIID iid, void **device)
++VKD3D_METHODENTRY(HRESULT) d3d12_command_queue_GetDevice(ID3D12CommandQueue *iface, REFIID iid, void **device)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+ 
+@@ -21986,7 +21986,7 @@ static unsigned int vkd3d_get_tile_index_from_region(const struct d3d12_sparse_i
+     return tile_index < sparse->tile_count ? tile_index : VKD3D_INVALID_TILE_INDEX;
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_command_queue_UpdateTileMappings(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(void) d3d12_command_queue_UpdateTileMappings(ID3D12CommandQueue *iface,
+         ID3D12Resource *resource, UINT region_count, const D3D12_TILED_RESOURCE_COORDINATE *region_coords,
+         const D3D12_TILE_REGION_SIZE *region_sizes, ID3D12Heap *heap, UINT range_count,
+         const D3D12_TILE_RANGE_FLAGS *range_flags,
+@@ -22181,7 +22181,7 @@ fail:
+     vkd3d_free(sub.bind_sparse.bind_infos);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_command_queue_CopyTileMappings(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(void) d3d12_command_queue_CopyTileMappings(ID3D12CommandQueue *iface,
+         ID3D12Resource *dst_resource, const D3D12_TILED_RESOURCE_COORDINATE *dst_region_start_coordinate,
+         ID3D12Resource *src_resource, const D3D12_TILED_RESOURCE_COORDINATE *src_region_start_coordinate,
+         const D3D12_TILE_REGION_SIZE *region_size, D3D12_TILE_MAPPING_FLAGS flags)
+@@ -22313,7 +22313,7 @@ out:
+     return ret;
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_command_queue_ExecuteCommandLists(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(void) d3d12_command_queue_ExecuteCommandLists(ID3D12CommandQueue *iface,
+         UINT command_list_count, ID3D12CommandList * const *command_lists)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+@@ -22750,26 +22750,26 @@ static void STDMETHODCALLTYPE d3d12_command_queue_ExecuteCommandLists(ID3D12Comm
+     d3d12_command_queue_add_submission(command_queue, &sub);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_command_queue_SetMarker(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(void) d3d12_command_queue_SetMarker(ID3D12CommandQueue *iface,
+         UINT metadata, const void *data, UINT size)
+ {
+     FIXME("iface %p, metadata %#x, data %p, size %u stub!\n",
+             iface, metadata, data, size);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_command_queue_BeginEvent(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(void) d3d12_command_queue_BeginEvent(ID3D12CommandQueue *iface,
+         UINT metadata, const void *data, UINT size)
+ {
+     FIXME("iface %p, metatdata %#x, data %p, size %u stub!\n",
+             iface, metadata, data, size);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_command_queue_EndEvent(ID3D12CommandQueue *iface)
++VKD3D_METHODENTRY(void) d3d12_command_queue_EndEvent(ID3D12CommandQueue *iface)
+ {
+     FIXME("iface %p stub!\n", iface);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_command_queue_Signal(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(HRESULT) d3d12_command_queue_Signal(ID3D12CommandQueue *iface,
+         ID3D12Fence *fence_iface, UINT64 value)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+@@ -22786,7 +22786,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_queue_Signal(ID3D12CommandQueue *
+     return S_OK;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_command_queue_Wait(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(HRESULT) d3d12_command_queue_Wait(ID3D12CommandQueue *iface,
+         ID3D12Fence *fence_iface, UINT64 value)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+@@ -22811,7 +22811,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_queue_Wait(ID3D12CommandQueue *if
+     return S_OK;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_command_queue_GetTimestampFrequency(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(HRESULT) d3d12_command_queue_GetTimestampFrequency(ID3D12CommandQueue *iface,
+         UINT64 *frequency)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+@@ -22830,7 +22830,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_queue_GetTimestampFrequency(ID3D1
+     return S_OK;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_command_queue_GetClockCalibration(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(HRESULT) d3d12_command_queue_GetClockCalibration(ID3D12CommandQueue *iface,
+         UINT64 *gpu_timestamp, UINT64 *cpu_timestamp)
+ {
+ #ifdef _WIN32
+@@ -22902,7 +22902,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_queue_GetClockCalibration(ID3D12C
+ #endif
+ }
+ 
+-static D3D12_COMMAND_QUEUE_DESC * STDMETHODCALLTYPE d3d12_command_queue_GetDesc(ID3D12CommandQueue *iface,
++VKD3D_METHODENTRY(D3D12_COMMAND_QUEUE_DESC *) d3d12_command_queue_GetDesc(ID3D12CommandQueue *iface,
+         D3D12_COMMAND_QUEUE_DESC *desc)
+ {
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);

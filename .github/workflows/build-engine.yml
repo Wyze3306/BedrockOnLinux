@@ -13,6 +13,13 @@
 #
 # Public verification of any published artifact:
 #   gh attestation verify <file> --repo <owner>/BedrockOnLinux
+#
+# arch: aarch64 assembles the experimental ARM64EC engine instead (#250,
+# docs/ARM64EC.md, scripts/package-engine-arm64.sh) on an ARM runner, from the
+# published aarch64 WineGDK prefix, the ARM64X and x86 vkd3d payloads, the
+# GE-Proton11-14-aarch64 base and GDK-Proton10-32's x64 libraries. It is pinned
+# apart (WINEGDK_ARM64_*): while WINEGDK_ARM64_ARCHIVE_SHA256 is empty a run
+# prints the archive's SHA-256, runs the smoke tests and publishes nothing.
 
 name: Build managed engine
 
@@ -27,6 +34,10 @@ on:
         description: "Publish + attest the built engine as a release on this fork"
         type: boolean
         default: false
+      arch:
+        description: "x86_64, or aarch64 for the experimental ARM64EC engine"
+        type: string
+        default: x86_64
   workflow_dispatch:
     inputs:
       rebuild_from_source:
@@ -37,6 +48,11 @@ on:
         description: "Publish + attest the built engine as a release on this fork"
         type: boolean
         default: false
+      arch:
+        description: "x86_64, or aarch64 for the experimental ARM64EC engine"
+        type: choice
+        options: [x86_64, aarch64]
+        default: x86_64
   push:
     tags:
       - "engine-*"
@@ -49,7 +65,7 @@ jobs:
   # they publish nothing (publish: false) and only hand their artifacts to the
   # package job within this run. They inherit the top-level contents: read.
   winegdk:
-    if: ${{ inputs.rebuild_from_source }}
+    if: ${{ inputs.rebuild_from_source && inputs.arch != 'aarch64' }}
     permissions:
       contents: write
       id-token: write
@@ -59,7 +75,7 @@ jobs:
       publish: false
 
   vkd3d:
-    if: ${{ inputs.rebuild_from_source }}
+    if: ${{ inputs.rebuild_from_source && inputs.arch != 'aarch64' }}
     permissions:
       contents: write
       id-token: write
@@ -71,7 +87,8 @@ jobs:
   package:
     needs: [winegdk, vkd3d]
     # Run whether or not the rebuild jobs were skipped, but not if they failed.
-    if: ${{ !failure() && !cancelled() }}
+    # Never for the ARM64EC engine, whose tags would otherwise match engine-*.
+    if: ${{ !failure() && !cancelled() && inputs.arch != 'aarch64' && !startsWith(github.ref_name, 'engine-arm64ec-') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -231,6 +248,136 @@ jobs:
             Reproducible engine build of GDK-Proton-xuser (${{ env.REV }}),
             verified to match the SHA-256 pinned in bol/config.py.
             Verify provenance with: gh attestation verify <file> --repo ${{ github.repository }}
+          files: |
+            dist/GDK-Proton-xuser-${{ env.REV }}.tar.gz
+            dist/GDK-Proton-xuser-${{ env.REV }}.tar.gz.sha256
+          fail_on_unmatched_files: true
+
+  package-arm64:
+    if: ${{ inputs.arch == 'aarch64' }}
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SDK_IMAGE: registry.gitlab.steamos.cloud/proton/steamrt4/sdk/arm64-llvm@sha256:3a8199ffdd54c51f47e1b0d059e6fe583745214043f1f8c2e2e18377e72a3776
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Make room on the ARM runner
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /opt/hostedtoolcache /usr/local/share/boost /usr/local/.ghcup
+          sudo mkdir -p /mnt/arm && sudo chown "$(id -u):$(id -g)" /mnt/arm
+          df -h / /mnt
+
+      - name: Download + verify the aarch64 WineGDK prefix
+        run: |
+          tag="$(scripts/winegdk-release-tag.sh)-aarch64"
+          asset="winegdk-prefix-${tag#winegdk-}.tar.gz"
+          mkdir -p /mnt/arm/wg-dl /mnt/arm/wg
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p "$asset*" -D /mnt/arm/wg-dl
+          gh attestation verify "/mnt/arm/wg-dl/$asset" -R "$GITHUB_REPOSITORY"
+          pin="$(grep -m1 '^WINEGDK_ARM64_PREFIX_SHA256 = ' bol/config.py | cut -d'"' -f2)"
+          echo "${pin}  /mnt/arm/wg-dl/$asset" | sha256sum -c -
+          tar -C /mnt/arm/wg -xzf "/mnt/arm/wg-dl/$asset"
+          rm -rf /mnt/arm/wg-dl
+
+      - name: Download + verify both vkd3d payloads
+        run: |
+          mkdir -p /mnt/arm/vk-dl /mnt/arm/vk-arm /mnt/arm/vk-x86
+          tag="$(scripts/vkd3d-release-tag.sh aarch64)"
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p 'vkd3d-arm64x-*.tar.gz*' -D /mnt/arm/vk-dl
+          gh attestation verify /mnt/arm/vk-dl/vkd3d-arm64x-3.0.1-nv-dgc.tar.gz -R "$GITHUB_REPOSITORY"
+          tar -C /mnt/arm/vk-arm -xzf /mnt/arm/vk-dl/vkd3d-arm64x-3.0.1-nv-dgc.tar.gz
+          tag="$(scripts/vkd3d-release-tag.sh)"
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p 'vkd3d-universal-*.tar.gz*' -D /mnt/arm/vk-dl
+          gh attestation verify /mnt/arm/vk-dl/vkd3d-universal-3.0.1-nv-dgc.tar.gz -R "$GITHUB_REPOSITORY"
+          tar -C /mnt/arm/vk-x86 -xzf /mnt/arm/vk-dl/vkd3d-universal-3.0.1-nv-dgc.tar.gz
+          rm -rf /mnt/arm/vk-dl
+
+      - name: Fetch the GE-Proton11-14-aarch64 and GDK-Proton10-32 bases
+        run: |
+          mkdir -p /mnt/arm/base
+          gh release download GE-Proton11-14 -R GloriousEggroll/proton-ge-custom \
+            -p GE-Proton11-14-aarch64.tar.gz -D /mnt/arm/base
+          gh release download release10-32 -R Weather-OS/GDK-Proton \
+            -p GDK-Proton10-32.tar.gz -D /mnt/arm/base
+          # package-engine-arm64.sh checks both against their pinned SHA-256.
+
+      - name: Package the ARM64EC engine
+        run: |
+          scripts/package-engine-arm64.sh \
+            /mnt/arm/base/GE-Proton11-14-aarch64.tar.gz \
+            /mnt/arm/base/GDK-Proton10-32.tar.gz \
+            /mnt/arm/wg/prefix \
+            /mnt/arm/vk-arm/vkd3d-proton-3.0.1-nv-dgc \
+            /mnt/arm/vk-x86/vkd3d-proton-3.0.1-nv-dgc \
+            dist
+          rm -rf /mnt/arm/base /mnt/arm/wg /mnt/arm/vk-arm /mnt/arm/vk-x86
+          df -h / /mnt
+
+      - name: Compare the archive with its pin
+        id: pin
+        run: |
+          rev="$(grep -m1 '^WINEGDK_ARM64_BUILD_REV = ' bol/config.py | cut -d'"' -f2)"
+          pin="$(grep -m1 '^WINEGDK_ARM64_ARCHIVE_SHA256 = ' bol/config.py | cut -d'"' -f2)"
+          built="$(sha256sum "dist/GDK-Proton-xuser-${rev}.tar.gz" | cut -d' ' -f1)"
+          echo "pinned : ${pin:-<unset>}"
+          echo "built  : $built"
+          publishable=true
+          if [ -z "$pin" ]; then
+            echo "::warning::WINEGDK_ARM64_ARCHIVE_SHA256 is empty: pin $built and run again to publish."
+            publishable=false
+          elif [ "$built" != "$pin" ]; then
+            echo "::error::built ARM64EC engine SHA-256 does not match WINEGDK_ARM64_ARCHIVE_SHA256." >&2
+            exit 1
+          fi
+          echo "REV=$rev" >> "$GITHUB_ENV"
+          echo "publishable=$publishable" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test - Wine, FEX and the GDK runtime in Steam Runtime 4
+        run: |
+          mkdir -p /mnt/arm/smoke
+          tar -C /mnt/arm/smoke -xzf "dist/GDK-Proton-xuser-${REV}.tar.gz"
+          docker pull -q "$SDK_IMAGE" >/dev/null
+          docker run --rm -v /mnt/arm/smoke/GDK-Proton-xuser-arm64:/engine:ro \
+            -v "$PWD/scripts/arm64ec-smoke:/smoke:ro" "$SDK_IMAGE" \
+            bash /smoke/run.sh /engine
+
+      - name: Attest engine provenance
+        if: ${{ inputs.publish && steps.pin.outputs.publishable == 'true' }}
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/GDK-Proton-xuser-${{ env.REV }}.tar.gz
+
+      - name: Refuse to replace a published ARM64EC engine
+        if: ${{ inputs.publish && steps.pin.outputs.publishable == 'true' }}
+        run: |
+          if gh release view "engine-$REV" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::engine-$REV is already published; name a new WINEGDK_ARM64_BUILD_REV." >&2
+            exit 1
+          fi
+
+      - name: Publish the ARM64EC engine as a pre-release
+        if: ${{ inputs.publish && steps.pin.outputs.publishable == 'true' }}
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: engine-${{ env.REV }}
+          target_commitish: ${{ github.sha }}
+          name: Experimental ARM64EC engine ${{ env.REV }}
+          make_latest: false
+          prerelease: true
+          body: >
+            Experimental engine for aarch64 hosts (#250): WineGDK built as
+            ARM64EC on GE-Proton11-14-aarch64, with FEX translating only the
+            x64 game. Reproducible; verified to match the SHA-256 pinned in
+            bol/config.py. Verify provenance with:
+            gh attestation verify <file> --repo ${{ github.repository }}
           files: |
             dist/GDK-Proton-xuser-${{ env.REV }}.tar.gz
             dist/GDK-Proton-xuser-${{ env.REV }}.tar.gz.sha256

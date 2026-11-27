@@ -8,6 +8,14 @@
 # enforces the same glibc-2.31 ABI ceiling. Deterministic paths + SOURCE_DATE_EPOCH
 # keep the build reproducible across CI runs.
 #
+# BOL_WINEGDK_TARGET=aarch64 builds the experimental ARM64EC engine instead
+# (#250, docs/ARM64EC.md): run as root in Valve's steamrt4 arm64 SDK image on an
+# aarch64 host, which already holds the toolchain (native clang + llvm-mingw for
+# arm64ec, aarch64, i386 and x86_64) and every -dev package, so nothing is
+# installed. It builds Proton ARM64's architecture set, so no base Wine module
+# survives the overlay, and its ceiling is the glibc of Steam Runtime 4. The
+# default target, x86_64, is the engine above, unchanged.
+#
 # Usage: build-winegdk-container.sh WINEGDK_SOURCE_REPO OUT_PREFIX
 set -Eeuo pipefail
 umask 022
@@ -24,7 +32,20 @@ EXPECTED_SOURCE_MANIFEST_SHA256="$(
     "$PROJECT_ROOT/bol/config.py" | cut -d'"' -f2
 )"
 readonly EXPECTED_SOURCE_DATE_EPOCH="1784308597"
-readonly GLIBC_CEILING="2.31"
+readonly TARGET="${BOL_WINEGDK_TARGET:-x86_64}"
+case "$TARGET" in
+  x86_64)
+    readonly GLIBC_CEILING="2.31" BUILD_SUITE="bullseye"
+    readonly WINE_ARCHS="i386,x86_64" UNIX_ARCH="x86_64" ;;
+  aarch64)
+    readonly GLIBC_CEILING="2.41" BUILD_SUITE="steamrt4"
+    readonly WINE_ARCHS="arm64ec,aarch64,i386,x86_64" UNIX_ARCH="aarch64" ;;
+  *) echo "!! unknown BOL_WINEGDK_TARGET '$TARGET' (x86_64 or aarch64)" >&2; exit 1 ;;
+esac
+readonly XKBCOMMON_VERSION="1.9.2"
+readonly XKBCOMMON_SHA256="8d68a8b45796f34f7cace357b9f89b8c92b158557274fef5889b03648b55fe59"
+[ "$(uname -m)" = "$UNIX_ARCH" ] \
+  || { echo "!! the $TARGET engine is built on a $UNIX_ARCH host, not $(uname -m)" >&2; exit 1; }
 readonly VENDORED_FOLLOWUP_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0002-windows.storage-use-legacy-single-file-dialog.patch"
 readonly VENDORED_FOLLOWUP_PATCH_SHA256="68b20aa95afbef46ad9a50d24cadfdd89267e1f4ad341bb25320443b8cac1cae"
 readonly VENDORED_ACHIEVEMENTS_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0003-xgameruntime-use-windows-achievements-token.patch"
@@ -72,7 +93,7 @@ readonly NTSYNC_UAPI_HEADER_SHA256="006437ee52a3e04f921df77081eb5c21c44c71f598b1
 readonly SRC=/winegdk/source
 readonly BUILD=/winegdk/build
 
-[ "$(id -u)" = 0 ] || { echo "!! must run as root in a bullseye container" >&2; exit 1; }
+[ "$(id -u)" = 0 ] || { echo "!! must run as root in a $BUILD_SUITE container" >&2; exit 1; }
 
 readonly -a BUILD_PACKAGES=(
   build-essential ca-certificates bison flex gettext pkg-config python3-minimal
@@ -86,11 +107,52 @@ readonly -a BUILD_PACKAGES=(
   libxxf86vm-dev wayland-protocols
 )
 
-echo "== Installing build dependencies"
-export DEBIAN_FRONTEND=noninteractive
-bash "$PROJECT_ROOT/scripts/pin-apt-snapshot.sh" bullseye
-apt-get update -qq
-apt-get install -y --no-install-recommends git "${BUILD_PACKAGES[@]}" >/dev/null
+if [ "$TARGET" = x86_64 ]; then
+  echo "== Installing build dependencies"
+  export DEBIAN_FRONTEND=noninteractive
+  bash "$PROJECT_ROOT/scripts/pin-apt-snapshot.sh" bullseye
+  apt-get update -qq
+  apt-get install -y --no-install-recommends git "${BUILD_PACKAGES[@]}" >/dev/null
+else
+  # The SDK image is pinned by digest and is the whole build input; installing
+  # anything into it would make the prefix depend on the day of the build.
+  echo "== Checking the steamrt4 SDK toolchain"
+  for tool in git python3 make bison flex pkg-config readelf strip dpkg-query curl meson ninja \
+              aarch64-w64-mingw32-clang arm64ec-w64-mingw32-clang \
+              i686-w64-mingw32-clang x86_64-w64-mingw32-clang; do
+    command -v "$tool" >/dev/null \
+      || { echo "!! the SDK image has no $tool" >&2; exit 1; }
+  done
+  # ccache is first on the SDK's PATH; a cold cache only costs time, and the
+  # build must not read one left by anything else.
+  export CCACHE_DISABLE=1
+  cc --version | head -n1
+  aarch64-w64-mingw32-clang --version | head -n1
+  # Wine configures the Wayland driver out without xkbregistry, and the SDK
+  # has no libxkbregistry-dev. The base ships the 1.9.2 library at run time
+  # (files/lib/aarch64-linux-gnu/libxkbregistry.so.0.9.2), so build that very
+  # version to link against; nothing of it goes into the prefix.
+  if ! pkg-config --exists xkbregistry; then
+    echo "== Building xkbregistry $XKBCOMMON_VERSION to link the Wayland driver"
+    xkb_tar="/winegdk/xkbcommon-$XKBCOMMON_VERSION.tar.gz"
+    mkdir -p /winegdk
+    curl -fsSL --retry 5 -o "$xkb_tar" \
+      "https://github.com/xkbcommon/libxkbcommon/archive/refs/tags/xkbcommon-$XKBCOMMON_VERSION.tar.gz"
+    [ "$(sha256sum "$xkb_tar" | cut -d' ' -f1)" = "$XKBCOMMON_SHA256" ] \
+      || { echo "!! xkbcommon $XKBCOMMON_VERSION tarball hash mismatch" >&2; exit 1; }
+    rm -rf /winegdk/xkb-src /winegdk/xkb-build /winegdk/xkb
+    mkdir -p /winegdk/xkb-src
+    tar -xzf "$xkb_tar" -C /winegdk/xkb-src --strip-components=1
+    meson setup /winegdk/xkb-build /winegdk/xkb-src --prefix=/winegdk/xkb \
+      --libdir=lib --buildtype=release -Denable-x11=false -Denable-wayland=false \
+      -Denable-docs=false -Denable-tools=false -Denable-bash-completion=false \
+      -Denable-xkbregistry=true >/dev/null
+    ninja -C /winegdk/xkb-build install >/dev/null
+    export PKG_CONFIG_PATH="/winegdk/xkb/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    export LIBRARY_PATH="/winegdk/xkb/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    pkg-config --exists xkbregistry || { echo "!! xkbregistry still not found" >&2; exit 1; }
+  fi
+fi
 
 echo "== Installing the vendored linux/ntsync.h UAPI header"
 # Bullseye's linux-libc-dev is kernel 5.10 and predates ntsync, so configure
@@ -336,10 +398,10 @@ echo "== Verifying reviewed source hashes"
 ( cd "$SRC" && sha256sum --strict -c "$SOURCE_SHA256SUMS" >/dev/null ) \
   || { echo "!! exported source does not match the reviewed native delta" >&2; exit 1; }
 
-echo "== Configuring + building WineGDK (i386 + x86_64)"
+echo "== Configuring + building WineGDK ($WINE_ARCHS)"
 ( cd "$BUILD"
   SOURCE_DATE_EPOCH="$EXPECTED_SOURCE_DATE_EPOCH" \
-    "$SRC/configure" --enable-archs=i386,x86_64 --disable-tests --prefix="$PREFIX"
+    "$SRC/configure" --enable-archs="$WINE_ARCHS" --disable-tests --prefix="$PREFIX"
   SOURCE_DATE_EPOCH="$EXPECTED_SOURCE_DATE_EPOCH" make -j"$(nproc)"
   # Stripped, the way Wine itself installs a release: its install rule strips
   # each module and writes the builtin mark back onto the PE ones. The
@@ -351,6 +413,13 @@ echo "== Configuring + building WineGDK (i386 + x86_64)"
 # not read SOURCE_DATE_EPOCH there); put the link time back.
 python3 "$PROJECT_ROOT/scripts/pe-stamp.py" "$EXPECTED_SOURCE_DATE_EPOCH" \
   "$PREFIX/lib/wine"
+if [ "$TARGET" = aarch64 ]; then
+  # clang writes the time of the build into each COFF object it assembles for
+  # the *-windows targets; the ones inside the installed lib*.a archives were
+  # the only bytes two ARM64EC builds did not share.
+  python3 "$PROJECT_ROOT/scripts/coff-stamp.py" "$EXPECTED_SOURCE_DATE_EPOCH" \
+    "$PREFIX/lib/wine"
+fi
 # Wine's installed headers embed the builder's absolute source path and are not
 # runtime material; drop them so the prefix is relocatable + reproducible.
 rm -rf "$PREFIX/include"
@@ -382,8 +451,8 @@ done
 # not match, the driver fails to load on its win32u imports, and BOL_INPUT=
 # wayland can never start the game (issue #180).
 echo "== Verifying the Wayland driver was built"
-for module in lib/wine/x86_64-unix/winewayland.so \
-              lib/wine/x86_64-windows/winewayland.drv; do
+for module in "lib/wine/$UNIX_ARCH-unix/winewayland.so" \
+              "lib/wine/$UNIX_ARCH-windows/winewayland.drv"; do
   [ -f "$PREFIX/$module" ] \
     || { echo "!! $module was not built — Wayland driver configured out" >&2; exit 1; }
 done
@@ -393,13 +462,18 @@ done
 # libunwind alongside the engine's other x86_64-linux-gnu libs. Proton's wrapper
 # puts files/lib/x86_64-linux-gnu on LD_LIBRARY_PATH, so ntdll resolves it there.
 # This matches the upstream engine layout that REQUIRED_*_PATHS pin.
-echo "== Bundling libunwind for the sniper runtime"
-libunwind_real="$(readlink -f /usr/lib/x86_64-linux-gnu/libunwind.so.8)"
-[ -f "$libunwind_real" ] \
-  || { echo "!! libunwind.so.8 missing from the build container" >&2; exit 1; }
-mkdir -p "$PREFIX/lib/x86_64-linux-gnu"
-cp -a "$libunwind_real" "$PREFIX/lib/x86_64-linux-gnu/$(basename "$libunwind_real")"
-ln -sf "$(basename "$libunwind_real")" "$PREFIX/lib/x86_64-linux-gnu/libunwind.so.8"
+echo "== Bundling libunwind for the Steam Runtime"
+if [ "$TARGET" = x86_64 ] \
+   || readelf -d "$PREFIX/lib/wine/$UNIX_ARCH-unix/ntdll.so" | grep -q 'libunwind'; then
+  libunwind_real="$(readlink -f "/usr/lib/$UNIX_ARCH-linux-gnu/libunwind.so.8")"
+  [ -f "$libunwind_real" ] \
+    || { echo "!! libunwind.so.8 missing from the build container" >&2; exit 1; }
+  mkdir -p "$PREFIX/lib/$UNIX_ARCH-linux-gnu"
+  cp -a "$libunwind_real" "$PREFIX/lib/$UNIX_ARCH-linux-gnu/$(basename "$libunwind_real")"
+  ln -sf "$(basename "$libunwind_real")" "$PREFIX/lib/$UNIX_ARCH-linux-gnu/libunwind.so.8"
+else
+  echo "ntdll.so does not link libunwind"
+fi
 
 echo "== Enforcing GLIBC_$GLIBC_CEILING ABI ceiling"
 version_is_greater() {  # $1 > $2 ?
@@ -424,12 +498,44 @@ done < <(find "$PREFIX" -type f -print0)
 [ "$elf" -gt 0 ] || { echo "!! no ELF file in prefix" >&2; exit 1; }
 [ -n "$(find "$PREFIX" -type f -name wineserver -print -quit)" ] \
   || { echo "!! prefix has no wineserver" >&2; exit 1; }
-[ -n "$(find "$PREFIX" -type f -path '*/x86_64-unix/ntdll.so' -print -quit)" ] \
-  || { echo "!! prefix has no x86_64-unix/ntdll.so" >&2; exit 1; }
+[ -n "$(find "$PREFIX" -type f -path "*/$UNIX_ARCH-unix/ntdll.so" -print -quit)" ] \
+  || { echo "!! prefix has no $UNIX_ARCH-unix/ntdll.so" >&2; exit 1; }
 [ ! -e "$PREFIX/lib/wine/i386-unix" ] \
   && [ ! -L "$PREFIX/lib/wine/i386-unix" ] \
   || { echo "!! prefix unexpectedly contains an i386 Unix runtime" >&2; exit 1; }
 [ "$failures" = 0 ] || { echo "!! $failures ELF file(s) exceed GLIBC_$GLIBC_CEILING" >&2; exit 1; }
+if [ "$TARGET" = aarch64 ]; then
+  # With arm64ec in the set, aarch64-windows holds ARM64X images: one file
+  # whose ARM64 and ARM64EC halves serve native and emulated callers alike.
+  # A plain ARM64 ntdll there means configure dropped arm64ec, and x64 code
+  # could not load at all.
+  echo "== Verifying the ARM64X system modules"
+  for module in ntdll combase user32 xgameruntime; do
+    dll="$PREFIX/lib/wine/aarch64-windows/$module.dll"
+    [ -f "$dll" ] || { echo "!! $module.dll was not built for aarch64" >&2; exit 1; }
+    python3 - "$dll" <<'PEPY' || { echo "!! $module.dll is not ARM64X" >&2; exit 1; }
+import struct, sys
+d = open(sys.argv[1], "rb").read()
+e = struct.unpack_from("<I", d, 0x3C)[0]
+opt = e + 24
+machine = struct.unpack_from("<H", d, e + 4)[0]
+rva, size = struct.unpack_from("<II", d, opt + 112 + 8 * 10)
+nsec = struct.unpack_from("<H", d, e + 6)[0]
+sect = opt + struct.unpack_from("<H", d, e + 20)[0]
+off = None
+for i in range(nsec):
+    vsz, va, rsz, raw = struct.unpack_from("<IIII", d, sect + 40 * i + 8)
+    if va <= rva < va + max(vsz, rsz):
+        off = raw + rva - va
+ok = (machine == 0xAA64 and off is not None
+      and struct.unpack_from("<I", d, off)[0] >= 0xD0
+      and struct.unpack_from("<Q", d, off + 0xC8)[0] != 0)
+sys.exit(0 if ok else 1)
+PEPY
+  done
+  [ -f "$PREFIX/lib/wine/x86_64-windows/ntdll.dll" ] \
+    || { echo "!! x86_64-windows was not built" >&2; exit 1; }
+fi
 
 echo "== Writing provenance"
 dpkg-query -W -f='${binary:Package}\t${Version}\n' > "$PREFIX/.bol-winegdk-package-versions.tsv"
@@ -439,9 +545,16 @@ schema=1
 winegdk_commit=$EXPECTED_COMMIT
 source_manifest_sha256=$EXPECTED_SOURCE_MANIFEST_SHA256
 source_date_epoch=$EXPECTED_SOURCE_DATE_EPOCH
-debian_suite=bullseye
+debian_suite=$BUILD_SUITE
 glibc_ceiling=$GLIBC_CEILING
 package_versions_sha256=$pv_sha
 EOF
+if [ "$TARGET" != x86_64 ]; then
+  # Appended, so the x86_64 file keeps the exact schema-1 bytes.
+  cat >> "$PREFIX/.bol-winegdk-build.env" <<EOF
+target=$TARGET
+wine_archs=$WINE_ARCHS
+EOF
+fi
 
 echo "== WineGDK prefix ready: $PREFIX"

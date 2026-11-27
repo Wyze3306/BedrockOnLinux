@@ -33,7 +33,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import webview
+from . import hostarch, webview
 from .archive import safe_extract_tar
 from .config import (
     APP,
@@ -44,6 +44,7 @@ from .config import (
     MC_PRODUCTS,
     WINEGDK_PREBUILT_REPO,
     XODUS_ARCHIVE_SHA256,
+    XODUS_ARM64_ARCHIVE_SHA256,
     XODUS_BIN,
     XODUS_DIR,
     XODUS_HOME,
@@ -318,8 +319,31 @@ def cli_available():
     return XODUS_BIN.is_file() and os.access(XODUS_BIN, os.X_OK)
 
 
+# The aarch64 build of the same revision (#250): released under its own tag,
+# xodus-<rev>-aarch64, as xodus-cli-<rev>-aarch64.tar.gz.
+ARM64_SUFFIX = "-aarch64"
+
+
+def _arm64_build():
+    """(marker, sha256, url, asset) of the native aarch64 xodus-cli, or None
+    where it is not used (bol.hostarch.native_helpers).
+
+    The data feed names x86-64 builds only, so an ARM computer keeps to the
+    pinned one; the marker carries the suffix, so an x86-64 xodus-cli an
+    earlier launcher installed here is replaced by the native one.
+    """
+    if not hostarch.native_helpers():
+        return None
+    asset = f"xodus-cli-{XODUS_REV}{ARM64_SUFFIX}.tar.gz"
+    url = (f"https://github.com/{WINEGDK_PREBUILT_REPO}/releases/download/"
+           f"xodus-{XODUS_REV}{ARM64_SUFFIX}/{asset}")
+    return (XODUS_REV + ARM64_SUFFIX, XODUS_ARM64_ARCHIVE_SHA256, url, asset)
+
+
 def effective_rev():
     """The downloader revision in force: the data feed's, else the pinned."""
+    if _arm64_build():
+        return XODUS_REV
     from . import feed
     return feed.resolve("xodus", XODUS_REV, XODUS_ARCHIVE_SHA256)[0]
 
@@ -335,6 +359,10 @@ def ensure_cli():
     than its SHA-256; when it cannot be installed the embedded pin is, so a
     feed can add a fix but cannot take the downloader away.
     """
+    arm64 = _arm64_build()
+    if arm64:
+        marker, sha256, url, asset = arm64
+        return _ensure_cli(marker, sha256, url, asset=asset)
     from . import feed
     rev, sha256, url = feed.resolve("xodus", XODUS_REV, XODUS_ARCHIVE_SHA256)
     if rev != XODUS_REV:
@@ -347,13 +375,13 @@ def ensure_cli():
     return _ensure_cli(XODUS_REV, XODUS_ARCHIVE_SHA256, None)
 
 
-def _ensure_cli(rev, pinned_sha256, direct_url, attempts=5):
+def _ensure_cli(rev, pinned_sha256, direct_url, attempts=5, asset=None):
     marker = XODUS_DIR / ".rev"
     if cli_available() and marker.exists() and \
             marker.read_text().strip() == rev:
         return XODUS_BIN
 
-    asset = f"xodus-cli-{rev}.tar.gz"
+    asset = asset or f"xodus-cli-{rev}.tar.gz"
     # Unreleased candidates carry the reviewed asset beside the launcher, like
     # the engine archive, so local testing needs nothing published.
     anchors = []

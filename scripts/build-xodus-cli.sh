@@ -41,7 +41,16 @@ COMMIT="$(grep -m1 '^XODUS_SOURCE_COMMIT = ' "$SRC/bol/config.py" | cut -d'"' -f
 # Everything else still comes from the container.
 GLIBC_FLOOR="$(grep -m1 '^REQUIRED_ENGINE_GLIBC_MAX = ' "$SRC/bol/vkd3d.py" | cut -d'"' -f2)"
 [ -n "$GLIBC_FLOOR" ] || { echo "!! REQUIRED_ENGINE_GLIBC_MAX missing from bol/vkd3d.py" >&2; exit 1; }
-TARGET="x86_64-unknown-linux-gnu"
+# Built for the machine it runs on: x86_64, or aarch64 for the experimental
+# ARM64EC engine (#250), whose archive is named apart (-aarch64) and pinned
+# apart (XODUS_ARM64_ARCHIVE_SHA256). The x86_64 archive keeps its name.
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64) SUFFIX="" PIN_NAME=XODUS_ARCHIVE_SHA256 ;;
+  aarch64) SUFFIX="-aarch64" PIN_NAME=XODUS_ARM64_ARCHIVE_SHA256 ;;
+  *) echo "!! no xodus-cli build for $ARCH" >&2; exit 1 ;;
+esac
+TARGET="$ARCH-unknown-linux-gnu"
 # The patches are part of what the binary is, so the rev names them too: a
 # revision has to name exactly one set of bytes, or a rebuild silently
 # replaces a published asset with a different binary under the same name.
@@ -100,7 +109,11 @@ if [ "$PATCH_LEVEL" -gt 0 ]; then
   echo "== Applying $PATCH_LEVEL patch(es) from third_party/xodus/patches"
   # -3 is deliberately absent: a patch that no longer applies cleanly to the
   # pinned commit is a patch that has to be re-read, not merged blind.
-  git -C "$TREE" -c user.email=build@bedrock-on-linux -c user.name=BedrockOnLinux \
+  # The committer date is fixed too: git archive stamps every entry of the
+  # source tarball with HEAD's commit time, so a wall-clock date made that
+  # tarball differ on every build, from one release to the next.
+  GIT_COMMITTER_DATE="$SOURCE_DATE_EPOCH +0000" \
+    git -C "$TREE" -c user.email=build@bedrock-on-linux -c user.name=BedrockOnLinux \
     am --keep-non-patch "$PATCHES"/*.patch
   # Each patch carries the test that fails without it, and this is the only
   # place they ever run: the crate is not vendored into this repository. Every
@@ -146,7 +159,7 @@ if [ "$PATCH_LEVEL" -gt 0 ]; then
 fi
 
 mkdir -p "$SRC/dist"
-OUT="$SRC/dist/xodus-cli-$REV.tar.gz"
+OUT="$SRC/dist/xodus-cli-$REV$SUFFIX.tar.gz"
 tar --sort=name --format=gnu --hard-dereference \
   --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
   -C "$SET" -cf - . | gzip -n -6 > "$OUT"
@@ -166,6 +179,6 @@ sha256sum "$SRC_OUT" | sed "s|$SRC/dist/||" > "$SRC_OUT.sha256"
 echo
 echo "   XODUS_SOURCE_COMMIT = \"$COMMIT\""
 echo "   XODUS_REV = \"$REV\""
-echo "   XODUS_ARCHIVE_SHA256 = \"$SHA\""
+echo "   $PIN_NAME = \"$SHA\""
 echo "   $OUT"
 echo "   $SRC_OUT"

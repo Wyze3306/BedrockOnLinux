@@ -11,6 +11,12 @@
 # actions (checkout, attest, publish) keep Node.js on the host, matching
 # build-xcurl.yml. The source tarball is published beside the binary so the
 # GPL-3.0 source requirement is met by the same release.
+#
+# arch: aarch64 builds the same rev natively on an ARM runner for the
+# experimental ARM64EC engine (#250): xodus-cli-<rev>-aarch64.tar.gz and
+# xodus-webview-<rev>-aarch64.tar.xz, released under xodus-<rev>-aarch64 and
+# pinned by XODUS_ARM64_ARCHIVE_SHA256 / XODUS_WEBVIEW_ARM64_SHA256. While either
+# pin is empty a run prints the SHA-256s and publishes nothing.
 
 name: Build xodus-cli
 
@@ -21,6 +27,10 @@ on:
         description: "Publish + attest xodus-cli as a release"
         type: boolean
         default: false
+      arch:
+        description: "x86_64, or aarch64 for the experimental ARM64EC engine"
+        type: string
+        default: x86_64
     outputs:
       artifact:
         description: "Name of the uploaded xodus-cli artifact"
@@ -37,6 +47,11 @@ on:
         description: "Publish + attest xodus-cli as a release on this fork"
         type: boolean
         default: true
+      arch:
+        description: "x86_64, or aarch64 for the experimental ARM64EC engine"
+        type: choice
+        options: [x86_64, aarch64]
+        default: x86_64
 
 permissions:
   contents: read
@@ -55,11 +70,12 @@ env:
   # for it.
   ZIG_VERSION: "0.15.2"
   ZIG_SHA256: "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+  ZIG_SHA256_AARCH64: "958ed7d1e00d0ea76590d27666efbf7a932281b3d7ba0c6b01b0ff26498f667f"
   CARGO_ZIGBUILD_VERSION: "0.24.1"
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     permissions:
       contents: write
       id-token: write
@@ -75,9 +91,14 @@ jobs:
 
       - name: Build xodus-cli in a pinned Trixie container
         run: |
+          # The image digest names a multi-platform index: the ARM runner
+          # gets the arm64 image of the same release.
+          arch="$(uname -m)"
+          zig_sha="$ZIG_SHA256"
+          [ "$arch" = x86_64 ] || zig_sha="$ZIG_SHA256_AARCH64"
           docker run --rm -v "$PWD:/repo" -w /repo \
-            -e RUST_TOOLCHAIN="${RUST_TOOLCHAIN}" \
-            -e ZIG_VERSION="${ZIG_VERSION}" -e ZIG_SHA256="${ZIG_SHA256}" \
+            -e RUST_TOOLCHAIN="${RUST_TOOLCHAIN}" -e ARCH="$arch" \
+            -e ZIG_VERSION="${ZIG_VERSION}" -e ZIG_SHA256="$zig_sha" \
             -e CARGO_ZIGBUILD_VERSION="${CARGO_ZIGBUILD_VERSION}" \
             debian:trixie@sha256:fac46bff2e02f51425b6e33b0e1169f55dfb053d83511ca28aa50c09fd5ed7a4 \
             bash -euo pipefail -c '
@@ -119,7 +140,7 @@ jobs:
               curl -fsSL --retry 5 https://sh.rustup.rs \
                 | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
               . "$HOME/.cargo/env"
-              zig_archive="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+              zig_archive="zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz"
               curl -fsSL --retry 5 -o "/tmp/${zig_archive}" \
                 "https://ziglang.org/download/${ZIG_VERSION}/${zig_archive}"
               echo "${ZIG_SHA256}  /tmp/${zig_archive}" | sha256sum -c -
@@ -141,7 +162,7 @@ jobs:
               # The same container, because the bundle has to be the closure of
               # the binary that was just built.
               scripts/build-xodus-webview.sh /tmp/xodus-webview-work \
-                /tmp/xodus-work/xodus/target/x86_64-unknown-linux-gnu/release/xodus-cli
+                "/tmp/xodus-work/xodus/target/${ARCH}-unknown-linux-gnu/release/xodus-cli"
             '
           sudo chown -R "$(id -u):$(id -g)" dist
 
@@ -151,8 +172,12 @@ jobs:
           PUBLISH: ${{ inputs.publish }}
         run: |
           rev="$(grep -m1 '^XODUS_REV = ' bol/config.py | cut -d'"' -f2)"
-          pin="$(grep -m1 '^XODUS_ARCHIVE_SHA256 = ' bol/config.py | cut -d'"' -f2)"
-          f="dist/xodus-cli-${rev}.tar.gz"
+          suffix="" pin_name=XODUS_ARCHIVE_SHA256
+          if [ "$(uname -m)" = aarch64 ]; then
+            suffix="-aarch64" pin_name=XODUS_ARM64_ARCHIVE_SHA256
+          fi
+          pin="$(grep -m1 "^$pin_name = " bol/config.py | cut -d'"' -f2)"
+          f="dist/xodus-cli-${rev}${suffix}.tar.gz"
           src="dist/xodus-src-${rev}.tar.gz"
           if [ ! -f "$f" ]; then
             echo "::error::expected $f but it was not produced. XODUS_REV in" \
@@ -164,9 +189,13 @@ jobs:
           built="$(sha256sum "$f" | cut -d' ' -f1)"
           echo "pinned : $pin"
           echo "built  : $built"
-          if [ "$built" != "$pin" ]; then
+          publishable=true
+          if [ -n "$suffix" ] && [ -z "$pin" ]; then
+            echo "::warning::$pin_name is empty: pin $built and run again to publish."
+            publishable=false
+          elif [ "$built" != "$pin" ]; then
             if [ "$PUBLISH" = "true" ]; then
-              echo "::error::xodus-cli SHA-256 does not match XODUS_ARCHIVE_SHA256." \
+              echo "::error::xodus-cli SHA-256 does not match $pin_name." \
                    "Run with publish=false, review the artifact, and pin its SHA-256 in bol/config.py." >&2
               exit 1
             fi
@@ -178,14 +207,19 @@ jobs:
             echo "TARBALL=$f"
             echo "SRC_TARBALL=$src"
             echo "REV=$rev"
+            echo "SUFFIX=$suffix"
+            echo "PUBLISHABLE=$publishable"
+            echo "ARTIFACT=xodus-cli${suffix}"
           } >> "$GITHUB_ENV"
 
       - name: Check the WebKitGTK runtime against its pin
         id: webview
         run: |
           rev="$(grep -m1 '^XODUS_WEBVIEW_REV = ' bol/config.py | cut -d'"' -f2)"
-          pin="$(grep -m1 '^XODUS_WEBVIEW_SHA256 = ' bol/config.py | cut -d'"' -f2)"
-          f="dist/xodus-webview-${rev}.tar.xz"
+          pin_name=XODUS_WEBVIEW_SHA256
+          [ -z "$SUFFIX" ] || pin_name=XODUS_WEBVIEW_ARM64_SHA256
+          pin="$(grep -m1 "^$pin_name = " bol/config.py | cut -d'"' -f2)"
+          f="dist/xodus-webview-${rev}${SUFFIX}.tar.xz"
           if [ ! -f "$f" ]; then
             echo "::error::expected $f but it was not produced." >&2
             ls -la dist || true
@@ -198,12 +232,14 @@ jobs:
           # an unpinned runtime, so publishing one is how its SHA-256 becomes
           # known. Once pinned, a mismatch means the snapshot moved under us.
           if [ -n "$pin" ] && [ "$built" != "$pin" ]; then
-            echo "::error::xodus-webview SHA-256 does not match XODUS_WEBVIEW_SHA256." \
+            echo "::error::xodus-webview SHA-256 does not match $pin_name." \
                  "Re-pin bol/config.py from a reviewed build of this commit." >&2
             exit 1
           fi
           if [ -z "$pin" ]; then
-            echo "::warning::XODUS_WEBVIEW_SHA256 is unset; pin $built in bol/config.py."
+            echo "::warning::$pin_name is unset; pin $built in bol/config.py."
+            # The aarch64 release waits for both of its pins.
+            [ -z "$SUFFIX" ] || echo "PUBLISHABLE=false" >> "$GITHUB_ENV"
           fi
           {
             echo "WEBVIEW_TARBALL=$f"
@@ -214,7 +250,7 @@ jobs:
       - name: Upload artifact (reuse within a run)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: xodus-cli
+          name: ${{ env.ARTIFACT }}
           path: |
             ${{ env.TARBALL }}
             ${{ env.TARBALL }}.sha256
@@ -225,8 +261,25 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Refuse to replace a published aarch64 release
+        if: ${{ inputs.publish && env.SUFFIX != '' && env.PUBLISHABLE == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="xodus-${REV}${SUFFIX}"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/published"
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" -p '*.sha256' -D "$RUNNER_TEMP/published"
+            for sidecar in "$TARBALL.sha256" "$WEBVIEW_TARBALL.sha256"; do
+              cmp "$sidecar" "$RUNNER_TEMP/published/$(basename "$sidecar")" || {
+                echo "::error::$tag already holds other bytes for $(basename "$sidecar" .sha256)" >&2
+                exit 1
+              }
+            done
+          fi
+
       - name: Attest build provenance
-        if: ${{ inputs.publish }}
+        if: ${{ inputs.publish && env.PUBLISHABLE == 'true' }}
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
@@ -234,13 +287,14 @@ jobs:
             ${{ env.WEBVIEW_TARBALL }}
 
       - name: Publish the xodus-cli release
-        if: ${{ inputs.publish }}
+        if: ${{ inputs.publish && env.PUBLISHABLE == 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: xodus-${{ env.REV }}
+          tag_name: xodus-${{ env.REV }}${{ env.SUFFIX }}
           target_commitish: ${{ github.sha }}
-          name: xodus-cli ${{ env.REV }} (from source)
+          name: xodus-cli ${{ env.REV }}${{ env.SUFFIX }} (from source)
           make_latest: false
+          prerelease: ${{ env.SUFFIX != '' }}
           body: >
             xodus-cli built from xodus-gaming/xodus commit ${{ env.REV }} with
             --features xodus/key-chain-file. SHA-256

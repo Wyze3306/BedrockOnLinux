@@ -27,6 +27,18 @@ REV="$(grep -m1 '^XODUS_WEBVIEW_REV = ' "$SRC/bol/config.py" | cut -d'"' -f2)"
 EXEC_DIR="$(grep -m1 '^XODUS_WEBVIEW_EXEC_DIR = ' "$SRC/bol/config.py" | cut -d'"' -f2)"
 [ -n "$EXEC_DIR" ] || { echo "!! XODUS_WEBVIEW_EXEC_DIR missing from bol/config.py" >&2; exit 1; }
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1784308597}"
+# aarch64 bundles the same stack for the experimental ARM64EC engine (#250)
+# under its own name; the helper literal names that machine's directory.
+MULTIARCH="$(uname -m)-linux-gnu"
+case "$MULTIARCH" in
+  x86_64-linux-gnu) SUFFIX="" PIN_NAME=XODUS_WEBVIEW_SHA256 ;;
+  aarch64-linux-gnu)
+    SUFFIX="-aarch64" PIN_NAME=XODUS_WEBVIEW_ARM64_SHA256
+    EXEC_DIR="$(grep -m1 '^XODUS_WEBVIEW_ARM64_EXEC_DIR = ' "$SRC/bol/config.py" | cut -d'"' -f2)"
+    [ -n "$EXEC_DIR" ] || { echo "!! XODUS_WEBVIEW_ARM64_EXEC_DIR missing from bol/config.py" >&2; exit 1; } ;;
+  *) echo "!! no WebKitGTK runtime for $MULTIARCH" >&2; exit 1 ;;
+esac
+export MULTIARCH
 
 SET="$WORK/webview"
 rm -rf "$SET"
@@ -69,7 +81,7 @@ HOST = re.compile(
 # a video-codec closure several times the size of everything else here.
 LOADERS = ("png", "jpeg", "gif", "ico", "bmp", "xpm", "pnm", "tga", "icns")
 
-libdir = Path("/usr/lib/x86_64-linux-gnu")
+libdir = Path("/usr/lib") / os.environ["MULTIARCH"]
 lib_out = out / "lib"
 helper_out = out / "libexec" / exec_dir.name
 injected_out = helper_out / "injected-bundle"
@@ -183,7 +195,7 @@ print(f"   {kept} libraries, {len(helpers)} helper processes, "
 PY
 
 echo "== generating the pixbuf loader cache"
-QUERY=/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders
+QUERY="/usr/lib/$MULTIARCH/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders"
 [ -x "$QUERY" ] || QUERY="$(command -v gdk-pixbuf-query-loaders || true)"
 [ -n "$QUERY" ] || { echo "!! need gdk-pixbuf-query-loaders" >&2; exit 1; }
 # The cache stores absolute module paths, which only exist once the launcher
@@ -216,7 +228,7 @@ out = Path(sys.argv[1])
 # and whichever object asks for a soname first decides where it comes from.
 environment = dict(os.environ, LD_LIBRARY_PATH=str(out / "lib"))
 allowed = re.compile(
-    r"^/(usr/)?lib(32|64|/x86_64-linux-gnu)?/(ld-linux|lib(c|m|dl|rt|pthread|"
+    r"^/(usr/)?lib(32|64|/x86_64-linux-gnu|/aarch64-linux-gnu)?/(ld-linux|lib(c|m|dl|rt|pthread|"
     r"resolv|util|nsl|anl|thread_db|mvec|GL|GLX|GLdispatch|GLESv2|OpenGL|EGL|"
     r"gbm|drm|va|va-drm|va-x11|vdpau|X11|X11-xcb|xcb.*|Xext|Xfixes|Xrender|Xi|"
     r"Xcursor|Xdamage|Xcomposite|Xrandr|Xinerama|Xtst|Xau|Xdmcp|wayland-.*|"
@@ -276,7 +288,7 @@ fi
 
 echo "== packaging"
 mkdir -p "$SRC/dist"
-OUT="$SRC/dist/xodus-webview-$REV.tar.xz"
+OUT="$SRC/dist/xodus-webview-$REV$SUFFIX.tar.xz"
 tar --sort=name --format=gnu --hard-dereference \
   --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
   -C "$SET" -cf - . | xz -9 -T1 > "$OUT"
@@ -286,5 +298,5 @@ echo "$SHA  $(basename "$OUT")" > "$OUT.sha256"
 
 echo
 echo "   XODUS_WEBVIEW_REV = \"$REV\""
-echo "   XODUS_WEBVIEW_SHA256 = \"$SHA\""
+echo "   $PIN_NAME = \"$SHA\""
 echo "   $OUT ($(du -h "$OUT" | cut -f1))"

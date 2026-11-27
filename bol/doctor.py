@@ -4,8 +4,8 @@
 import shutil
 import sys
 
-from . import (deps, discord, fixups, gamepad, hostarch, presence, selinux,
-               webview)
+from . import (deps, discord, engine_arch, fixups, gamepad, hostarch,
+               presence, selinux, webview)
 from .config import DATA, PRETTY, VERSION
 from .gpu_safety import (
     GpuSafetyAcknowledgementStatus,
@@ -118,6 +118,12 @@ def doctor(acknowledge_gpu_crash=False):
     arch_problem = hostarch.problem()
     if arch_problem:
         warn(arch_problem)
+    # Which engine runs, and whether FEX-Emu is inside it or the kernel's
+    # binfmt emulator runs all of it (#250).
+    print(f"  {'engine':12} : {engine_arch.summary()}")
+    engine_notice = engine_arch.fallback_notice()
+    if engine_notice:
+        warn(engine_notice)
     # A stock openSUSE refuses Wine execmod (#380).
     print(f"  {'selinux':12} : {selinux.summary()}")
     selinux_problem = selinux.problem()

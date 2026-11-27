@@ -30,7 +30,9 @@ from pathlib import Path
 # Our WoW64 engine installs the Unix modules under files/lib; a user-supplied
 # Proton on the classic layout uses files/lib64. An engine on neither is one
 # we cannot read, not one we may accuse.
-_UNIX_DIRS = ("files/lib/wine/x86_64-unix", "files/lib64/wine/x86_64-unix")
+# The ARM64EC engine's Unix side is aarch64, and only it has that directory.
+_UNIX_DIRS = ("files/lib/wine/aarch64-unix", "files/lib/wine/x86_64-unix",
+              "files/lib64/wine/x86_64-unix")
 
 # The driver takes its Wine entry points from win32u, so win32u is the module
 # its build has to agree with.

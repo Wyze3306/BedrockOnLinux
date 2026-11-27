@@ -15,6 +15,15 @@ binfmt_misc. The host has no such entry, so the binfmt check alone told those
 players to install the FEX-Emu they already had. Instead the launcher starts
 itself again inside muvm, the way Steam runs there, and everything it starts
 from then on finds 4 KiB pages and FEX.
+
+The experimental ARM64EC engine (bol.engine_arch) changes what needs that
+emulator: Wine is native there and FEX-Emu runs inside the Wine process, so
+the engine and the game need no binfmt entry at all. What the launcher
+starts beside them still may -- xodus-cli and the WebKitGTK sign-in runtime
+are x86-64 builds until aarch64 ones are pinned -- so x86_64_programs()
+names whatever still does, and problem() asks for an emulator only for
+those. The muvm relaunch stays either way: Wine's ARM64 support needs 4 KiB
+pages too.
 """
 # SPDX-License-Identifier: MIT
 
@@ -92,6 +101,54 @@ def x86_64_emulator(binfmt=BINFMT):
     return None
 
 
+def engine_needs_emulator():
+    """Whether the engine and the game run through the binfmt emulator:
+    everywhere off x86-64 except with the ARM64EC engine."""
+    if native():
+        return False
+    from . import engine_arch
+    try:
+        return engine_arch.active() != engine_arch.ARM64EC
+    except Exception:  # an unreadable settings file means the default engine
+        return True
+
+
+def native_helpers():
+    """Whether xodus-cli and the WebKitGTK runtime run as aarch64 builds here.
+
+    One answer for both: xodus-cli loads WebKitGTK into its own process, so
+    the runtime it gets has to be built for the same processor. They are
+    native on an aarch64 computer once this launcher pins the aarch64
+    xodus-cli; without that pin both stay the x86-64 builds, run through the
+    emulator as before. Either engine works with either: xodus-cli only
+    hands the game to Wine.
+    """
+    from . import config
+    return (machine() in ("aarch64", "arm64")
+            and bool((config.XODUS_ARM64_ARCHIVE_SHA256 or "").strip()))
+
+
+def helpers_need_emulator():
+    """Whether xodus-cli and the WebKitGTK runtime are x86-64 programs here."""
+    return not native() and not native_helpers()
+
+
+def x86_64_programs():
+    """What this launcher starts that needs x86-64 emulation here."""
+    programs = []
+    if engine_needs_emulator():
+        programs += ["Minecraft for Windows", "Wine"]
+    if helpers_need_emulator():
+        programs += ["xodus-cli", "the WebKitGTK sign-in window"]
+    return programs
+
+
+def _names(programs):
+    if len(programs) <= 2:
+        return " and ".join(programs)
+    return ", ".join(programs[:-1]) + " and " + programs[-1]
+
+
 def problem(binfmt=BINFMT):
     """Why x86-64 programs cannot run here, or None when they can."""
     if native():
@@ -106,14 +163,23 @@ def problem(binfmt=BINFMT):
             "x86-64 programs in a small virtual machine with 4 KiB pages "
             "(on Fedora Asahi Remix: sudo dnf install muvm fex-emu), then "
             "start BedrockOnLinux again: it uses them by itself.")
-    if x86_64_emulator(binfmt):
+    programs = x86_64_programs()
+    if not programs or x86_64_emulator(binfmt):
         return None
+    if engine_needs_emulator():
+        return (
+            f"This computer's processor is "
+            f"{platform.machine() or 'not x86-64'}, and Minecraft for "
+            "Windows, Wine and xodus-cli are x86-64 programs. On an ARM "
+            "computer they run through an x86-64 emulator registered with "
+            "the kernel, and none is. Install FEX-Emu with its x86-64 RootFS "
+            "(https://fex-emu.com), or Box64, then try again.")
     return (
-        f"This computer's processor is {platform.machine() or 'not x86-64'}, "
-        "and Minecraft for Windows, Wine and xodus-cli are x86-64 programs. "
-        "On an ARM computer they run through an x86-64 emulator registered "
-        "with the kernel, and none is. Install FEX-Emu with its x86-64 "
-        "RootFS (https://fex-emu.com), or Box64, then try again.")
+        "The ARM game engine runs Minecraft through the FEX-Emu it carries, "
+        f"but {_names(programs)} are still x86-64 programs, which need an "
+        "x86-64 emulator registered with the kernel, and none is. Install "
+        "FEX-Emu with its x86-64 RootFS (https://fex-emu.com), or Box64, "
+        "then try again.")
 
 
 def summary(binfmt=BINFMT):
@@ -128,10 +194,14 @@ def summary(binfmt=BINFMT):
         return f"MISSING muvm ({name}, {pages})"
     emulator = x86_64_emulator(binfmt)
     inside = ", inside muvm" if os.environ.get(IN_MUVM) else ""
+    engine = ("" if engine_needs_emulator()
+              else "; the ARM engine runs the game through its own FEX-Emu")
+    if not x86_64_programs():
+        return f"{name}{inside}{engine}"
     if emulator:
         return (f"{name}, x86-64 programs through {emulator}{inside} "
-                "(experimental)")
-    return f"MISSING x86-64 emulation ({name}{inside})"
+                f"(experimental){engine}")
+    return f"MISSING x86-64 emulation ({name}{inside}){engine}"
 
 
 def muvm_command(argv=None, environ=None, executable=None):

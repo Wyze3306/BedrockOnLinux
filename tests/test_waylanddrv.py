@@ -73,12 +73,26 @@ class BuildScriptTests(unittest.TestCase):
     def test_both_build_scripts_fail_closed_without_a_wayland_driver(self):
         # The regression was silent: configure dropped the driver, make
         # succeeded, and the packager filled the gap from the Proton base.
-        for script in (BULLSEYE_SCRIPT, CONTAINER_SCRIPT):
-            text = script.read_text(encoding="utf-8")
-            with self.subTest(script=script.name):
-                self.assertIn("lib/wine/x86_64-unix/winewayland.so", text)
-                self.assertIn("lib/wine/x86_64-windows/winewayland.drv", text)
-                self.assertIn("Wayland driver configured out", text)
+        text = BULLSEYE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("lib/wine/x86_64-unix/winewayland.so", text)
+        self.assertIn("lib/wine/x86_64-windows/winewayland.drv", text)
+        self.assertIn("Wayland driver configured out", text)
+        # The container script checks the driver of the architecture it
+        # builds: x86_64, or aarch64 for the ARM64EC engine (#250).
+        text = CONTAINER_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('"lib/wine/$UNIX_ARCH-unix/winewayland.so"', text)
+        self.assertIn('"lib/wine/$UNIX_ARCH-windows/winewayland.drv"', text)
+        self.assertIn('UNIX_ARCH="x86_64"', text)
+        self.assertIn('UNIX_ARCH="aarch64"', text)
+        self.assertIn("Wayland driver configured out", text)
+
+    def test_the_arm64_build_links_against_xkbregistry(self):
+        # The steamrt4 SDK has no libxkbregistry-dev; without the pinned
+        # build configure drops winewayland on aarch64.
+        text = CONTAINER_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("pkg-config --exists xkbregistry", text)
+        self.assertIn("-Denable-xkbregistry=true", text)
+        self.assertRegex(text, r'XKBCOMMON_SHA256="[0-9a-f]{64}"')
 
     def test_the_packager_refuses_a_driver_from_another_build(self):
         text = PACKAGE_SCRIPT.read_text(encoding="utf-8")

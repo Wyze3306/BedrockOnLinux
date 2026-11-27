@@ -1,8 +1,61 @@
-# ARM64EC engine: feasibility study (#250)
+# ARM64EC engine (#250)
 
-Status: study only. Nothing described here is built, pinned or published.
-Written 2026-11-12 against engine `wow64-archs-native22` (WineGDK
-`75637b674e1f`, Wine 11.1 base) and launcher `main` at `afdce7b`.
+Status: **built, experimental** (2026-11-27). The study below (2026-11-12,
+engine `wow64-archs-native22`, launcher `afdce7b`) is kept as written; the
+section "What was built" says where the build differs from it.
+
+## What was built
+
+Every piece is built in CI on GitHub's `ubuntu-24.04-arm` runners, pinned by
+SHA-256 in `bol/config.py` with the usual two-pass loop, and published as a
+pre-release under a tag of its own. The x86 engine, vkd3d payload and xodus
+archives are untouched, byte for byte.
+
+| Piece | Recipe | Release |
+|---|---|---|
+| WineGDK, `--enable-archs=arm64ec,aarch64,i386,x86_64` | `build-winegdk.yml arch=aarch64`, `scripts/build-winegdk-container.sh` with `BOL_WINEGDK_TARGET=aarch64` | `winegdk-75637b674e1f-1ca76fabc4d8-stripped-aarch64` |
+| vkd3d-proton 3.0.1 + NV-DGC + our two fixes, as ARM64X | `build-vkd3d.yml arch=aarch64`, `scripts/build-vkd3d-arm64x.sh` | `vkd3d-arm64x-3.0.1-nv-dgc-3bd519b4cb37` |
+| xodus-cli p15 and its WebKitGTK runtime for aarch64 | `build-xodus.yml arch=aarch64` | `xodus-64d39eb87a56-p15-aarch64` |
+| The engine, `GDK-Proton-xuser-arm64` | `build-engine.yml arch=aarch64`, `scripts/package-engine-arm64.sh` | `engine-arm64ec-native1` |
+
+Where it departs from the study:
+
+- **Base: GE-Proton11-14-aarch64**, not a FEX tier of our own. GE's ARM64
+  build already ships FEX (`libarm64ecfex.dll`, `libwow64fex.dll`), DXVK for
+  `aarch64-windows`, `files/bin-arm64`, `default_pfx_arm64` and the SLR 4 arm64
+  tool manifest (appid 4185400). Its Unix side is built in Steam Runtime 4, so
+  the engine's glibc ceiling is 2.41, not 2.36.
+- **Toolchain: Valve's steamrt4 `sdk/arm64-llvm` image**, pinned by digest,
+  for WineGDK and vkd3d alike: the image Proton ARM64 is built in, with
+  llvm-mingw for all four PE architectures.
+- **vkd3d: no rebase.** v3.0.1 needs only upstream's later `build-arm64x.txt`;
+  the ARM64EC rdtsc guard was already there. Upstream's `hybrid_patchable`
+  on the command queue vtable (`20c0ab2095`) is backported in the ARM64X
+  build only, because the x64 code BoL loads (OptiScaler, overlays,
+  LeviLamina mods, injected clients) hooks `ExecuteCommandLists`
+  (`third_party/vkd3d-proton-arm64x/hybrid-patchable-command-queue.patch`).
+- **GDK runtime on ARM64:** GDK-Proton's one change to the `proton` script is
+  re-applied to GE's (`third_party/gdk-proton-arm64`). Its WineGDK builtins
+  now come from `aarch64-windows` (ARM64X); the x64 curl/OpenSSL libraries and
+  Microsoft's `xgameruntime.dll.threading` stay x64, from the same pinned
+  GDK-Proton10-32 archive, and load through FEX like the game.
+- **Reproducible like the x86 prefix, plus one step.** clang assembles the
+  `*-windows` objects with the wall-clock time in their COFF header, and the
+  ones Wine installs inside `lib*.a` were the only bytes two builds did not
+  share; `scripts/coff-stamp.py` writes `SOURCE_DATE_EPOCH` there (aarch64
+  only). Three CI builds of the prefix and two packagings of the engine gave
+  the same bytes.
+- **The launcher's validator is the packager's last check:**
+  `package-engine-arm64.sh` writes `engine-manifest.json` from
+  `bol.vkd3d.engine_expectations("aarch64")` and runs
+  `validate_engine_manifest` on it with every pin enforced.
+- **Smoke test:** `scripts/arm64ec-smoke` runs in the SDK image on the ARM
+  runner: `wine --version`, `wineboot`, then an x86-64 probe that must run
+  through FEX, see an ARM64 machine and load our ARM64X `xgameruntime.dll` and
+  `d3d12.dll` from emulated code.
+
+Still not done: Minecraft itself has never run on it (no ARM GPU here), and
+the container path waits on umu#716 (see the launcher section).
 
 ## Summary
 
@@ -283,6 +336,49 @@ users) running a candidate engine that is clearly marked experimental.
   features vkd3d-proton needs.
 - **Maintenance.** Two engines, two pin sets, two smoke matrices, for every
   release, permanently.
+
+## 7. In the launcher (2026-11-27)
+
+The launcher side is written; it stays dormant until the engine is pinned.
+
+- **Choice:** `bol/engine_arch.py`. The setting `engine_arch` (`x86_64`, the
+  default, or `arm64ec`) and the `BOL_ENGINE_ARCH` override. The switch in
+  Settings ▸ Advanced ▸ Engine is shown only on aarch64 with 4 KiB pages
+  (inside muvm counts) and a non-empty `WINEGDK_ARM64_BUILD_REV`. Whenever the
+  ARM engine cannot be installed or run, the x86-64 one is used instead.
+- **Pins:** `WINEGDK_ARM64_*` in `bol/config.py`; the aarch64 expectations
+  (`engine_expectations("aarch64")`, `REQUIRED_ARM64_*`,
+  `REQUIRED_VARIANT_HASHES_ARM64*`) in `bol/vkd3d.py`. Every one of them is
+  empty until the first build is published, and an empty one makes
+  validation refuse the engine.
+- **Install:** `bol/winegdk.py` installs either engine into its own
+  directory, under the one engine lock, and keeps the current archive of both
+  in the cache. The prefix is shared: switching engines changes the revision
+  marker, which refreshes system32 from `aarch64-windows` or
+  `x86_64-windows`.
+- **FEX registration:** upstream Wine's `wine.inf` registers Microsoft's
+  `xtajit64.dll`/`xtajit.dll` under `HKLM\Software\Microsoft\Wow64\amd64`
+  and `\x86`, and never overwrites them; Valve's Wine registers FEX-Emu's
+  DLLs. WineGDK is upstream Wine, so the launcher writes
+  `libarm64ecfex.dll`/`libwow64fex.dll` there itself before each run.
+- **Running:** the engine's proton script is started directly, with the
+  environment umu would have given it (`STEAM_COMPAT_DATA_PATH` = prefix,
+  `UMU_ID`, `SteamAppId`, `PROTON_USE_WOW64`, the system CA store). umu
+  cannot set up Steam Linux Runtime 4 arm64 yet (umu#716: pressure-vessel
+  exits 1, then KeyError 'steamrt4-arm64' on update), while GE-Proton
+  aarch64 runs started directly. That needs glibc ≥ 2.41 on the host, which
+  the launcher checks before it offers the engine. `BOL_ARM64_RUNNER=umu`
+  takes the container path instead.
+- **Emulator for the rest:** xodus-cli and its WebKitGTK runtime are aarch64
+  builds wherever `XODUS_ARM64_ARCHIVE_SHA256` is pinned
+  (`hostarch.native_helpers()`): `bol/xodus.py` fetches
+  `xodus-cli-<XODUS_REV>-aarch64.tar.gz` and `bol/webview.py`
+  `xodus-webview-<XODUS_WEBVIEW_REV>-aarch64.tar.xz`, both from tag
+  `xodus-<XODUS_REV>-aarch64`, skipping the data feed (it names x86-64
+  builds). Their `.rev` markers carry `-aarch64`, so x86-64 copies installed
+  earlier are replaced. With the ARM engine too, `bol/hostarch.py` then asks
+  for no binfmt emulator at all; with the pin empty, both stay the x86-64
+  builds and need one, as before.
 
 ## Sources
 
