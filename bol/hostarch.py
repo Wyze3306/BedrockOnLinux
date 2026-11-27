@@ -113,13 +113,24 @@ def engine_needs_emulator():
         return True
 
 
-def helpers_need_emulator():
-    """Whether xodus-cli and the WebKitGTK runtime are x86-64 programs here.
+def native_helpers():
+    """Whether xodus-cli and the WebKitGTK runtime run as aarch64 builds here.
 
-    They are on every computer until their aarch64 builds are pinned; the
-    session that builds those owns this answer (bol.xodus, bol.webview).
+    One answer for both: xodus-cli loads WebKitGTK into its own process, so
+    the runtime it gets has to be built for the same processor. They are
+    native on an aarch64 computer once this launcher pins the aarch64
+    xodus-cli; without that pin both stay the x86-64 builds, run through the
+    emulator as before. Either engine works with either: xodus-cli only
+    hands the game to Wine.
     """
-    return not native()
+    from . import config
+    return (machine() in ("aarch64", "arm64")
+            and bool((config.XODUS_ARM64_ARCHIVE_SHA256 or "").strip()))
+
+
+def helpers_need_emulator():
+    """Whether xodus-cli and the WebKitGTK runtime are x86-64 programs here."""
+    return not native() and not native_helpers()
 
 
 def x86_64_programs():

@@ -132,10 +132,13 @@ class SelectionTests(FakeHost, unittest.TestCase):
 
 
 class HostArchTests(FakeHost, unittest.TestCase):
-    def test_arm_engine_still_needs_binfmt_for_the_helpers(self):
+    def test_arm_engine_still_needs_binfmt_for_x86_64_helpers(self):
+        # A launcher without the aarch64 xodus-cli pin runs the x86-64 one;
+        # with it, nothing is left to emulate (tests/test_helpers_arm64.py).
         self.fake_host()
         with mock.patch.object(engine_arch, "active",
                                return_value=engine_arch.ARM64EC), \
+                mock.patch.object(config, "XODUS_ARM64_ARCHIVE_SHA256", ""), \
                 mock.patch.object(hostarch, "x86_64_emulator",
                                   return_value=None):
             self.assertFalse(hostarch.engine_needs_emulator())

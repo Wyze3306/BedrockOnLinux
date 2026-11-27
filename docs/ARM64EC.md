@@ -316,9 +316,16 @@ The launcher side is written; it stays dormant until the engine is pinned.
   aarch64 runs started directly. That needs glibc ≥ 2.41 on the host, which
   the launcher checks before it offers the engine. `BOL_ARM64_RUNNER=umu`
   takes the container path instead.
-- **Emulator for the rest:** with the ARM engine, `bol/hostarch.py` asks for
-  a binfmt emulator only for xodus-cli and the WebKitGTK runtime, until their
-  aarch64 builds are pinned.
+- **Emulator for the rest:** xodus-cli and its WebKitGTK runtime are aarch64
+  builds wherever `XODUS_ARM64_ARCHIVE_SHA256` is pinned
+  (`hostarch.native_helpers()`): `bol/xodus.py` fetches
+  `xodus-cli-<XODUS_REV>-aarch64.tar.gz` and `bol/webview.py`
+  `xodus-webview-<XODUS_WEBVIEW_REV>-aarch64.tar.xz`, both from tag
+  `xodus-<XODUS_REV>-aarch64`, skipping the data feed (it names x86-64
+  builds). Their `.rev` markers carry `-aarch64`, so x86-64 copies installed
+  earlier are replaced. With the ARM engine too, `bol/hostarch.py` then asks
+  for no binfmt emulator at all; with the pin empty, both stay the x86-64
+  builds and need one, as before.
 
 ## Sources
 

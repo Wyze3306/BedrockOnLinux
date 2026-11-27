@@ -37,6 +37,12 @@
   overrides the choice for one run, and `doctor` reports the engine on its
   own line. The switch stays hidden until a build of the ARM engine is
   published.
+- **Native sign-in and downloader on ARM (#250).** On an aarch64 computer the
+  launcher now downloads the aarch64 builds of xodus-cli and of its WebKitGTK
+  runtime, released under `xodus-<rev>-aarch64`, and replaces the x86-64 ones
+  an earlier version installed. With the ARM engine as well, nothing the
+  launcher starts needs an x86-64 emulator registered with the kernel any
+  more.
 
 ### Fixed
 

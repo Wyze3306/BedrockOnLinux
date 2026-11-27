@@ -127,7 +127,10 @@ driver then run as native ARM code, and FEX-Emu, carried inside the engine,
 translates only the game. It is off by default and needs glibc 2.41 or newer
 (Debian 13, Ubuntu 25.04, Fedora 42). If it cannot start, the usual engine is
 used instead. `BOL_ENGINE_ARCH=arm64ec` or `x86_64` picks one for a single run,
-and the `engine` line of `doctor` says which one runs.
+and the `engine` line of `doctor` says which one runs. The Microsoft sign-in
+and the game download run as native ARM programs whichever engine is chosen,
+so with the ARM engine no x86-64 emulator has to be registered with the
+kernel.
 
 ## What it connects to
 

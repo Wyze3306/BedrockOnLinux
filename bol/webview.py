@@ -47,11 +47,15 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+from . import hostarch
 from .archive import safe_extract_tar
 from .config import (
     CACHE,
     WEBKIT_DRAWS_WITHOUT_EGL,
     WINEGDK_PREBUILT_REPO,
+    XODUS_REV,
+    XODUS_WEBVIEW_ARM64_EXEC_DIR,
+    XODUS_WEBVIEW_ARM64_SHA256,
     XODUS_WEBVIEW_DIR,
     XODUS_WEBVIEW_EXEC_DIR,
     XODUS_WEBVIEW_REV,
@@ -65,6 +69,28 @@ from .util import asset_url, download, env_flag, gh_releases
 _HOST_PROBE = {}
 
 ASSET = f"xodus-webview-{XODUS_WEBVIEW_REV}.tar.xz"
+# The aarch64 runtime for the aarch64 xodus-cli (#250), released beside it
+# under xodus-<XODUS_REV>-aarch64. Its marker carries the suffix, so the
+# x86-64 runtime an earlier launcher unpacked here is replaced.
+ARM64_SUFFIX = "-aarch64"
+ARM64_ASSET = f"xodus-webview-{XODUS_WEBVIEW_REV}{ARM64_SUFFIX}.tar.xz"
+
+
+def _arm64():
+    """Whether the runtime has to be the aarch64 one: wherever xodus-cli is
+    (bol.hostarch.native_helpers), since it loads the library itself."""
+    return hostarch.native_helpers()
+
+
+def _exec_dir():
+    """The helper directory compiled into the runtime's library."""
+    return XODUS_WEBVIEW_ARM64_EXEC_DIR if _arm64() else XODUS_WEBVIEW_EXEC_DIR
+
+
+def _pinned_sha256():
+    return XODUS_WEBVIEW_ARM64_SHA256 if _arm64() else XODUS_WEBVIEW_SHA256
+
+
 # Written by scripts/build-xodus-webview.sh; the loader cache stores absolute
 # module paths, which only exist once the bundle is unpacked here.
 _PLACEHOLDER = "@BOL_WEBVIEW@"
@@ -436,7 +462,11 @@ def installed():
     # The pinned runtime still counts when the data feed names a newer one:
     # ensure_runtime() moves to it when it can, and a feed that cannot be
     # served must not take a working sign-in away.
-    return (current in (XODUS_WEBVIEW_REV, _pin()[0])
+    if _arm64():
+        accepted = (XODUS_WEBVIEW_REV + ARM64_SUFFIX,)
+    else:
+        accepted = (XODUS_WEBVIEW_REV, _pin()[0])
+    return (current in accepted
             and (XODUS_WEBVIEW_DIR / _WEBKIT_LIB).is_file())
 
 
@@ -449,8 +479,15 @@ def _pin(embedded=False):
     """(rev, sha256, url, asset) of the runtime to install.
 
     The signed data feed (bol.feed) may replace the pinned revision; the
-    archive is still only accepted by its SHA-256.
+    archive is still only accepted by its SHA-256. The feed names x86-64
+    runtimes only, so an aarch64 one is always the pinned one, fetched from
+    its release tag directly.
     """
+    if _arm64():
+        url = (f"https://github.com/{WINEGDK_PREBUILT_REPO}/releases/download/"
+               f"xodus-{XODUS_REV}{ARM64_SUFFIX}/{ARM64_ASSET}")
+        return (XODUS_WEBVIEW_REV + ARM64_SUFFIX, XODUS_WEBVIEW_ARM64_SHA256,
+                url, ARM64_ASSET)
     rev, sha256, url = XODUS_WEBVIEW_REV, XODUS_WEBVIEW_SHA256, None
     if not embedded:
         from . import feed
@@ -559,7 +596,7 @@ def ensure_runtime():
     pin = _pin()
     if installed() and _installed_rev() == pin[0]:
         return XODUS_WEBVIEW_DIR
-    if pin[0] != XODUS_WEBVIEW_REV:
+    if pin[0] not in (XODUS_WEBVIEW_REV, XODUS_WEBVIEW_REV + ARM64_SUFFIX):
         try:
             return _install_runtime(pin)
         except BolError as exc:
@@ -652,7 +689,7 @@ def _point_helpers_at(root, target):
     in-place edit of one C string that moves nothing else in the file. The
     archive it came from was already checked against its SHA-256 pin.
     """
-    original = XODUS_WEBVIEW_EXEC_DIR.encode() + b"\x00"
+    original = _exec_dir().encode() + b"\x00"
     replacement = str(target).encode()
     if len(replacement) >= len(original):
         raise BolError(
@@ -687,7 +724,7 @@ def _helper_literal(image, length):
     next, which falls back to /tmp, or names another place. Each launch has to
     be able to move it again.
     """
-    offset = image.find(XODUS_WEBVIEW_EXEC_DIR.encode() + b"\x00")
+    offset = image.find(_exec_dir().encode() + b"\x00")
     if offset >= 0:
         return offset
     found = [match.start() for match in _REWRITTEN.finditer(image)
@@ -910,6 +947,6 @@ def status():
         return "OK (store sign-in)", None
     if installed():
         return "OK (bundled runtime)", None
-    if XODUS_WEBVIEW_SHA256.strip():
+    if _pinned_sha256().strip():
         return "bundled runtime, downloaded on first use", None
     return "MISSING (store sign-in)", host_package_name()
