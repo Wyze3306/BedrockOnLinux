@@ -185,7 +185,7 @@ WINEGDK_PREFIX_SHA256 = "fb562934c3974c58f7b1676d1a2fc1e408128280b846e6caeb7f6be
 # of bytes each, like the x86 ones. An empty rev means there is no published
 # ARM engine and the launcher offers none; build-winegdk.yml and
 # build-engine.yml read these pins when called with arch: aarch64.
-WINEGDK_ARM64_BUILD_REV = ""
+WINEGDK_ARM64_BUILD_REV = "arm64ec-native1"
 WINEGDK_ARM64_ARCHIVE_SHA256 = ""
 WINEGDK_ARM64_PREFIX_SHA256 = "0dffd188b60af2af5e1f7bad27aa75d4491d32d473362663411d674574b65b97"
 WINEGDK_ARM64_OUT = PROTON_DIR / "GDK-Proton-xuser-arm64"

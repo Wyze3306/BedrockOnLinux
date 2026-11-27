@@ -173,20 +173,24 @@ REQUIRED_VARIANT_HASHES = {
 # _incomplete_expectations), so a revision pinned without them cannot be
 # accepted by accident.
 ARM64_ARCHES = ("aarch64-windows", "x86_64-windows", "i386-windows")
-REQUIRED_VARIANT_HASHES_ARM64_BUILD_REV = ""
+REQUIRED_VARIANT_HASHES_ARM64_BUILD_REV = "arm64ec-native1"
 REQUIRED_ARM64_ENGINE_GLIBC_MAX = "2.41"
 # The DXVK of the base (GE's aarch64 build) and our two vkd3d slot pairs.
 REQUIRED_ARM64_COMPONENTS = {
-    "dxvk": "",
-    "vkd3d_ext_dgc": "",
-    "vkd3d_nv_dgc": "",
+    "dxvk": "GE-Proton11-14-aarch64",
+    "vkd3d_ext_dgc": VKD3D_COMPAT_COMPONENT_VERSION,
+    "vkd3d_nv_dgc": VKD3D_COMPAT_COMPONENT_VERSION,
 }
-REQUIRED_ARM64_VKD3D_BASE_COMMIT = ""
-REQUIRED_ARM64_VKD3D_REVERT = ""
+# The ARM64X payload is built from the same reviewed source and revert as the
+# x86 one (scripts/build-vkd3d-arm64x.sh).
+REQUIRED_ARM64_VKD3D_BASE_COMMIT = REQUIRED_VKD3D_BASE_COMMIT
+REQUIRED_ARM64_VKD3D_REVERT = REQUIRED_VKD3D_REVERT
 REQUIRED_ARM64_PROTON_BASE_REPOSITORY = "GloriousEggroll/proton-ge-custom"
 REQUIRED_ARM64_PROTON_BASE_RELEASE = "GE-Proton11-14"
 REQUIRED_ARM64_PROTON_BASE_ARCHIVE = "GE-Proton11-14-aarch64.tar.gz"
-REQUIRED_ARM64_PROTON_BASE_ARCHIVE_SHA256 = ""
+REQUIRED_ARM64_PROTON_BASE_ARCHIVE_SHA256 = (
+    "f6353f4417bd8c1148d7db18bc383d8e2c59c403e367425fd8b9daaaecc2fad8"
+)
 ARM64_FEX_DLL_PATHS = (
     "files/lib/wine/aarch64-windows/libarm64ecfex.dll",
     "files/lib/wine/aarch64-windows/libwow64fex.dll",
@@ -214,9 +218,23 @@ REQUIRED_ARM64_EXECUTABLE_FILE_PATHS = (
     "files/bin-arm64/wineserver",
 )
 REQUIRED_ARM64_RUNTIME_LINK_TARGETS: Dict[str, str] = {}
+# aarch64-windows holds the ARM64X build
+# (third_party/vkd3d-proton-arm64x/OUTPUT-SHA256SUMS), the other two slots the
+# same x86 payload as the x86-64 engine.
+ARM64X_VKD3D_HASHES = {
+    "d3d12.dll":
+        "b0869a4115ff4bce669338f366a9706a984be4ae5b1b0e08e14598470f720cd7",
+    "d3d12core.dll":
+        "b271b2e0faf43458c7c9708cc52d7f63f36e65955eceb8db348aed899b3dcf00",
+}
 REQUIRED_VARIANT_HASHES_ARM64: Dict[str, Dict[str, str]] = {
-    EXT_DGC: {},
-    NV_DGC: {},
+    variant: {
+        **{"files/lib/wine/vkd3d-proton/aarch64-windows/%s.bol-%s"
+           % (dll, variant): digest
+           for dll, digest in ARM64X_VKD3D_HASHES.items()},
+        **REQUIRED_VARIANT_HASHES[variant],
+    }
+    for variant in (EXT_DGC, NV_DGC)
 }
 
 

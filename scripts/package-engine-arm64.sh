@@ -289,13 +289,31 @@ EOF
 find "$PROV" -type f -exec chmod 0644 {} +
 
 echo "== Writing engine-manifest.json"
-python3 - "$ENGINE" "$BUILD_REV" "$WINEGDK_COMMIT" "$PROV_REL" <<'PY'
+# The launcher's own schema (bol.vkd3d.engine_expectations("aarch64")): the
+# x86-64 manifest plus "arch". gdk_proton_base describes the GE base the engine
+# is laid on, under the key name the x86 engine uses for its base.
+python3 -I - "$SRC" "$ENGINE" "$BUILD_REV" "$WINEGDK_COMMIT" "$PROV_REL" \
+  "$GE_REPOSITORY" "$GE_RELEASE" "$GE_NAME.tar.gz" "$GE_SHA256" \
+  "$GDK_THREADING_SHA256" <<'PY'
 import hashlib
 import json
 import sys
 from pathlib import Path
 
-root, build_rev, winegdk_commit, prov_rel = Path(sys.argv[1]), *sys.argv[2:5]
+source = Path(sys.argv[1])
+root = Path(sys.argv[2])
+build_rev, winegdk_commit, prov_rel = sys.argv[3:6]
+ge_repository, ge_release, ge_archive, ge_sha256, threading_sha256 = sys.argv[6:11]
+sys.path.insert(0, str(source))
+from bol import vkd3d  # noqa: E402
+
+expect = vkd3d.engine_expectations("aarch64")
+missing = vkd3d._incomplete_expectations(expect)
+if missing:
+    raise SystemExit(f"!! bol/vkd3d.py has no reviewed {missing} for the ARM64EC engine")
+if build_rev != expect.variant_hashes_build_rev:
+    raise SystemExit(f"!! bol/vkd3d.py pins {expect.variant_hashes_build_rev!r}, "
+                     f"not {build_rev!r}")
 
 
 def digest(relative):
@@ -307,55 +325,78 @@ def digest(relative):
     return hashlib.sha256(resolved.read_bytes()).hexdigest()
 
 
-critical = [
-    "proton",
-    "toolmanifest.vdf",
-    "files/bin-arm64/wine",
-    "files/bin-arm64/wineserver",
-    "files/share/wine/wine.inf",
-    "files/lib/wine/aarch64-unix/ntdll.so",
-    "files/lib/wine/aarch64-windows/libarm64ecfex.dll",
-    "files/lib/wine/aarch64-windows/libwow64fex.dll",
-    "files/lib/wine/x86_64-windows/xgameruntime.dll.threading",
-]
-critical += [f"files/lib/wine/aarch64-windows/{m}.dll" for m in (
-    "ntdll", "combase", "user32", "xgameruntime", "windows.storage",
-    "windows.storage.applicationdata")]
-critical += [f"files/lib/wine/i386-windows/{m}.dll" for m in (
-    "ntdll", "combase", "xgameruntime")]
-critical += sorted(p.relative_to(root).as_posix()
-                   for p in (root / prov_rel).rglob("*") if p.is_file())
+def tree(*names):
+    files = {}
+    for name in names:
+        base = root / prov_rel / name
+        for path in sorted(base.rglob("*")):
+            if path.is_file() and not path.is_symlink():
+                relative = path.relative_to(root).as_posix()
+                files[relative] = digest(relative)
+    if not files:
+        raise SystemExit(f"!! no provenance under {names}")
+    return files
+
+
+winegdk_files = tree("winegdk")
+vkd3d_files = tree("vkd3d-proton-universal", "vkd3d-proton-arm64x")
+base_files = tree("ge-proton-base", "gdk-proton-base", "gdk-proton-arm64")
+
+extra = [f"files/lib/wine/i386-windows/{m}.dll" for m in ("combase", "xgameruntime")]
+critical = {relative: digest(relative) for relative in dict.fromkeys((
+    *expect.critical_file_paths, *extra,
+    *winegdk_files, *vkd3d_files, *base_files))}
+for relative, pinned in expect.pinned_critical_hashes.items():
+    if critical.get(relative) != pinned:
+        raise SystemExit(f"!! {relative} is not the pinned {pinned}")
+for relative in expect.executable_file_paths:
+    if not (root / relative).stat().st_mode & 0o100:
+        raise SystemExit(f"!! not executable: {relative}")
 
 variants = {}
-for variant, suffix in (("ext-dgc", ".bol-ext-dgc"), ("nv-dgc", ".bol-nv-dgc")):
+for variant in vkd3d.VARIANTS:
     files = {}
-    for arch in ("aarch64-windows", "x86_64-windows", "i386-windows"):
-        for dll in ("d3d12.dll", "d3d12core.dll"):
-            rel = f"files/lib/wine/vkd3d-proton/{arch}/{dll}{suffix}"
-            files[rel] = digest(rel)
+    for relative in vkd3d._variant_relative_paths(variant, vkd3d.ARM64_ARCHES):
+        files[relative] = digest(relative)
+    if files != dict(expect.variant_hashes[variant]):
+        for relative in sorted(set(files) | set(expect.variant_hashes[variant])):
+            if files.get(relative) != expect.variant_hashes[variant].get(relative):
+                raise SystemExit(f"!! {variant}: {relative} is {files.get(relative)}, "
+                                 f"bol/vkd3d.py pins "
+                                 f"{expect.variant_hashes[variant].get(relative)}")
     variants[variant] = {"files": files}
 
 manifest = {
     "schema": 1,
     "arch": "aarch64",
     "build_rev": build_rev,
-    "critical_files": {relative: digest(relative) for relative in critical},
-    "components": {
-        "base": "GE-Proton11-14-aarch64",
-        "vkd3d_ext_dgc": "3.0.1-bol-dgc",
-        "vkd3d_nv_dgc": "3.0.1-bol-dgc",
-        "emulator": "FEX (libarm64ecfex.dll, from the base)",
-    },
+    "critical_files": critical,
+    "components": dict(expect.components),
     "provenance": {
         "winegdk": {"commit": winegdk_commit,
-                    "archs": "arm64ec,aarch64,i386,x86_64"},
-        "build": {"glibc_max": "2.41", "runtime": "steamrt4 (SLR 4 arm64)"},
+                    "archs": "arm64ec,aarch64,i386,x86_64",
+                    "distribution_files": winegdk_files},
+        "vkd3d_universal": {"base_commit": expect.vkd3d_base_commit,
+                            "restored_by_reverting": expect.vkd3d_revert,
+                            "distribution_files": vkd3d_files},
+        "gdk_proton_base": {"repository": ge_repository,
+                            "release": ge_release,
+                            "archive": ge_archive,
+                            "archive_sha256": ge_sha256,
+                            "threading_dll_sha256": threading_sha256,
+                            "distribution_files": base_files},
+        "build": {"glibc_max": expect.glibc_max,
+                  "runtime": "steamrt4 (SLR 4 arm64)"},
     },
     "variants": variants,
 }
 (root / "engine-manifest.json").write_text(
     json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-print(f"   {len(manifest['critical_files'])} critical files, 2 vkd3d variants")
+
+# The launcher's validator, with every pin enforced, must accept it.
+vkd3d.validate_engine_manifest(root, build_rev, enforce_pins=True, arch="aarch64")
+print(f"   {len(critical)} critical files, 2 vkd3d variants; "
+      "bol.vkd3d.validate_engine_manifest accepts it")
 PY
 chmod 0644 "$ENGINE/engine-manifest.json"
 

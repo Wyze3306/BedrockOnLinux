@@ -272,7 +272,13 @@ class ArmManifestTests(FakeHost, unittest.TestCase):
     def test_unpinned_arm_engine_is_refused(self):
         self.fake_host()
         root = self.base / "GDK-Proton-xuser-arm64"
-        self.make_arm_engine(root, pin=False)
+        self.make_arm_engine(root)
+        # A launcher that has the revision but not yet its DLL hashes.
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(
+            vkd3d, "REQUIRED_VARIANT_HASHES_ARM64",
+            {vkd3d.EXT_DGC: {}, vkd3d.NV_DGC: {}}))
         with self.assertRaisesRegex(BolError, "no reviewed"):
             vkd3d.validate_engine_manifest(
                 root, ARM_REV, enforce_pins=True, arch="aarch64")
@@ -323,11 +329,14 @@ class ArmManifestTests(FakeHost, unittest.TestCase):
                          config.WINEGDK_BUILD_REV)
         self.assertIsNone(vkd3d._incomplete_expectations(expect))
 
-    def test_shipped_arm_pins_start_empty(self):
-        # The coordinator fills these with the first published build.
-        self.assertEqual(config.WINEGDK_ARM64_BUILD_REV, "")
-        self.assertEqual(config.WINEGDK_ARM64_ARCHIVE_SHA256, "")
-        self.assertEqual(config.WINEGDK_ARM64_PREFIX_SHA256, "")
+    def test_shipped_arm_pins_are_consistent(self):
+        self.assertRegex(config.WINEGDK_ARM64_BUILD_REV,
+                         r"^arm64ec-native[0-9]+$")
+        for pin in (config.WINEGDK_ARM64_ARCHIVE_SHA256,
+                    config.WINEGDK_ARM64_PREFIX_SHA256):
+            self.assertRegex(pin, r"^([0-9a-f]{64})?$")
+        self.assertIsNone(vkd3d._incomplete_expectations(
+            vkd3d.engine_expectations("aarch64")))
         self.assertEqual(config.WINEGDK_ARM64_OUT.name,
                          "GDK-Proton-xuser-arm64")
         self.assertEqual(vkd3d.REQUIRED_VARIANT_HASHES_ARM64_BUILD_REV,
