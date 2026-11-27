@@ -489,6 +489,91 @@ class EnvironmentTests(unittest.TestCase):
             self.assertEqual(env, {"PATH": "/usr/bin"})
 
 
+class CertificateTests(unittest.TestCase):
+    """#394: a CA setting that names nothing stops xodus-cli at start."""
+
+    _PANIC = (
+        "\nthread 'main' (6431) panicked at crates/xodus-cli/src/main.rs:154:"
+        "10:\ncalled `Result::unwrap()` on an `Err` value: reqwest::Error { "
+        "kind: Builder, source: General(\"No CA certificates were loaded "
+        "from the system\") }\nnote: run with `RUST_BACKTRACE=1`\n")
+
+    def test_a_ca_setting_with_no_certificate_is_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            good = Path(tmp) / "bundle.pem"
+            good.write_text("-----BEGIN CERTIFICATE-----\nMII\n")
+            env = {"SSL_CERT_FILE": "/etc/pki/tls/certs/ca-bundle.crt",
+                   "SSL_CERT_DIR": str(Path(tmp) / "absent")}
+            previous = webview.usable_ca_env(env)
+            self.assertEqual(env, {})
+            self.assertEqual(set(previous), {"SSL_CERT_FILE", "SSL_CERT_DIR"})
+
+            env = {"SSL_CERT_FILE": str(good), "SSL_CERT_DIR": tmp}
+            self.assertEqual(webview.usable_ca_env(env), {})
+            self.assertEqual(env["SSL_CERT_FILE"], str(good))
+
+    def test_a_panic_is_reported_as_one_not_as_a_missing_webkitgtk(self):
+        self.assertEqual(webview.panic_reason(self._PANIC),
+                         "No CA certificates were loaded from the system")
+        self.assertIsNone(webview.panic_reason(
+            "xodus-cli: error while loading shared libraries: libX11.so.6"))
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "xodus-cli"
+            binary.write_text(f"#!{SH}\nprintf '%s' \"$PANIC\" >&2\n"
+                              "exit 101\n")
+            binary.chmod(0o755)
+            env = {"PATH": "/usr/bin", "PANIC": self._PANIC}
+            with mock.patch.object(webview, "prepare") as prepare, \
+                    self.assertRaises(webview.BolError) as raised:
+                webview.apply(binary, env)
+            message = str(raised.exception)
+            self.assertIn("No CA certificates", message)
+            self.assertIn("ca-certificates", message)
+            self.assertNotIn("WebKitGTK", message)
+            prepare.assert_not_called()
+            self.assertEqual(env, {"PATH": "/usr/bin", "PANIC": self._PANIC})
+
+
+class HostLibraryDirsTests(unittest.TestCase):
+    """#249: a WebKitGTK put on LD_LIBRARY_PATH alone, as Guix wraps it."""
+
+    def test_the_host_webkitgtk_s_own_directories_are_added(self):
+        missing = ("xodus-cli: error while loading shared libraries: "
+                   "libgtk-3.so.0: cannot open shared object file: No such "
+                   "file or directory")
+
+        def load(binary, env=None):
+            path = (env or os.environ).get("LD_LIBRARY_PATH", "")
+            return None if "/gnu/store/gtk/lib" in path else missing
+
+        env = {"PATH": "/usr/bin", "LD_LIBRARY_PATH": "/gnu/store/webkit/lib"}
+        with mock.patch.object(webview, "load_failure", side_effect=load), \
+                mock.patch.object(webview, "host_webkit_dirs",
+                                  return_value=["/gnu/store/webkit/lib",
+                                                "/gnu/store/gtk/lib"]), \
+                mock.patch.object(webview, "host_tls_available",
+                                  return_value=True), \
+                mock.patch.object(webview, "host_egl_failure",
+                                  return_value=None), \
+                mock.patch.object(webview, "prepare") as prepare:
+            webview._HOST_PROBE.clear()
+            previous = webview.apply(Path("/x/xodus-cli"), env)
+        prepare.assert_not_called()
+        self.assertEqual(env["LD_LIBRARY_PATH"],
+                         "/gnu/store/webkit/lib:/gnu/store/gtk/lib")
+        # The game gets the variable back as it was.
+        webview.restore_env(env, previous)
+        self.assertEqual(env["LD_LIBRARY_PATH"], "/gnu/store/webkit/lib")
+
+    def test_other_failures_are_left_to_the_bundle(self):
+        env = {"PATH": "/usr/bin"}
+        with mock.patch.object(webview, "host_webkit_dirs") as dirs:
+            failure, previous = webview._with_host_webkit_dirs(
+                Path("/x"), env, "version `GLIBC_2.38' not found")
+        dirs.assert_not_called()
+        self.assertEqual((failure is None, previous), (False, {}))
+
+
 # What xodus-cli printed on Ubuntu 22.04 (glibc 2.35), as issue #264 quotes it.
 _OLD_GLIBC = (
     "xodus-cli: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not "

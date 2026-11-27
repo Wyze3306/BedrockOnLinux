@@ -367,11 +367,173 @@ def egl_message(detail):
         "again. The Flatpak build carries its own graphics libraries.")
 
 
-def _host_failure(binary):
-    key = str(binary)
+def _host_failure(binary, env=None):
+    source = os.environ if env is None else env
+    key = (str(binary),) + tuple(source.get(name) for name in _CA_VARS)
     if key not in _HOST_PROBE:
-        _HOST_PROBE[key] = load_failure(binary)
+        _HOST_PROBE[key] = load_failure(binary, None if env is None
+                                        else dict(env))
     return _HOST_PROBE[key]
+
+
+# ------------------------------------------------------------ host libraries
+# Where the host's WebKitGTK found its own dependencies. On Guix and Nix a
+# wrapper puts only WebKitGTK's directory on LD_LIBRARY_PATH: the library
+# finds GTK, libsoup and the rest through its RUNPATH, but xodus-cli links
+# those directly and has no RUNPATH of its own, so it does not start (#249).
+# The directories are read from /proc/self/maps after loading the library,
+# minus any holding a C library: the loader brings its own.
+_DIRS_PROBE = (
+    "import ctypes, os, sys\n"
+    "def maps():\n"
+    "    out = []\n"
+    "    with open('/proc/self/maps') as stream:\n"
+    "        for line in stream:\n"
+    "            parts = line.split(None, 5)\n"
+    "            if len(parts) == 6 and parts[5].startswith('/'):\n"
+    "                out.append(parts[5].strip())\n"
+    "    return out\n"
+    "before = set(maps())\n"
+    "try:\n"
+    "    ctypes.CDLL('libwebkit2gtk-4.1.so.0')\n"
+    "except OSError:\n"
+    "    sys.exit(3)\n"
+    "dirs = []\n"
+    "for path in maps():\n"
+    "    if path in before or '.so' not in os.path.basename(path):\n"
+    "        continue\n"
+    "    folder = os.path.dirname(path)\n"
+    "    if folder not in dirs:\n"
+    "        dirs.append(folder)\n"
+    "print('\\n'.join(dirs))\n"
+)
+_C_LIBRARIES = ("libc.so.6", "ld-linux-x86-64.so.2", "ld-linux-aarch64.so.1")
+
+
+def host_webkit_dirs(env=None):
+    """The directories the host's WebKitGTK loads its libraries from, or []
+    when it does not load here."""
+    try:
+        proc = subprocess.run([sys.executable, "-c", _DIRS_PROBE],
+                              env=dict(os.environ if env is None else env),
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True,
+                              errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    dirs = []
+    for folder in proc.stdout.splitlines():
+        folder = folder.strip()
+        if not folder or any(os.path.exists(os.path.join(folder, name))
+                             for name in _C_LIBRARIES):
+            continue
+        dirs.append(folder)
+    return dirs
+
+
+def _missing_library(failure):
+    return bool(failure) and "error while loading shared libraries" in \
+        failure and "cannot open shared object file" in failure
+
+
+def _with_host_webkit_dirs(binary, env, failure):
+    """Let ``binary`` find what the host's WebKitGTK links to, when that is
+    all that stops it. Returns (failure, restore map)."""
+    if not _missing_library(failure):
+        return failure, {}
+    current = [d for d in (env.get("LD_LIBRARY_PATH") or "").split(os.pathsep)
+               if d]
+    extra = [d for d in host_webkit_dirs(env) if d not in current]
+    if not extra:
+        return failure, {}
+    trial = dict(env)
+    trial["LD_LIBRARY_PATH"] = os.pathsep.join(current + extra)
+    if load_failure(binary, trial) is not None:
+        return failure, {}
+    previous = {"LD_LIBRARY_PATH": env.get("LD_LIBRARY_PATH")}
+    env["LD_LIBRARY_PATH"] = trial["LD_LIBRARY_PATH"]
+    info("Using this system's WebKitGTK, with the libraries it was built "
+         "against: " + ", ".join(extra[:3]) + (" …" if len(extra) > 3
+                                                else ""))
+    return None, previous
+
+
+# ------------------------------------------------------------ certificates
+# xodus-cli builds its HTTPS client before it even reads its arguments, and
+# rustls takes SSL_CERT_FILE / SSL_CERT_DIR as the whole truth when they are
+# set: one that names nothing usable leaves it with no certificate at all,
+# and every run -- `--version` included -- panics with "No CA certificates
+# were loaded from the system". Fedora 44 removed /etc/pki/tls/cert.pem and
+# /etc/pki/tls/certs/ca-bundle.crt, which is where such settings tend to
+# point (#394).
+_CA_VARS = ("SSL_CERT_FILE", "SSL_CERT_DIR")
+_PEM = b"-----BEGIN CERTIFICATE-----"
+
+
+def _holds_certificates(path):
+    try:
+        with open(path, "rb") as stream:
+            return _PEM in stream.read(8 << 20)
+    except OSError:
+        return False
+
+
+def _dir_holds_certificates(value):
+    for folder in str(value).split(os.pathsep):
+        try:
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    name = entry.name.lower()
+                    if name.endswith((".pem", ".crt", ".0", ".1")) and \
+                            _holds_certificates(entry.path):
+                        return True
+        except OSError:
+            continue
+    return False
+
+
+def usable_ca_env(env):
+    """Drop SSL_CERT_FILE / SSL_CERT_DIR from ``env`` when they hold no
+    certificate, so that the system's own store is used. Returns what was
+    dropped, in restore_env()'s shape."""
+    previous = {}
+    checks = (("SSL_CERT_FILE", _holds_certificates),
+              ("SSL_CERT_DIR", _dir_holds_certificates))
+    for name, usable in checks:
+        value = (env.get(name) or "").strip()
+        if name in env and (not value or not usable(value)):
+            previous[name] = env.pop(name)
+            info(f"{name} is set to {value or '(nothing)'}, which holds no "
+                 "certificate; the Minecraft downloader uses the system's "
+                 "certificates instead.")
+    return previous
+
+
+def panic_reason(text):
+    """What a Rust panic in ``text`` says, or None when it is no panic."""
+    lines = [line.strip() for line in (text or "").splitlines()
+             if line.strip()]
+    for index, line in enumerate(lines):
+        if " panicked at " in line:
+            said = lines[index + 1] if index + 1 < len(lines) else line
+            inner = re.search(r'General\("([^"]+)"\)', said)
+            return inner.group(1) if inner else said
+    return None
+
+
+def panic_message(reason):
+    """What to tell someone whose xodus-cli stopped as it started."""
+    message = ("The Minecraft downloader (xodus-cli) stopped as it started: "
+               + reason.rstrip(".") + ".")
+    if "CA certificates" in reason:
+        message += (
+            " It found no certificate authorities to check Microsoft's "
+            "servers with. Install your distribution's ca-certificates "
+            "package; if SSL_CERT_FILE or SSL_CERT_DIR is set in your "
+            "session, make sure it names a bundle that exists.")
+    return message
 
 
 def _host_glibc():
@@ -792,6 +954,13 @@ def quiet_accessibility(env):
     return previous
 
 
+def _keep_first(previous, replaced):
+    """Merge restore maps, keeping the value a variable had first."""
+    for name, value in replaced.items():
+        previous.setdefault(name, value)
+    return previous
+
+
 def restore_env(env, previous):
     """Undo runtime_env() on ``env`` (a mapping, usually os.environ)."""
     for name, value in (previous or {}).items():
@@ -825,9 +994,17 @@ def apply(binary, env, force=False):
     """
     previous = portable_renderer(env)
     previous.update(quiet_accessibility(env))
+    previous.update(usable_ca_env(env))
     host_loads = False
     if not force:
-        failure = _host_failure(binary)
+        failure = _host_failure(binary, env)
+        reason = panic_reason(failure)
+        if reason:
+            # It started, then stopped on its own: no WebKitGTK changes that.
+            restore_env(env, previous)
+            raise BolError(panic_message(reason))
+        failure, extended = _with_host_webkit_dirs(binary, env, failure)
+        _keep_first(previous, extended)
         host_loads = failure is None
         if failure is None:
             blank = host_egl_failure(env)
@@ -864,6 +1041,11 @@ def apply(binary, env, force=False):
         raise BolError(missing_message(str(exc))) from exc
     _, replaced = runtime_env(env, root)
     failure = load_failure(binary, env)
+    reason = panic_reason(failure)
+    if reason:
+        _keep_first(previous, replaced)
+        restore_env(env, previous)
+        raise BolError(panic_message(reason))
     if failure is not None:
         too_old = glibc_too_old_message(failure, root)
         if host_loads:
@@ -884,12 +1066,12 @@ def apply(binary, env, force=False):
                      "system (" + failure.splitlines()[0] + "); keeping the "
                      "system's WebKitGTK.")
             return previous
-        previous.update(replaced)
+        _keep_first(previous, replaced)
         restore_env(env, previous)
         raise BolError(too_old or missing_message(
             "The bundled WebKitGTK runtime did not load on this system: "
             + failure.splitlines()[0]))
-    previous.update(replaced)
+    _keep_first(previous, replaced)
     return previous
 
 
