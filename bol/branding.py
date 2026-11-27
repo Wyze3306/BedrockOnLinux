@@ -22,6 +22,7 @@ import re
 import shutil
 from pathlib import Path
 
+from . import serverbrowser
 from .log import ok, warn
 
 # --------------------------------------------------------------------------
@@ -166,6 +167,36 @@ PARTNERS = (
                 "image": "linesia-sea.jpg",
             },
         ),
+        # The server browser's page in other game languages: description,
+        # news, then each activity's subtitle and description, in order.
+        "translations": {
+            "fr": {
+                "description": (
+                    "Linesia est un serveur Minecraft Bedrock français : "
+                    "SkyFaction, Kitmap et Faction PvP, avec des îles, des "
+                    "métiers, des prestiges et des events. Jouable sur PC, "
+                    "mobile et console.\n\n"
+                    "Serveur partenaire de BedrockOnLinux."),
+                "news": "Mis en avant par BedrockOnLinux. Bon jeu de la "
+                        "part de Tux !",
+                "activities": (
+                    ("Ton île, ton empire !",
+                     "Commence sur ta propre île dans le ciel, agrandis-la "
+                     "avec ta faction et grimpe au sommet du classement."),
+                    ("Bats-toi pour la carte !",
+                     "Forme des alliances et affronte les factions rivales "
+                     "dans des events PvP épiques : Domination, Nexus, "
+                     "Outpost et plus encore !"),
+                    ("Construis ton usine !",
+                     "Branche tes machines, revends l'énergie en trop, "
+                     "éclaire ta base aux néons et décolle en jetpack."),
+                    ("Prends le large !",
+                     "Traverse cinq mers sur ton propre bateau, trouve les "
+                     "meilleurs coins de pêche et explore les forêts des "
+                     "îles."),
+                ),
+            },
+        },
     },
 )
 
@@ -234,6 +265,49 @@ _ACTIVITIES_SHOWN = "e=>e.networkDetails.activities.length>0"
 _ACTIVITIES_SHOWN_PATCHED = (
     "e=>__bolDetail(e.networkDetails,\"activities\",\"activities\")"
     ".length>0")
+
+
+def browser_partners(partners=PARTNERS, ui="en"):
+    """The partners as the server browser's payload carries them, in the
+    game's language where they have it: their box on the page, and their
+    own page with its pictures and text."""
+    out = []
+    for p in partners:
+        tr = p.get("translations", {}).get(ui, {})
+        acts = list(p.get("activities", ()))
+        texts = list(tr.get("activities", ()))
+        asset = "assets/" + _ASSET_PREFIX
+        dims = serverbrowser._image_dims(
+            pkgutil.get_data("bol", "partners/" + p["banner"]) or b"")
+        out.append({
+            "k": "pt-" + p["key"].lower(),
+            "n": p["label"],
+            "a": p["host"].lower(),
+            "p": int(p.get("port") or 19132),
+            "msg": p["message"],
+            "d": tr.get("description", p["description"]),
+            "news": tr.get("news", p.get("news", "")),
+            "lg": asset + p["icon"],
+            "bn": asset + p["banner"],
+            "bh": round(dims[1] * 100 / dims[0], 2) if dims else 30,
+            # Every language's text, English included, for the tab to
+            # follow the game's language live.
+            "tr": dict({lang: {
+                "d": t.get("description", p["description"]),
+                "news": t.get("news", p.get("news", "")),
+                "acts": [list(x) for x in t.get("activities", ())]}
+                for lang, t in p.get("translations", {}).items()},
+                en={"d": p["description"], "news": p.get("news", ""),
+                    "acts": [[a["subtitle"], a["description"]]
+                             for a in acts]}),
+            "acts": [{"t": a["title"],
+                      "st": texts[i][0] if i < len(texts) else a["subtitle"],
+                      "d": texts[i][1] if i < len(texts)
+                      else a["description"],
+                      "img": asset + a["image"]}
+                     for i, a in enumerate(acts)],
+        })
+    return out
 
 
 def _partner_runtime(partners):
@@ -396,8 +470,12 @@ def _install_partner_assets(hbui, partners):
             dst.write_bytes(blob)
 
 
-def feature_partner_servers(game_dir, partners=PARTNERS):
-    """Show the partner servers under "Featured Servers". Never fatal."""
+def feature_partner_servers(game_dir, partners=PARTNERS, browser=None):
+    """Show the partner servers under "Featured Servers". Never fatal.
+
+    ``browser`` is the ``__bolServerBrowser`` payload (bol.serverbrowser),
+    or None to leave the server browser out of this launch's patch.
+    """
     hbui = Path(game_dir) / HBUI_REL
     bundles = sorted(p for p in hbui.glob("index-*.js"))
     if not bundles:
@@ -414,6 +492,9 @@ def feature_partner_servers(game_dir, partners=PARTNERS):
         except (OSError, UnicodeDecodeError):
             continue
         new, status = _partner_patch(data, partners)
+        browser_status = None
+        if status in ("applied", "already") and browser is not None:
+            new, browser_status = _add_server_browser(new, browser)
         if status in ("applied", "already") and new != data:
             try:
                 bak = js.with_name(js.name + ".bol-orig")
@@ -427,8 +508,12 @@ def feature_partner_servers(game_dir, partners=PARTNERS):
                 return False
             if status == "applied":
                 ok("Partner servers added to Featured Servers")
+            if browser_status == "applied":
+                ok("BedrockOnLinux server browser added to the Servers tab")
+            _warn_browser_lost(browser_status)
             return True
         if status in ("already", "lost"):
+            _warn_browser_lost(browser_status)
             break
     if status == "lost":
         warn("This Minecraft build rebundled its Servers tab, so the partner "
@@ -437,10 +522,91 @@ def feature_partner_servers(game_dir, partners=PARTNERS):
     return status == "already"
 
 
-def apply_branding(game_dir):
+def _add_server_browser(data, payload):
+    """Add the server browser to a bundle the partner patch holds.
+
+    The partner patch writes the bundle's first line afresh every launch;
+    the browser's settings, strings and list go at its end, so switching the
+    browser off or refreshing the list only ever rewrites that line.
+    """
+    head, sep, body = data.partition("\n")
+    body, status = serverbrowser.patch_body(body)
+    if status in ("applied", "already"):
+        head += serverbrowser.runtime_line(payload)
+    return head + sep + body, status
+
+
+def _warn_browser_lost(status):
+    if status == "lost":
+        warn("This Minecraft build rebundled its Servers tab, so the game's "
+             "own tab shows instead of the BedrockOnLinux server browser.")
+
+
+def _game_language():
+    """``game_language`` from the options.txt PLAY's game reads, or ""."""
+    try:
+        from .perfcheck import find_options_file, read_game_options
+        from .prefix import active_prefix
+        return read_game_options(find_options_file(active_prefix())).get(
+            "game_language", "")
+    except Exception:  # only picks the tab's language
+        return ""
+
+
+def _player_servers():
+    """The player's own servers by address, from every account's list."""
+    try:
+        from .perfcheck import find_game_data_dirs
+        from .prefix import active_prefix
+        return serverbrowser.player_servers(
+            find_game_data_dirs(active_prefix()))
+    except Exception:  # only matches catalogue servers to the player's
+        return {}
+
+
+def server_browser_payload(game_dir, settings):
+    """This launch's ``__bolServerBrowser``: the list, banners, strings.
+
+    The player counts are the last ping's; a fresh one starts here, and the
+    bundle's first line takes its answers when it comes back.
+    """
+    on = serverbrowser.enabled(settings)
+    entries = serverbrowser.fetch_list() if on else []
+    hbui = Path(game_dir) / HBUI_REL
+    images, mine = {}, {}
+    if entries:
+        images = serverbrowser.install_images(hbui, entries)
+        serverbrowser.prefetch_images(entries)
+        mine = _player_servers()
+    ui = serverbrowser.ui_language(_game_language())
+    args = dict(on=on, ui=ui, images=images,
+                partner_hosts=[p["host"] for p in PARTNERS], mine=mine,
+                partners=browser_partners(PARTNERS, ui))
+    if entries:
+        def show(status):
+            payload = serverbrowser.build_payload(entries, status=status,
+                                                  **args)
+            for js in sorted(hbui.glob("index-*.js")):
+                serverbrowser.rewrite_runtime(js, payload)
+        serverbrowser.refresh_status(
+            serverbrowser.ping_targets(entries, mine), on_done=show)
+    return serverbrowser.build_payload(
+        entries, status=serverbrowser.cached_status() if entries else None,
+        **args)
+
+
+def apply_branding(game_dir, settings=None):
     """Everything above, for one installed game. Never raises."""
-    for step in (apply_linux_splashes, feature_partner_servers):
-        try:
-            step(game_dir)
-        except Exception as e:  # cosmetic: never in the way of PLAY
-            warn(f"{step.__name__}: {e}")
+    try:
+        apply_linux_splashes(game_dir)
+    except Exception as e:  # cosmetic: never in the way of PLAY
+        warn(f"apply_linux_splashes: {e}")
+    browser = None
+    try:
+        browser = server_browser_payload(game_dir, settings or {})
+    except Exception as e:
+        warn(f"server browser: {e}")
+    try:
+        feature_partner_servers(game_dir, browser=browser)
+    except Exception as e:
+        warn(f"feature_partner_servers: {e}")

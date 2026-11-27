@@ -92,7 +92,7 @@ SETTINGS_REPORTED = (
     "auto_update_game", "xbl_presence", "injector_auto_enable",
     "injector_dll_type", "injector_delay", "injector_early", "controller_nav",
     "mc_edition", "mc_version", "network_updates", "update_channel",
-    "warn_offline_play",
+    "warn_offline_play", "server_browser",
 )
 _SCALAR = (str, int, float, bool)
 

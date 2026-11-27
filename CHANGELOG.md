@@ -58,6 +58,29 @@
   an earlier version installed. With the ARM engine as well, nothing the
   launcher starts needs an x86-64 emulator registered with the kernel any
   more.
+- **A Servers tab of our own.** The game's Servers tab becomes one page of
+  big tiles framed the way the game draws its own, built for the mouse and
+  the controller alike: your servers, BedrockOnLinux's partner (Linesia),
+  the featured experiences (the servers the game features, The Hive,
+  CubeCraft, MegaSMP and the others, in big tiles with their picture and
+  player count), the most played ones (in your language first), one row per
+  category, then every server of the community list
+  [Wyze3306/bedrock-servers-list](https://github.com/Wyze3306/bedrock-servers-list),
+  with the logo, cover and pictures it stores for each.
+  A tile opens the server's own page: its big picture, description,
+  activities and other pictures, with Play, Add to my servers and Back.
+  The spotlight at the top describes the tile you are on and joins it in
+  one press. The player counts come from a status ping at each launch, so
+  the most played servers come first; many networks (Linesia among them)
+  never answer that ping, so the ones that stayed silent still show, last
+  and marked "No answer". Search by name, address, category or any word of
+  a description, and filter by language and by game mode. The page speaks
+  the game's language (English, French, German, Spanish, Italian,
+  Portuguese, Dutch, Polish, Russian, Ukrainian, Turkish, Japanese, Korean,
+  Chinese, Indonesian, Vietnamese, Czech and Swedish; English for the
+  others) and follows it the moment you change it in the settings.
+  Settings ▸ General ▸ In the game turns it off to get the game's own tab
+  back.
 
 ### Fixed
 

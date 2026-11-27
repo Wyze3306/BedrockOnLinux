@@ -3920,6 +3920,20 @@ class MainWindow(QMainWindow):
         update_row.toggled.connect(lambda on: self._save_setting("auto_update_game", on))
         startup.addWidget(update_row)
 
+        in_game = card_section(v, "In the game")
+        browser_row = self._switch(
+            "BedrockOnLinux server browser",
+            self.settings.get("server_browser", True),
+            "Redraws the game's Servers tab as one page of tiles, for mouse "
+            "and controller alike: your servers, the featured experiences, "
+            "the most played ones and every server of the community list "
+            "github.com/Wyze3306/bedrock-servers-list, each joined in one "
+            "press and searchable by name, address, category or keyword. "
+            "Off shows the game's own tab. Takes effect at the next PLAY.")
+        browser_row.toggled.connect(
+            lambda on: self._save_setting("server_browser", on))
+        in_game.addWidget(browser_row)
+
         controller = card_section(v, "Controller",
             "Move a highlight around the launcher with a gamepad, for Steam "
             "Game Mode and any other couch setup with no mouse in reach.")
