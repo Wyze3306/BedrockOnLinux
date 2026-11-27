@@ -12,6 +12,7 @@ import pkgutil
 import tempfile
 from pathlib import Path
 
+from . import hostarch
 from .config import CACHE
 from .prefix import active_prefix
 from .proton import proton_path
@@ -22,6 +23,20 @@ from .proton import proton_path
 # dies on "could not load ntdll.so: libunwind.so.8" (Guix, #324).
 _ENGINE_LIBRARY_DIRS = ("x86_64-linux-gnu", "aarch64-linux-gnu",
                         "i386-linux-gnu")
+
+
+def engine_wine(engine):
+    """The wine an engine's proton script itself runs on this computer.
+
+    An ARM64EC engine has Proton ARM64's layout, and its script runs
+    files/bin-arm64/wine on an aarch64 host; everything else runs
+    files/bin/wine.
+    """
+    files = Path(engine) / "files"
+    arm = files / "bin-arm64" / "wine"
+    if hostarch.machine() in ("aarch64", "arm64") and arm.exists():
+        return arm
+    return files / "bin" / "wine"
 
 
 def engine_env(engine, env):
@@ -64,7 +79,7 @@ def command(name):
     engine = proton_path()
     if not engine:
         return None
-    wine = Path(engine) / "files" / "bin" / "wine"
+    wine = engine_wine(engine)
     if not wine.exists():
         return None
     helper = extract(name)

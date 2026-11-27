@@ -43,7 +43,7 @@ from .doctor import acknowledge_gpu_crash, gpu_crash_acknowledgement_status
 from .games import (installed_builds, installed_versions, list_editions,
                     list_versions, remove_build)
 from .gamesetup import setup_or_join
-from . import betterrtx, gpus
+from . import betterrtx, engine_arch, gpus
 from .inject import run_injector
 from . import icons
 from .gui_profiles import ProfilesPage
@@ -4318,6 +4318,8 @@ class MainWindow(QMainWindow):
 
         graphics.addLayout(self._gpu_choice_row())
 
+        self._build_engine_card(v)
+
         env = card_section(v, "Environment")
         env.addWidget(QLabel("Custom environment variables"))
         env_entry = QLineEdit(self.settings.get("custom_env") or "")
@@ -4341,6 +4343,37 @@ class MainWindow(QMainWindow):
 
         v.addStretch(1)
         return w
+
+    def _build_engine_card(self, v):
+        """The ARM engine switch: shown only on an ARM computer with 4 KiB
+        pages, and only once this launcher pins a published ARM64EC engine
+        (bol.engine_arch). Everywhere else there is nothing to choose."""
+        if not engine_arch.offered():
+            return None
+        problem = engine_arch.problem()
+        engine = card_section(
+            v, "Engine",
+            problem or "Wine and the graphics run natively on this ARM "
+            "computer, and FEX-Emu translates only the game. Turn it off to "
+            "go back to the x86-64 engine.")
+        row = self._switch(
+            "ARM engine (experimental)",
+            engine_arch.normalise(self.settings.get(engine_arch.SETTING))
+            == engine_arch.ARM64EC,
+            "Takes effect at the next PLAY, which downloads it the first "
+            "time. If it cannot start, the x86-64 engine is used instead.")
+        row.toggled.connect(self._save_engine_arch)
+        # It cannot run here: nothing to turn on, but one already on can
+        # still be turned off.
+        if problem and not row.isChecked():
+            row.setEnabled(False)
+        engine.addWidget(row)
+        self.engine_arch_row = row
+        return row
+
+    def _save_engine_arch(self, on):
+        self._save_setting(engine_arch.SETTING,
+                           engine_arch.ARM64EC if on else engine_arch.X86_64)
 
     def _build_storage_card(self, v):
         storage = card_section(v, "Storage",

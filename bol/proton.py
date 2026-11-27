@@ -8,7 +8,13 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from .config import CACHE, GDK_PROTON_REPO, PROTON_DIR, WINEGDK_OUT
+from .config import (
+    CACHE,
+    GDK_PROTON_REPO,
+    PROTON_DIR,
+    WINEGDK_ARM64_OUT,
+    WINEGDK_OUT,
+)
 from .engine_lock import managed_engine_lock
 from .log import die, info, ok, warn
 from .pe import PE, _backup_once, apply_patch, code_machine
@@ -29,8 +35,10 @@ def proton_path():
 
 
 def _canonical_winegdk_path(path):
+    """Whether ``path`` is one of the managed engines' directories."""
     try:
-        return Path(path).expanduser().resolve() == WINEGDK_OUT.resolve()
+        resolved = Path(path).expanduser().resolve()
+        return resolved in (WINEGDK_OUT.resolve(), WINEGDK_ARM64_OUT.resolve())
     except (OSError, RuntimeError, TypeError):
         return False
 

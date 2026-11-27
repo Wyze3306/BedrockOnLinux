@@ -284,6 +284,42 @@ users) running a candidate engine that is clearly marked experimental.
 - **Maintenance.** Two engines, two pin sets, two smoke matrices, for every
   release, permanently.
 
+## 7. In the launcher (2026-11-27)
+
+The launcher side is written; it stays dormant until the engine is pinned.
+
+- **Choice:** `bol/engine_arch.py`. The setting `engine_arch` (`x86_64`, the
+  default, or `arm64ec`) and the `BOL_ENGINE_ARCH` override. The switch in
+  Settings ▸ Advanced ▸ Engine is shown only on aarch64 with 4 KiB pages
+  (inside muvm counts) and a non-empty `WINEGDK_ARM64_BUILD_REV`. Whenever the
+  ARM engine cannot be installed or run, the x86-64 one is used instead.
+- **Pins:** `WINEGDK_ARM64_*` in `bol/config.py`; the aarch64 expectations
+  (`engine_expectations("aarch64")`, `REQUIRED_ARM64_*`,
+  `REQUIRED_VARIANT_HASHES_ARM64*`) in `bol/vkd3d.py`. Every one of them is
+  empty until the first build is published, and an empty one makes
+  validation refuse the engine.
+- **Install:** `bol/winegdk.py` installs either engine into its own
+  directory, under the one engine lock, and keeps the current archive of both
+  in the cache. The prefix is shared: switching engines changes the revision
+  marker, which refreshes system32 from `aarch64-windows` or
+  `x86_64-windows`.
+- **FEX registration:** upstream Wine's `wine.inf` registers Microsoft's
+  `xtajit64.dll`/`xtajit.dll` under `HKLM\Software\Microsoft\Wow64\amd64`
+  and `\x86`, and never overwrites them; Valve's Wine registers FEX-Emu's
+  DLLs. WineGDK is upstream Wine, so the launcher writes
+  `libarm64ecfex.dll`/`libwow64fex.dll` there itself before each run.
+- **Running:** the engine's proton script is started directly, with the
+  environment umu would have given it (`STEAM_COMPAT_DATA_PATH` = prefix,
+  `UMU_ID`, `SteamAppId`, `PROTON_USE_WOW64`, the system CA store). umu
+  cannot set up Steam Linux Runtime 4 arm64 yet (umu#716: pressure-vessel
+  exits 1, then KeyError 'steamrt4-arm64' on update), while GE-Proton
+  aarch64 runs started directly. That needs glibc ≥ 2.41 on the host, which
+  the launcher checks before it offers the engine. `BOL_ARM64_RUNNER=umu`
+  takes the container path instead.
+- **Emulator for the rest:** with the ARM engine, `bol/hostarch.py` asks for
+  a binfmt emulator only for xodus-cli and the WebKitGTK runtime, until their
+  aarch64 builds are pinned.
+
 ## Sources
 
 - Wine 10.0 release notes (ARM64EC parity, x86-64 emulation interface,

@@ -58,19 +58,26 @@ def _escape(text: str) -> str:
                 .replace("\n", "\\n"))
 
 
+def _value_prefix(name: str) -> str:
+    """How a value's line starts: ``"name"=``, or ``@=`` for the key's
+    default value, which is the spelling wineserver writes and reads back."""
+
+    return "@=" if name == "" else f'"{_escape(name)}"='
+
+
 def _value_line(change: RegistryChange) -> str:
-    name = _escape(change.name)
+    prefix = _value_prefix(change.name)
     if change.kind == "string":
         if not isinstance(change.value, str):
             raise ValueError("REG_SZ values must be strings")
         value = _escape(change.value)
-        return f'"{name}"="{value}"\n'
+        return f'{prefix}"{value}"\n'
     if change.kind == "dword":
         if isinstance(change.value, bool) or not isinstance(change.value, int):
             raise ValueError("REG_DWORD values must be integers")
         if not 0 <= change.value <= 0xFFFFFFFF:
             raise ValueError("REG_DWORD value is outside uint32")
-        return f'"{name}"=dword:{change.value:08x}\n'
+        return f'{prefix}dword:{change.value:08x}\n'
     if change.kind == "delete":
         return ""
     raise ValueError(f"unsupported registry value kind: {change.kind}")
@@ -131,7 +138,6 @@ class _Hive:
 
     def apply(self, change: RegistryChange) -> None:
         escaped_key = _escape(change.key)
-        escaped_name = _escape(change.name)
         section = self.by_key.get(escaped_key)
 
         if section is None:
@@ -155,7 +161,7 @@ class _Hive:
             self.by_key[escaped_key] = section
             return
 
-        prefix = f'"{escaped_name}"='
+        prefix = _value_prefix(change.name)
         end = len(section)
         found = next((index for index in range(1, end)
                       if section[index].startswith(prefix)), None)

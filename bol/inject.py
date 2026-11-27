@@ -17,7 +17,7 @@ from .config import CACHE, LOGS
 from .log import BolError, desktop_notify
 from .prefix import _mc_running, active_prefix, prefix_processes
 from .proton import proton_path
-from .winehelper import engine_env
+from .winehelper import engine_env, engine_wine
 
 
 def _cmdline_has_winedbg(cmdline):
@@ -111,7 +111,7 @@ def run_injector(dll_path):
     pp = proton_path()
     if not pp:
         raise BolError("GDK-Proton engine missing — run Install / Update first.")
-    wine = pp / "files/bin/wine"
+    wine = engine_wine(pp)
     if not wine.exists():
         raise BolError(f"Engine wine binary not found ({wine}).")
     inj = _extract_injector()
