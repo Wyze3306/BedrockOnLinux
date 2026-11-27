@@ -223,6 +223,25 @@ def list_profiles(base_data=None):
     return found
 
 
+def find_profile(name, base_data=None):
+    """The folder of the profile called ``name``, or None for Default.
+
+    By the name the Profiles page shows, in any case, or by its folder's
+    name: what a Steam launch option names is typed by hand (#397).
+    """
+    display = str(name).strip()
+    if display.casefold() in ("", "default"):
+        return None
+    profiles = list_profiles(base_data)
+    for item in profiles:
+        if display.casefold() in (str(item.get("name")).casefold(),
+                                  str(item.get("slug")).casefold()):
+            return Path(item["path"])
+    names = ", ".join(["Default"] + [str(item["name"]) for item in profiles])
+    raise BolError(f"There is no profile called '{display}'. The profiles "
+                   f"are: {names}.")
+
+
 def delete_profile(name, base_data=None, applications_dir=None):
     """Delete an isolated profile directory and its shortcuts."""
     display = str(name).strip()

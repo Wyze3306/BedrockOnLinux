@@ -545,3 +545,66 @@ def test_the_python_launcher_script_runs_under_this_interpreter(tmp_path):
                            return_value=script):
             open_profile_window(tmp_path / "profile")
         assert popen.call_args[0][0] == [sys.executable, script, "gui"]
+
+
+# --profile NAME before the command (#397): a Steam launch option per Steam
+# user, each starting its own profile.
+
+def test_a_profile_is_found_by_its_name_in_any_case_or_by_its_folder(tmp_path):
+    from bol.profiles import find_profile
+    folder = create_profile("Kid One", tmp_path)
+    assert find_profile("Kid One", tmp_path) == folder
+    assert find_profile("kid one", tmp_path) == folder
+    assert find_profile("kid-one", tmp_path) == folder
+    assert find_profile("Default", tmp_path) is None
+    with pytest.raises(BolError, match="Default, Kid One"):
+        find_profile("Kid Two", tmp_path)
+
+
+def _relaunch(argv, base, orig_argv=None):
+    import bol.__main__ as entry
+    calls = []
+    with mock.patch.object(sys, "orig_argv",
+                           orig_argv if orig_argv is not None
+                           else [sys.executable, "-m", "bol", *argv[1:]],
+                           create=True):
+        entry.relaunch_in_profile(
+            argv, execve=lambda path, cmd, env: calls.append((path, cmd, env)),
+            base_data=base)
+    return calls
+
+
+def test_profile_option_starts_the_command_again_inside_the_profile(tmp_path):
+    folder = create_profile("Kid One", tmp_path)
+    calls = _relaunch(["bedrock-on-linux", "--profile", "Kid One", "play"],
+                      tmp_path)
+    assert len(calls) == 1
+    path, cmd, env = calls[0]
+    assert path == sys.executable
+    assert cmd == [sys.executable, "-m", "bol", "play"]
+    assert env["BOL_HOME"] == str(folder.resolve())
+
+
+def test_profile_option_with_an_equals_sign_and_no_command(tmp_path):
+    folder = create_profile("Kid One", tmp_path)
+    calls = _relaunch(["/apps/bol.AppImage", "--profile=kid-one"], tmp_path,
+                      orig_argv=[sys.executable, "-I", "/mnt/app/bol",
+                                 "--profile=kid-one"])
+    path, cmd, env = calls[0]
+    assert cmd == [sys.executable, "-I", "/mnt/app/bol"]
+    assert env["BOL_HOME"] == str(folder.resolve())
+
+
+def test_a_profile_option_after_the_command_is_that_commands_own(tmp_path):
+    assert _relaunch(["bedrock-on-linux", "shortcut", "--profile", "X"],
+                     tmp_path) == []
+    assert _relaunch(["bedrock-on-linux", "play"], tmp_path) == []
+
+
+def test_an_unknown_profile_is_refused_before_anything_starts(tmp_path, capsys):
+    create_profile("Kid One", tmp_path)
+    with pytest.raises(SystemExit) as stopped:
+        _relaunch(["bedrock-on-linux", "--profile", "Nobody", "play"],
+                  tmp_path)
+    assert stopped.value.code == 2
+    assert "no profile called 'Nobody'" in capsys.readouterr().err

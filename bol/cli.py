@@ -487,6 +487,11 @@ def main():
     # Also what an update runs once before it replaces anything (bol.update).
     p.add_argument("--version", action="version",
                    version=f"{PRETTY} {VERSION}")
+    # Taken off the command line by bol.__main__, which starts the command
+    # again inside the profile; listed here so that --help shows it.
+    p.add_argument("--profile", metavar="NAME", dest="profile_home",
+                   help="run the command in the isolated profile NAME, "
+                        "for instance from a Steam launch option")
     sub = p.add_subparsers(dest="cmd")
 
     sub.add_parser("gui", help="open the launcher (default)")
