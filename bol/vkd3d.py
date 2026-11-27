@@ -225,7 +225,7 @@ ARM64X_VKD3D_HASHES = {
     "d3d12.dll":
         "b0869a4115ff4bce669338f366a9706a984be4ae5b1b0e08e14598470f720cd7",
     "d3d12core.dll":
-        "b271b2e0faf43458c7c9708cc52d7f63f36e65955eceb8db348aed899b3dcf00",
+        "bed5f343f7ffe840b821a0bb173bcf2aa4e8ad59ea0e0a0dc4ffa6f52f2b87eb",
 }
 REQUIRED_VARIANT_HASHES_ARM64: Dict[str, Dict[str, str]] = {
     variant: {

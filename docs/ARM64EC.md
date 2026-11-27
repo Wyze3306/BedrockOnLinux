@@ -14,7 +14,7 @@ archives are untouched, byte for byte.
 | Piece | Recipe | Release |
 |---|---|---|
 | WineGDK, `--enable-archs=arm64ec,aarch64,i386,x86_64` | `build-winegdk.yml arch=aarch64`, `scripts/build-winegdk-container.sh` with `BOL_WINEGDK_TARGET=aarch64` | `winegdk-…-aarch64` |
-| vkd3d-proton 3.0.1 + NV-DGC + our two fixes, as ARM64X | `build-vkd3d.yml arch=aarch64`, `scripts/build-vkd3d-arm64x.sh` | `vkd3d-arm64x-3.0.1-nv-dgc-00160c16d00a` |
+| vkd3d-proton 3.0.1 + NV-DGC + our two fixes, as ARM64X | `build-vkd3d.yml arch=aarch64`, `scripts/build-vkd3d-arm64x.sh` | `vkd3d-arm64x-3.0.1-nv-dgc-3bd519b4cb37` |
 | xodus-cli p15 and its WebKitGTK runtime for aarch64 | `build-xodus.yml arch=aarch64` | `xodus-64d39eb87a56-p15-aarch64` |
 | The engine, `GDK-Proton-xuser-arm64` | `build-engine.yml arch=aarch64`, `scripts/package-engine-arm64.sh` | `engine-arm64ec-native<n>` |
 
@@ -29,8 +29,11 @@ Where it departs from the study:
   for WineGDK and vkd3d alike: the image Proton ARM64 is built in, with
   llvm-mingw for all four PE architectures.
 - **vkd3d: no rebase.** v3.0.1 needs only upstream's later `build-arm64x.txt`;
-  the ARM64EC rdtsc guard was already there. `hybrid_patchable` is left out
-  (Minecraft does not hook D3D12 vtables).
+  the ARM64EC rdtsc guard was already there. Upstream's `hybrid_patchable`
+  on the command queue vtable (`20c0ab2095`) is backported in the ARM64X
+  build only, because the x64 code BoL loads (OptiScaler, overlays,
+  LeviLamina mods, injected clients) hooks `ExecuteCommandLists`
+  (`third_party/vkd3d-proton-arm64x/hybrid-patchable-command-queue.patch`).
 - **GDK runtime on ARM64:** GDK-Proton's one change to the `proton` script is
   re-applied to GE's (`third_party/gdk-proton-arm64`). Its WineGDK builtins
   now come from `aarch64-windows` (ARM64X); the x64 curl/OpenSSL libraries and
