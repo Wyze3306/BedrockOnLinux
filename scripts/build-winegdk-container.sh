@@ -42,6 +42,8 @@ case "$TARGET" in
     readonly WINE_ARCHS="arm64ec,aarch64,i386,x86_64" UNIX_ARCH="aarch64" ;;
   *) echo "!! unknown BOL_WINEGDK_TARGET '$TARGET' (x86_64 or aarch64)" >&2; exit 1 ;;
 esac
+readonly XKBCOMMON_VERSION="1.9.2"
+readonly XKBCOMMON_SHA256="8d68a8b45796f34f7cace357b9f89b8c92b158557274fef5889b03648b55fe59"
 [ "$(uname -m)" = "$UNIX_ARCH" ] \
   || { echo "!! the $TARGET engine is built on a $UNIX_ARCH host, not $(uname -m)" >&2; exit 1; }
 readonly VENDORED_FOLLOWUP_PATCH="$PROJECT_ROOT/third_party/winegdk-native5/0002-windows.storage-use-legacy-single-file-dialog.patch"
@@ -115,7 +117,7 @@ else
   # The SDK image is pinned by digest and is the whole build input; installing
   # anything into it would make the prefix depend on the day of the build.
   echo "== Checking the steamrt4 SDK toolchain"
-  for tool in git python3 make bison flex pkg-config readelf strip dpkg-query \
+  for tool in git python3 make bison flex pkg-config readelf strip dpkg-query curl meson ninja \
               aarch64-w64-mingw32-clang arm64ec-w64-mingw32-clang \
               i686-w64-mingw32-clang x86_64-w64-mingw32-clang; do
     command -v "$tool" >/dev/null \
@@ -126,6 +128,30 @@ else
   export CCACHE_DISABLE=1
   cc --version | head -n1
   aarch64-w64-mingw32-clang --version | head -n1
+  # Wine configures the Wayland driver out without xkbregistry, and the SDK
+  # has no libxkbregistry-dev. The base ships the 1.9.2 library at run time
+  # (files/lib/aarch64-linux-gnu/libxkbregistry.so.0.9.2), so build that very
+  # version to link against; nothing of it goes into the prefix.
+  if ! pkg-config --exists xkbregistry; then
+    echo "== Building xkbregistry $XKBCOMMON_VERSION to link the Wayland driver"
+    xkb_tar="/winegdk/xkbcommon-$XKBCOMMON_VERSION.tar.gz"
+    mkdir -p /winegdk
+    curl -fsSL --retry 5 -o "$xkb_tar" \
+      "https://github.com/xkbcommon/libxkbcommon/archive/refs/tags/xkbcommon-$XKBCOMMON_VERSION.tar.gz"
+    [ "$(sha256sum "$xkb_tar" | cut -d' ' -f1)" = "$XKBCOMMON_SHA256" ] \
+      || { echo "!! xkbcommon $XKBCOMMON_VERSION tarball hash mismatch" >&2; exit 1; }
+    rm -rf /winegdk/xkb-src /winegdk/xkb-build /winegdk/xkb
+    mkdir -p /winegdk/xkb-src
+    tar -xzf "$xkb_tar" -C /winegdk/xkb-src --strip-components=1
+    meson setup /winegdk/xkb-build /winegdk/xkb-src --prefix=/winegdk/xkb \
+      --libdir=lib --buildtype=release -Denable-x11=false -Denable-wayland=false \
+      -Denable-docs=false -Denable-tools=false -Denable-bash-completion=false \
+      -Denable-xkbregistry=true >/dev/null
+    ninja -C /winegdk/xkb-build install >/dev/null
+    export PKG_CONFIG_PATH="/winegdk/xkb/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    export LIBRARY_PATH="/winegdk/xkb/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    pkg-config --exists xkbregistry || { echo "!! xkbregistry still not found" >&2; exit 1; }
+  fi
 fi
 
 echo "== Installing the vendored linux/ntsync.h UAPI header"

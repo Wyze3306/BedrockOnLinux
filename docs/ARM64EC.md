@@ -1,8 +1,48 @@
-# ARM64EC engine: feasibility study (#250)
+# ARM64EC engine (#250)
 
-Status: study only. Nothing described here is built, pinned or published.
-Written 2026-11-12 against engine `wow64-archs-native22` (WineGDK
-`75637b674e1f`, Wine 11.1 base) and launcher `main` at `afdce7b`.
+Status: **built, experimental** (2026-11-27). The study below (2026-11-12,
+engine `wow64-archs-native22`, launcher `afdce7b`) is kept as written; the
+section "What was built" says where the build differs from it.
+
+## What was built
+
+Every piece is built in CI on GitHub's `ubuntu-24.04-arm` runners, pinned by
+SHA-256 in `bol/config.py` with the usual two-pass loop, and published as a
+pre-release under a tag of its own. The x86 engine, vkd3d payload and xodus
+archives are untouched, byte for byte.
+
+| Piece | Recipe | Release |
+|---|---|---|
+| WineGDK, `--enable-archs=arm64ec,aarch64,i386,x86_64` | `build-winegdk.yml arch=aarch64`, `scripts/build-winegdk-container.sh` with `BOL_WINEGDK_TARGET=aarch64` | `winegdk-…-aarch64` |
+| vkd3d-proton 3.0.1 + NV-DGC + our two fixes, as ARM64X | `build-vkd3d.yml arch=aarch64`, `scripts/build-vkd3d-arm64x.sh` | `vkd3d-arm64x-3.0.1-nv-dgc-00160c16d00a` |
+| xodus-cli p15 and its WebKitGTK runtime for aarch64 | `build-xodus.yml arch=aarch64` | `xodus-64d39eb87a56-p15-aarch64` |
+| The engine, `GDK-Proton-xuser-arm64` | `build-engine.yml arch=aarch64`, `scripts/package-engine-arm64.sh` | `engine-arm64ec-native<n>` |
+
+Where it departs from the study:
+
+- **Base: GE-Proton11-14-aarch64**, not a FEX tier of our own. GE's ARM64
+  build already ships FEX (`libarm64ecfex.dll`, `libwow64fex.dll`), DXVK for
+  `aarch64-windows`, `files/bin-arm64`, `default_pfx_arm64` and the SLR 4 arm64
+  tool manifest (appid 4185400). Its Unix side is built in Steam Runtime 4, so
+  the engine's glibc ceiling is 2.41, not 2.36.
+- **Toolchain: Valve's steamrt4 `sdk/arm64-llvm` image**, pinned by digest,
+  for WineGDK and vkd3d alike: the image Proton ARM64 is built in, with
+  llvm-mingw for all four PE architectures.
+- **vkd3d: no rebase.** v3.0.1 needs only upstream's later `build-arm64x.txt`;
+  the ARM64EC rdtsc guard was already there. `hybrid_patchable` is left out
+  (Minecraft does not hook D3D12 vtables).
+- **GDK runtime on ARM64:** GDK-Proton's one change to the `proton` script is
+  re-applied to GE's (`third_party/gdk-proton-arm64`). Its WineGDK builtins
+  now come from `aarch64-windows` (ARM64X); the x64 curl/OpenSSL libraries and
+  Microsoft's `xgameruntime.dll.threading` stay x64, from the same pinned
+  GDK-Proton10-32 archive, and load through FEX like the game.
+- **Smoke test:** `scripts/arm64ec-smoke` runs in the SDK image on the ARM
+  runner: `wine --version`, `wineboot`, then an x86-64 probe that must run
+  through FEX, see an ARM64 machine and load our ARM64X `xgameruntime.dll` and
+  `d3d12.dll` from emulated code.
+
+Still not done: Minecraft itself has never run on it (no ARM GPU here), and
+the container path waits on umu#716 (see the launcher section).
 
 ## Summary
 
