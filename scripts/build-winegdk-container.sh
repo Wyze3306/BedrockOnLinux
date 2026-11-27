@@ -413,6 +413,13 @@ echo "== Configuring + building WineGDK ($WINE_ARCHS)"
 # not read SOURCE_DATE_EPOCH there); put the link time back.
 python3 "$PROJECT_ROOT/scripts/pe-stamp.py" "$EXPECTED_SOURCE_DATE_EPOCH" \
   "$PREFIX/lib/wine"
+if [ "$TARGET" = aarch64 ]; then
+  # clang writes the time of the build into each COFF object it assembles for
+  # the *-windows targets; the ones inside the installed lib*.a archives were
+  # the only bytes two ARM64EC builds did not share.
+  python3 "$PROJECT_ROOT/scripts/coff-stamp.py" "$EXPECTED_SOURCE_DATE_EPOCH" \
+    "$PREFIX/lib/wine"
+fi
 # Wine's installed headers embed the builder's absolute source path and are not
 # runtime material; drop them so the prefix is relocatable + reproducible.
 rm -rf "$PREFIX/include"
