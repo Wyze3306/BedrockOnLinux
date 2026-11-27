@@ -229,6 +229,10 @@ XODUS_REV = "64d39eb87a56-p15"
 # Integrity pin from the reviewed candidate build of the p15 archive.
 # https://github.com/Wyze3306/BedrockOnLinux/actions/runs/44551780138
 XODUS_ARCHIVE_SHA256 = "438a4b7189043b1a82a062ebd059fffedcc30741352ad8ddcb43ed1a03f5c42b"
+# The same rev built for aarch64 (experimental ARM64EC engine, #250), released
+# under xodus-<rev>-aarch64 as xodus-cli-<rev>-aarch64.tar.gz. Empty = never
+# published: the launcher then offers no native xodus-cli on ARM.
+XODUS_ARM64_ARCHIVE_SHA256 = ""
 XODUS_DIR = DATA / "xodus"
 XODUS_BIN = XODUS_DIR / "xodus-cli"
 # xodus-cli links wry/tao unconditionally, so libwebkit2gtk-4.1 has to be
@@ -261,6 +265,10 @@ XODUS_WEBVIEW_SHA256 = "9685289ff178beaa74a6e8f1eea78e55c202176eadf25445d2e1670c
 # builds drop the WEBKIT_EXEC_PATH override (it is developer-mode only), so the
 # bundled library carries this literal and the launcher rewrites it in place.
 XODUS_WEBVIEW_EXEC_DIR = "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+# The aarch64 runtime (xodus-webview-<rev>-aarch64.tar.xz, released beside the
+# aarch64 xodus-cli) and the helper directory its library carries.
+XODUS_WEBVIEW_ARM64_SHA256 = ""
+XODUS_WEBVIEW_ARM64_EXEC_DIR = "/usr/lib/aarch64-linux-gnu/webkit2gtk-4.1"
 # Xodus keeps its tokens in a file keyring (built with --features
 # key-chain-file) instead of a D-Bus secret service, which does not exist in a
 # Game Mode session or inside a Flatpak sandbox. It puts that file in $HOME,
