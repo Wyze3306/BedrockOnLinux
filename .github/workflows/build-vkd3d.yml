@@ -123,14 +123,48 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Attest build provenance
+      - name: Keep a published payload's bytes
         if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILT_SHA256: ${{ steps.pack.outputs.sha256 }}
+        run: |
+          # The tag is named after the DLL lock only, and the tarball around
+          # those DLLs is not byte-reproducible (it carries the meson build
+          # dirs). Re-uploading onto an existing tag would swap the bytes the
+          # published engines were assembled and attested from, so an existing
+          # release is kept as it is. Its DLLs match this build's: the build
+          # script gated them on OUTPUT-SHA256SUMS, whose hash names the tag.
+          # A release.yml force_rebuild lands here too, so this skips rather
+          # than fails.
+          if ! err="$(gh release view "$VKD3D_TAG" -R "$GITHUB_REPOSITORY" 2>&1 >/dev/null)"; then
+            case "$err" in
+              *"release not found"*)
+                echo "PUBLISH_VKD3D=true" >> "$GITHUB_ENV"
+                exit 0 ;;
+            esac
+            echo "::error::cannot tell whether $VKD3D_TAG is published: $err" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/published"
+          gh release download "$VKD3D_TAG" -R "$GITHUB_REPOSITORY" \
+            -p "$TARBALL.sha256" -D "$RUNNER_TEMP/published"
+          published="$(cut -d' ' -f1 "$RUNNER_TEMP/published/$TARBALL.sha256")"
+          if [ "$published" = "$BUILT_SHA256" ]; then
+            echo "$VKD3D_TAG already holds these bytes ($published)."
+          else
+            echo "::warning::$VKD3D_TAG already holds $published; this build packed $BUILT_SHA256. Keeping the published release (same DLLs, see OUTPUT-SHA256SUMS); this run's tarball stays a workflow artifact only."
+          fi
+          echo "PUBLISH_VKD3D=false" >> "$GITHUB_ENV"
+
+      - name: Attest build provenance
+        if: ${{ inputs.publish && env.PUBLISH_VKD3D == 'true' }}
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: ${{ env.TARBALL }}
 
       - name: Publish the vkd3d payload release
-        if: ${{ inputs.publish }}
+        if: ${{ inputs.publish && env.PUBLISH_VKD3D == 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ env.VKD3D_TAG }}
