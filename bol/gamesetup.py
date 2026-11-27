@@ -4,7 +4,7 @@
 import re
 from pathlib import Path
 
-from . import hostarch, selinux
+from . import hostarch, selinux, uwp
 from . import prefix as prefix_mod
 from .auth import msa_signed_in
 from .config import DATA, LOGS
@@ -157,6 +157,14 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
         edition, version = _auto_selection(s)
         use_game_dir(install_game(edition, version, progress, force=force))
     gd = Path(load_settings()["game_dir"])
+    if uwp.is_uwp(edition_for_dir(gd)):
+        # A UWP build runs on wine-uwp, in a prefix of its own: the GDK
+        # engine, its prefix and every fixup below are another game's (#387).
+        uwp.prepare(progress)
+        ok("Setup complete — click PLAY. Minecraft signs in to Xbox Live "
+           "itself: its Sign In button opens Microsoft's sign-in in your "
+           "browser.")
+        return
     # The DLLs the game folder gets are Bedrock's own fixes -- its XCurl and
     # libHttpClient, its sign-in button. Another title keeps what it shipped
     # with: those replacements were never tried on it, and Minecraft

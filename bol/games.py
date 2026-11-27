@@ -8,7 +8,7 @@ import shutil
 import time
 from pathlib import Path
 
-from . import wustore, xodus
+from . import uwp, wustore, xodus
 from .config import CACHE, CONTENT, GAMES
 from .log import BolError, die, info, ok, warn
 from .util import load_settings, save_settings
@@ -70,6 +70,12 @@ def edition_title(edition_entry):
     if not edition_entry:
         return "bedrock"
     return str(edition_entry.get("title") or "bedrock")
+
+
+def bedrock_numbering(edition_entry):
+    """Whether a build's package version is Bedrock's packed numbering
+    (1.21.5101.0 for 1.21.51.1): Bedrock's GDK builds and its UWP ones."""
+    return is_bedrock(edition_entry) or uwp.is_uwp(edition_entry)
 
 
 def is_bedrock(edition_entry):
@@ -153,6 +159,8 @@ def _catalogue(edition_id, ignore_cache=False):
     edition = xodus.edition(edition_id)
     if from_windows_update(edition):
         return wustore.version_catalogue(edition, ignore_cache=ignore_cache)
+    if uwp.is_uwp(edition):
+        return uwp.version_catalogue(edition, ignore_cache=ignore_cache)
     return xodus.version_catalogue(edition_id, ignore_cache=ignore_cache)
 
 
@@ -201,8 +209,11 @@ def _installed_versions(edition_id):
     except OSError:
         return set()
     exe = edition_exe(xodus.edition(edition_id))
+    # A dot folder is the installer's own (games/uwp/.wine-uwp holds the
+    # build wineuwp-install is still writing), never a build.
     return {folder.name for folder in folders
             if folder.is_dir() and not folder.is_symlink()
+            and not folder.name.startswith(".")
             and _game_root(folder, exe) is not None}
 
 
@@ -339,6 +350,11 @@ def install_game(edition, version=None, progress=None, force=False):
              f"{entry['version']} — this downloads it from Microsoft's "
              "Windows Update servers …")
         url = (entry.get("package") or {}).get("moniker") or edition["product"]
+    elif uwp.is_uwp(edition):
+        info(f"{'Reinstalling' if root else 'Installing'} {edition['name']} "
+             f"{entry['version']} — it comes from Microsoft's Windows Update "
+             "servers, for the copy of Minecraft your account owns …")
+        url = entry.get("update_id") or edition["product"]
     else:
         info(f"{'Reinstalling' if root else 'Installing'} "
              f"{_build_name(edition, entry['version'])} — this downloads it "
@@ -349,6 +365,8 @@ def install_game(edition, version=None, progress=None, force=False):
     try:
         if from_windows_update(edition):
             wustore.install(edition, entry, dest, progress)
+        elif uwp.is_uwp(edition):
+            uwp.install(edition, entry, dest, progress)
         else:
             # xodus.install's defaults are Bedrock's; another title names the
             # executable that marks its build, and itself in what goes wrong.
@@ -374,7 +392,7 @@ def install_game(edition, version=None, progress=None, force=False):
             f"{_build_name(edition, entry['version'])}.")
     _write_install_record(dest, edition, entry["version"], url)
     shown = entry["version"]
-    if not is_bedrock(edition):
+    if not bedrock_numbering(edition):
         # Bedrock packs its own numbering into the package version, so only
         # another title's package says its build outright.
         shown = build_version(root) or shown
@@ -538,7 +556,7 @@ def _build_entry(folder, edition_entry, version, selected, with_size=True):
     root = xodus.game_root(folder, exe)
     record = _install_record(folder)
     managed = _managed_parts(folder) is not None
-    if not is_bedrock(edition_entry) or version == xodus.STORE_BUILD:
+    if not bedrock_numbering(edition_entry) or version == xodus.STORE_BUILD:
         # The folder of a Store-only title is named "current"; the build in
         # it has a number of its own, and that is the one worth showing.
         version = build_version(root or folder) or version
@@ -596,7 +614,7 @@ def installed_builds(with_size=True):
                 continue
             exe = edition_exe(edition_entry)
             for build in builds:
-                if (not build.is_dir()
+                if (not build.is_dir() or build.name.startswith(".")
                         or xodus.game_root(build, exe) is None):
                     continue
                 out.append(_build_entry(build, edition_entry, build.name,

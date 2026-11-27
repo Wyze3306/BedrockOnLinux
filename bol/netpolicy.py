@@ -82,13 +82,15 @@ ENDPOINTS = (
                     "*.githubusercontent.com", "codeload.github.com"),
         _PLAIN_GET,
         "The game engine, the Minecraft downloader, the online-login "
-        "libraries, the sign-in web runtime, umu-launcher and GE-Proton, "
-        "each checked against a pinned SHA-256."),
+        "libraries, the sign-in web runtime, umu-launcher and GE-Proton -- "
+        "and for the UWP builds wine-uwp, DXVK and vkd3d-proton -- each "
+        "checked against a pinned SHA-256."),
     Endpoint(
         "install", ("raw.githubusercontent.com",),
         _PLAIN_GET,
-        "The index of Minecraft builds (MinecraftBedrockArchiver/GdkLinks) "
-        "the version picker lists."),
+        "The index of Minecraft builds (MinecraftBedrockArchiver/GdkLinks, "
+        "and MCMrARM/mc-w10-versiondb for the UWP builds) the version "
+        "picker lists."),
     Endpoint(
         "install", ("mirror.msys2.org", "curl.se"),
         _PLAIN_GET,
@@ -113,6 +115,17 @@ ENDPOINTS = (
         "checks that the account owns the game.",
         "The Minecraft package itself, its licence and its Store artwork, "
         "from Microsoft's own servers."),
+    Endpoint(
+        "install", ("go.microsoft.com",
+                    "software-static.download.prss.microsoft.com",
+                    "msdl.microsoft.com", "marketplace.visualstudio.com",
+                    "*.gallerycdn.vsassets.io"),
+        _PLAIN_GET + " Microsoft's symbol server is asked for the debug "
+        "symbols of Windows DLLs by their names and build identifiers.",
+        "Only for the UWP builds of Minecraft (up to 1.21.51), once: the "
+        "Windows files wine-uwp runs on, read out of Microsoft's Windows 11 "
+        "evaluation image, the debug symbols it needs for them, and the "
+        "Store Engagement framework the game uses."),
     Endpoint(
         "signin", ("login.live.com", "account.microsoft.com",
                    "*.auth.xboxlive.com", "sisu.xboxlive.com"),

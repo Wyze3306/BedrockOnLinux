@@ -1766,6 +1766,8 @@ def _version_label(v):
         label += "  ·  BETA"
     elif _version_edition_id(v) == "education":
         label += "  ·  EDU"
+    elif _version_edition_id(v) == "uwp":
+        label += "  ·  UWP"
     return label
 
 
@@ -2453,6 +2455,8 @@ class MainWindow(QMainWindow):
     _HERO_NAMES = {
         "release": ("Minecraft Bedrock", "Bedrock Edition for Linux"),
         "preview": ("Minecraft Preview", "Bedrock's beta builds, on Linux"),
+        "uwp": ("Minecraft Bedrock UWP", "Every release up to 1.21.51, on "
+                "wine-uwp"),
     }
 
     def edition_logo(self, edition_id, size):

@@ -34,6 +34,7 @@ from .config import (
     WINEGDK_ARM64_OUT,
     WINEGDK_BUILD_REV,
     WINEGDK_OUT,
+    WINE_UWP_PREFIX,
 )
 from .log import BolError, die, info, ok, warn
 from .perfcheck import find_game_data_dirs, find_options_files
@@ -1346,8 +1347,13 @@ def headless_setup_env(env, native_cryptbase=False):
 
 
 def kill_wine():
-    """Explicit GUI action: stop only this application's Wine prefix."""
+    """Explicit GUI action: stop only this application's Wine prefixes --
+    the GDK engine's and the one the UWP builds run in (bol.uwp)."""
     stopped, forced = stop_prefix_procs(active_prefix())
+    if WINE_UWP_PREFIX.is_dir():
+        more, more_forced = stop_prefix_procs(WINE_UWP_PREFIX)
+        stopped += more
+        forced += more_forced
     if stopped:
         ok(f"Stopped {stopped} BedrockOnLinux process(es)"
            + (f" ({forced} forced)." if forced else "."))
@@ -1936,7 +1942,10 @@ def _game_process_names():
 
 def _mc_running():
     names = _game_process_names()
-    for pid in prefix_processes(active_prefix()):
+    pids = prefix_processes(active_prefix())
+    if WINE_UWP_PREFIX.is_dir():
+        pids += prefix_processes(WINE_UWP_PREFIX)
+    for pid in pids:
         try:
             cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
             if any(name in cmdline for name in names):

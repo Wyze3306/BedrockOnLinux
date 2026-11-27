@@ -963,7 +963,8 @@ class FrameRateDeliveryTests(unittest.TestCase):
         # A rate with decimals typed into the Advanced field is applied by
         # apply_custom_env, and must still be moved past Proton.
         import inspect
-        source = inspect.getsource(launch)
+        # The GDK launch: a UWP build runs on wine-uwp, without Proton.
+        source = inspect.getsource(launch._launch_once)
         custom = source.index("apply_custom_env(env, s.get(")
         deliver = source.index("_deliver_frame_rate_limit(env)")
         started = source.index('open(LOGS / "minecraft.log", "w")')

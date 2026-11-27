@@ -38,6 +38,7 @@ from . import (
     saves,
     slr_locales,
     supervision,
+    uwp,
     virtual_desktop,
     xodus,
 )
@@ -53,7 +54,7 @@ from .fixups import (
 )
 from .gameinput import builtin_gameinput_override, install_gameinput
 from .games import (build_version, edition_title, game_executable, is_bedrock,
-                    selected_edition, uses_xbox_live)
+                    mc_version_str, selected_edition, uses_xbox_live)
 from .gamesetup import (LICENCE_REFUSED, LICENCE_SERVICE_REFUSED,
                         LICENCE_UNREACHABLE, STORE_SESSION_REFUSED, diagnose)
 from .gpu_safety import (
@@ -897,10 +898,10 @@ def _clear_previous_proton_logs():
 
 
 def _prefix_stably_idle_after_wrapper(timeout=10.0, interval=0.1,
-                                      confirmations=3):
+                                      confirmations=3, prefix=None):
     """Confirm UMU did not detach a live Wine child when its wrapper returned."""
 
-    prefix = active_prefix()
+    prefix = prefix or active_prefix()
     deadline = time.monotonic() + max(0.0, timeout)
     empty_scans = 0
     while True:
@@ -1077,7 +1078,7 @@ class _InstanceSession:
 
 
 def _open_instance(proc, env, exe, game_dir, edition_entry, title, hidden,
-                   use_gamescope):
+                   use_gamescope, prefix=None, version=None):
     """Record the game that has just started, and keep it hidden if asked.
 
     Never fails a launch: the list is for the launcher's windows and the
@@ -1089,9 +1090,10 @@ def _open_instance(proc, env, exe, game_dir, edition_entry, title, hidden,
         record = instances.register(
             profile=profile.get("name") or "Default",
             slug=profile.get("slug") or "default",
-            home=DATA, prefix=active_prefix(), game_pid=proc.pid,
+            home=DATA, prefix=prefix or active_prefix(), game_pid=proc.pid,
             title=title, edition=(edition_entry or {}).get("id") or "",
-            version=build_version(game_dir) or "", game_dir=game_dir,
+            version=version or build_version(game_dir) or "",
+            game_dir=game_dir,
             hidden=hidden, backend=backend,
             display=env.get("DISPLAY") or "",
             wm_class=Path(exe).name.lower())
@@ -1118,12 +1120,142 @@ def _open_instance(proc, env, exe, game_dir, edition_entry, title, hidden,
     return _InstanceSession(record, keeper)
 
 
+def _launch_uwp(lock_fds, edition_entry, gd, exe, on_started=None,
+                hidden=False, editor=False):
+    """A UWP build (#387): wine-uwp's own launcher, in the profile's
+    wine-uwp prefix.
+
+    Nothing of the GDK session applies -- its engine and prefix, the Xbox
+    pre-auth, the patches to the game's files. What does is kept: the Store's
+    word on the copy, the GPU safety record, the handling of a stop request,
+    the list of running instances.
+    """
+    title = edition_entry["name"]
+    if editor:
+        die("Bedrock Editor is part of the GDK builds of Minecraft for "
+            "Windows, not of the UWP ones.")
+    # wine-uwp grants every app a full licence: this is the one check that
+    # the copy is the player's own, and it is asked at every start.
+    uwp.require_ownership(edition_entry)
+    if uwp.check_ready():
+        uwp.prepare()
+    retire_idle_current_boot_marker()
+    require_safe_graphics_session()
+    s = load_settings()
+    diag = (s.get("diagnostics", False) or os.environ.get("BOL_DIAG") == "1")
+    argv, env, cwd = uwp.launch_command(
+        gd, debug="err+all,fixme+all,+storecontext,+loaddll" if diag else None)
+    apply_custom_env(env, s.get("custom_env") or "")
+    _warn_custom_env_overrides(s.get("custom_env") or "")
+    info(f"Starting {title} {mc_version_str(Path(gd)) or ''} on wine-uwp …"
+         .replace("  ", " "))
+    uwp.before_launch(env)
+    if hasattr(lock_fds, "share"):
+        lock_fds.share()
+    prefix = uwp.prefix_dir()
+    glog = open(LOGS / "minecraft.log", "w")
+    rc = None
+    gpu_marker_token = None
+    game_returned = False
+    instance = _InstanceSession()
+    try:
+        supervision.begin_session()
+        gpu_marker_token = arm_gpu_launch()
+        try:
+            if supervision.stop_requested_for() is not None:
+                raise BolError("The launcher was asked to stop before "
+                               "Minecraft started.")
+            popen_options = {"env": env, "cwd": cwd, "stdout": glog,
+                             "stderr": subprocess.STDOUT}
+            if lock_fds:
+                popen_options["pass_fds"] = tuple(lock_fds)
+            proc = subprocess.Popen(argv, **popen_options)
+        except Exception:
+            try:
+                if not disarm_gpu_launch(gpu_marker_token):
+                    warn("The game process could not be started and its GPU "
+                         "safety marker could not be cleared. Close the "
+                         "launcher, then inspect the marker with Doctor.")
+            except Exception as marker_error:
+                warn("The game process could not be started and clearing its "
+                     "GPU safety marker failed (%s)." %
+                     type(marker_error).__name__)
+            raise
+        instance = _open_instance(proc, env, exe, gd, edition_entry, title,
+                                  hidden, False, prefix=prefix,
+                                  version=mc_version_str(Path(gd)))
+        if on_started is not None:
+            try:
+                on_started()
+            except Exception as hook_error:
+                warn("The launcher could not step aside for the game window "
+                     "(%s)." % type(hook_error).__name__)
+        started = time.time()
+        announced = stop_announced = False
+        while True:
+            try:
+                rc = proc.wait(timeout=1)
+                game_returned = True
+                break
+            except subprocess.TimeoutExpired:
+                waited = supervision.stop_requested_for()
+                if waited is not None:
+                    if not stop_announced:
+                        stop_announced = True
+                        warn("The launcher was asked to stop while Minecraft "
+                             "runs. Waiting up to "
+                             f"{supervision.STOP_GRACE_S} s for the game to "
+                             "close, so its GPU safety record can be "
+                             "cleared.")
+                    if waited >= supervision.STOP_GRACE_S:
+                        warn("Minecraft did not close within "
+                             f"{supervision.STOP_GRACE_S} s of the stop "
+                             "request. Its GPU safety record stays, as for "
+                             "any session that did not return.")
+                        break
+                    continue
+                if not announced and time.time() - started > 8:
+                    announced = True
+                    ok(f"{title} is running — close the game window to come "
+                       "back here.")
+    finally:
+        instance.close()
+        if game_returned and gpu_marker_token:
+            try:
+                mark_gpu_wrapper_returned(gpu_marker_token)
+            except Exception as marker_error:
+                warn("Minecraft returned, but recording its GPU-marker phase "
+                     "failed (%s)." % type(marker_error).__name__)
+            # The prefix is this game's alone: what is left in it once the
+            # game has gone (explorer, the CoreMessaging service) would only
+            # trip the next start, as wine-uwp's run.sh notes.
+            idle = _prefix_stably_idle_after_wrapper(prefix=prefix)
+            if not idle:
+                uwp.stop_prefix(prefix)
+                idle = _prefix_stably_idle_after_wrapper(prefix=prefix)
+            if not idle:
+                warn("Minecraft returned while Wine processes still use its "
+                     "prefix. The GPU safety marker was kept; force-stop "
+                     "them and check the driver before acknowledging it.")
+            elif not disarm_gpu_launch(gpu_marker_token):
+                warn("Minecraft returned, but its GPU safety marker could not "
+                     f"be cleared. Run '{acknowledge_gpu_crash_command()}' "
+                     "after checking the driver.")
+        glog.close()
+    ok(f"Game closed (exit {rc}).")
+    return rc
+
+
 def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
                  hidden=False):
     s = load_settings()
     edition_entry, gd, game_exe = _selected_game(s)
     if not gd or game_exe is None:
         die("No game — choose a Minecraft version first.")
+    if uwp.is_uwp(edition_entry):
+        return _launch_uwp(lock_fds, edition_entry, gd, game_exe,
+                           on_started=on_started, hidden=hidden,
+                           editor=editor)
     # Everything the launcher does to Minecraft itself -- its options.txt,
     # its HBUI, LeviLamina, the Editor, the server list, world backups, the
     # PlayFab pre-auth, Xbox presence under Minecraft's title -- is Bedrock's.

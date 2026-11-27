@@ -1370,6 +1370,61 @@ def not_owned_message(title=None):
         "Otherwise buy or redeem it on that account, then click PLAY again.")
 
 
+def require_licence(content_id, title=None, timeout=120):
+    """Raise unless the signed-in Store account owns ``content_id``.
+
+    For a build that carries no licence of its own: the UWP packages of
+    Minecraft for Windows are served by Windows Update to anyone, and
+    wine-uwp answers "full licence" to whatever asks it (#387), so the only
+    proof of a copy is the one the Store gives the account. That is the
+    question ``xodus-cli license`` asks Microsoft's licensing service, as the
+    Store does before it installs the game: it answers with the content keys
+    of a copy the account owns, and with "not entitled to this content"
+    otherwise. The keys are of no use here -- nothing is decrypted -- so they
+    are written to a private folder that is deleted the moment the answer is
+    read.
+    """
+    binary = ensure_cli()
+    if not signed_in():
+        raise NotSignedIn(
+            "These builds of Minecraft are played with your own copy: sign in "
+            "to Download Minecraft with the Microsoft account that owns "
+            "Minecraft for Windows, so the launcher can check it.")
+    env = _env(binary)
+    _announce_device_registration(env)
+    with tempfile.TemporaryDirectory(prefix="bol-licence-") as folder:
+        keys = Path(folder) / "keys"
+        try:
+            proc = subprocess.run(
+                [str(binary), "license", str(content_id), str(keys)],
+                env=env, capture_output=True, text=True, errors="replace",
+                timeout=timeout, cwd=folder)
+        except subprocess.TimeoutExpired as exc:
+            raise XodusError(
+                "Microsoft's licensing service did not answer, so the "
+                "launcher could not check that this account owns "
+                f"{title or 'Minecraft'}. Try again in a moment.") from exc
+        try:
+            granted = proc.returncode == 0 and keys.stat().st_size > 0
+        except OSError:
+            granted = False
+    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    if granted and not _NOT_OWNED.search(text):
+        return True
+    _raise_unretryable(text, title=title)
+    if _NO_NETWORK.search(text):
+        raise XodusError(
+            "Microsoft's licensing service could not be reached, so the "
+            "launcher could not check that this account owns "
+            f"{title or 'Minecraft'}. Check the network connection and try "
+            "again.")
+    detail = next((line.strip() for line in reversed(text.splitlines())
+                   if line.strip()), "no answer")
+    raise XodusError(
+        "Microsoft's licensing service did not confirm that this account "
+        f"owns {title or 'Minecraft'} ({detail[:300]}).")
+
+
 def _raise_unretryable(text, dest=None, needed=0, title=None):
     """Raise for the download failures another mirror cannot fix."""
     if _DEVICE_LIMIT.search(text):

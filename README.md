@@ -163,12 +163,13 @@ launcher's name, like any download.
 
 | Hosts | Why | What is sent |
 |---|---|---|
-| `api.github.com`, `github.com`, `*.githubusercontent.com`, `codeload.github.com` | The game engine, the Minecraft downloader, the online-login libraries, the sign-in web runtime, umu-launcher and GE-Proton, each checked against a pinned SHA-256. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. |
-| `raw.githubusercontent.com` | The index of Minecraft builds (MinecraftBedrockArchiver/GdkLinks) the version picker lists. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. |
+| `api.github.com`, `github.com`, `*.githubusercontent.com`, `codeload.github.com` | The game engine, the Minecraft downloader, the online-login libraries, the sign-in web runtime, umu-launcher and GE-Proton -- and for the UWP builds wine-uwp, DXVK and vkd3d-proton -- each checked against a pinned SHA-256. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. |
+| `raw.githubusercontent.com` | The index of Minecraft builds (MinecraftBedrockArchiver/GdkLinks, and MCMrARM/mc-w10-versiondb for the UWP builds) the version picker lists. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. |
 | `mirror.msys2.org`, `curl.se` | libcurl and the CA certificate bundle the game's network stack uses. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. |
 | `files.pythonhosted.org` | The Qt interface (PySide6), only where the system has none and the launcher installs its own copy. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. |
 | `repo.steampowered.com` | The Steam Linux Runtime container, downloaded by umu-launcher on first launch. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. |
 | `displaycatalog.mp.microsoft.com`, `fe3.delivery.mp.microsoft.com`, `*.xboxlive.com`, `*.dl.delivery.mp.microsoft.com`, `store-images.s-microsoft.com` | The Minecraft package itself, its licence and its Store artwork, from Microsoft's own servers. | Your Microsoft account's tokens, to Microsoft only: the Store checks that the account owns the game. |
+| `go.microsoft.com`, `software-static.download.prss.microsoft.com`, `msdl.microsoft.com`, `marketplace.visualstudio.com`, `*.gallerycdn.vsassets.io` | Only for the UWP builds of Minecraft (up to 1.21.51), once: the Windows files wine-uwp runs on, read out of Microsoft's Windows 11 evaluation image, the debug symbols it needs for them, and the Store Engagement framework the game uses. | A plain download request: your IP address and the launcher's name as User-Agent. No account, no identifier. Microsoft's symbol server is asked for the debug symbols of Windows DLLs by their names and build identifiers. |
 
 **Signing in and playing online**
 

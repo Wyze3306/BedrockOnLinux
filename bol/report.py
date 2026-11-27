@@ -588,7 +588,8 @@ def _collect_game(settings):
     version = None
     if game_dir:
         folder = Path(game_dir)
-        version = (games.mc_version_str(folder) if games.is_bedrock(edition)
+        version = (games.mc_version_str(folder)
+                   if games.bedrock_numbering(edition)
                    else games.build_version(folder))
     # No edition is what a fresh install reports (nothing selected yet) and
     # what a build copied in by hand reports; the section still has to say

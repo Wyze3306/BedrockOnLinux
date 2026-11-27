@@ -20,9 +20,12 @@ _PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}")
 # the Microsoft Store session. A keyring can hold one user, so sharing it would
 # have every profile sign the previous one out -- and profiles exist to keep
 # accounts apart, which is why "msa" is per-profile too. Each profile
-# therefore takes one Store device of its own (issue #198).
+# therefore takes one Store device of its own (issue #198). "wine-uwp" is the
+# UWP builds' runtime and the Windows files it borrows; their prefix, which
+# keeps the game's worlds and Xbox sign-in, is "wine-uwp-prefix" and stays
+# the profile's own.
 _SHARED_DIRS = ("games", "proton", "umu", "cache", "xodus", "xodus-xcurl",
-                "xodus-webview")
+                "xodus-webview", "wine-uwp")
 
 
 def profile_slug(name):

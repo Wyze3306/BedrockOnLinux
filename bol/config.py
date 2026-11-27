@@ -65,6 +65,52 @@ UMU_ARCHIVE_SHA256 = \
     "3f8fdc033f547afdb3408ea48ad07194769405148dcfa2b2f945b7fb368a33bb"
 UMU_RUN_SHA256 = \
     "577181dbff2eccdaa78b411c0fd1aa7fde574028449c3e0e99f508536a76870e"
+# The builds of Minecraft for Windows that came as UWP packages, 0.13 to
+# 1.21.51 (#387, bol.uwp), run on wine-uwp: Wine with Windows' UWP app model,
+# from designgears/wine-uwp (LGPL-2.1-or-later). Everything it needs that the
+# profiles can share lives in WINE_UWP: the runtime, the Windows files it
+# borrows, the Direct3D runtime. The prefix is the profile's own, as the
+# game's worlds and its Xbox sign-in are kept there.
+WINE_UWP = DATA / "wine-uwp"
+WINE_UWP_PREFIX = DATA / "wine-uwp-prefix"
+WINE_UWP_TAG = "v2026.11.17"
+WINE_UWP_URL = ("https://github.com/designgears/wine-uwp/releases/download/"
+                "v2026.11.17/wine-uwp-x86_64.tar.xz")
+WINE_UWP_SHA256 = \
+    "f5db6bebff3c89f63a965b1374368c3ee9253a84aedea8840f777c409d964567"
+# Microsoft's Windows 11 Enterprise evaluation ISO, which wine-uwp's own setup
+# downloads: only the 2,700 files its manifest names are read out of it, by
+# HTTP ranges (bol.wim). The size is the image wine-uwp was tested with.
+WINDOWS_EVAL_ISO_URL = "https://go.microsoft.com/fwlink/?linkid=2334167"
+WINDOWS_EVAL_ISO_SIZE = 7092807680
+# Which Windows Update update holds each UWP build: MCMrARM's index, the one
+# every UWP launcher has used since 2018. [version, update id, 0 = release].
+MC_UWP_VERSIONDB_URL = ("https://raw.githubusercontent.com/MCMrARM/"
+                        "mc-w10-versiondb/master/versions.json.min")
+# DXVK and vkd3d-proton beside the exe, as wine-uwp's Minecraft profile asks:
+# on Wine's own Direct3D the game's flip-model swap chain lags the mouse.
+UWP_D3D_RUNTIME = (
+    ("dxvk", "3.1.1",
+     "https://github.com/doitsujin/dxvk/releases/download/v3.1.1/"
+     "dxvk-3.1.1.tar.gz",
+     "40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608",
+     ("dxgi.dll", "d3d11.dll")),
+    ("vkd3d-proton", "3.0.1",
+     "https://github.com/HansKristian-Work/vkd3d-proton/releases/download/"
+     "v3.0.1/vkd3d-proton-3.0.1.tar.zst",
+     "3cf2315522af5e43605ef6d3c41dad91387040bf97199934f3f7ab76caaa2f0c",
+     ("d3d12.dll", "d3d12core.dll")),
+)
+# The Store Engagement framework the UWP builds depend on, which neither
+# Windows nor the Store serves any more: Microsoft's Store Services SDK
+# installer carries it, and the launcher reads it out of the MSI itself.
+STORE_SERVICES_SDK_URL = (
+    "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/"
+    "AdMediator/vsextensions/MicrosoftStoreServicesSDK/10.0.5/vspackage")
+STORE_SERVICES_SDK_SHA256 = \
+    "bfa19cd32ccd8954cf4305d5e5c5db92b6fa72f254edd89b14b038c2d237e11a"
+STORE_ENGAGEMENT_APPX_SHA256 = \
+    "90bb5222993ced8e8b848e60a9cc7df815f18b330a7ace21b3096b86a303a07d"
 MINGW_CURL = "https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-curl-8.17.0-1-any.pkg.tar.zst"
 # Its libcurl-4.dll becomes the game's XCurl.dll on the GE-Proton path.
 MINGW_CURL_SHA256 = "928d63a65f2b47c313b2b8b5f34fe5bb5be2f388a00c1d32088d1b05cdb9c564"
@@ -347,6 +393,23 @@ MC_PRODUCTS = (
      "name": "Minecraft Education", "beta": False, "xbox_live": False,
      "title": "education", "catalogue": "windows-update",
      "short": "Education", "exe": "Minecraft.Windows.exe"},
+    # Minecraft for Windows as it shipped up to 1.21.51: UWP packages, which
+    # Windows Update still serves, run on wine-uwp (#387, bol.uwp). The same
+    # product as "release", so it is the same copy: wine-uwp grants every app
+    # a full licence, and the launcher asks the Store whether the account
+    # owns Minecraft for Windows before it installs or starts one. Its own
+    # "title", as none of the GDK build's fixups apply; "xbox_live": False,
+    # as the game signs in to Xbox Live itself, through wine-uwp. No
+    # "family": that is how a folder from outside the launcher is told
+    # apart, and a GDK build has the same package name.
+    {"id": "uwp", "product": "9NBLGGH2JHXJ", "channel": "release",
+     "source": "wine-uwp",
+     "uwp_family": "Microsoft.MinecraftUWP_8wekyb3d8bbwe",
+     "wu_category": "d25480ca-36aa-46e6-b76b-39608d49558c",
+     "content_id": "7792d9ce-355a-493c-afbd-768f4a77c3b0",
+     "name": "Minecraft for Windows (UWP)", "beta": False,
+     "xbox_live": False, "title": "uwp", "catalogue": "versiondb",
+     "short": "UWP", "exe": "Minecraft.Windows.exe"},
 )
 
 

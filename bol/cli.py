@@ -508,6 +508,7 @@ def main():
     sp = sub.add_parser("setup", help="download & prepare Minecraft")
     sp.add_argument("--mc", metavar="EDITION",
                     help="edition to install: release, preview, education, "
+                         "uwp (the UWP builds up to 1.21.51, on wine-uwp), "
                          "or another Minecraft title of the Microsoft Store "
                          "(dungeons, legends); see 'versions'")
     sp.add_argument("--version", metavar="BUILD",
