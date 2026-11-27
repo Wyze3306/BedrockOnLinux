@@ -493,7 +493,8 @@ class WineGDKInstallTests(unittest.TestCase):
         self.assertEqual((self.engine / "proton").read_text(),
                          "corrupt-active")
         self.assertEqual((rollback / "proton").read_text(), "stale-r10")
-        install.assert_called_once_with(None, force=False)
+        install.assert_called_once_with(
+            None, force=False, eng=winegdk.engine_for("x86_64"))
 
     def test_unavailable_update_keeps_current_without_source_fallback(self):
         self._write_engine(self.engine, "known-good")
@@ -507,7 +508,7 @@ class WineGDKInstallTests(unittest.TestCase):
 
         self.assertEqual(result, self.engine)
         self.assertEqual((self.engine / "proton").read_text(), "known-good")
-        wire.assert_called_once_with()
+        wire.assert_called_once_with(winegdk.engine_for("x86_64"))
 
     def test_matching_settings_do_not_hide_stale_installed_manifest(self):
         self._write_engine(self.engine, "stale-r10")
@@ -523,7 +524,8 @@ class WineGDKInstallTests(unittest.TestCase):
                     BolError, "Flatpak and packaged-app users"):
                 winegdk.ensure_winegdk()
 
-        install.assert_called_once_with(None, force=False)
+        install.assert_called_once_with(
+            None, force=False, eng=winegdk.engine_for("x86_64"))
 
     def test_valid_manifest_repairs_stale_settings_without_downloading(self):
         self._write_engine(self.engine, "current-r11")

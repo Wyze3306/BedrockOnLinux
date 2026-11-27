@@ -23,6 +23,27 @@
   and do nothing once the menu is up. Off by default: clients such as
   Flarial expect the menu.
 
+- **ARM engine, experimental (#250).** On an ARM computer with 4 KiB pages
+  (Apple silicon counts, inside muvm), Settings ▸ Advanced ▸ Engine can switch
+  to an ARM64EC build of the game engine: Wine, vkd3d-proton, DXVK and the GPU
+  driver run natively, and FEX-Emu, loaded into the Wine process, translates
+  only the x86-64 game. The launcher downloads, verifies and activates it
+  beside the x86-64 engine, which stays the default and the fallback whenever
+  the ARM one cannot be installed or run. It runs the engine's proton script
+  directly, because umu-launcher cannot set up Steam Linux Runtime 4 arm64
+  yet (umu#716), so it needs glibc 2.41 or newer; `BOL_ARM64_RUNNER=umu`
+  tries the container instead. It registers FEX-Emu in the shared prefix, so
+  worlds and the sign-in carry over between engines. `BOL_ENGINE_ARCH`
+  overrides the choice for one run, and `doctor` reports the engine on its
+  own line. The switch stays hidden until a build of the ARM engine is
+  published.
+- **Native sign-in and downloader on ARM (#250).** On an aarch64 computer the
+  launcher now downloads the aarch64 builds of xodus-cli and of its WebKitGTK
+  runtime, released under `xodus-<rev>-aarch64`, and replaces the x86-64 ones
+  an earlier version installed. With the ARM engine as well, nothing the
+  launcher starts needs an x86-64 emulator registered with the kernel any
+  more.
+
 ### Fixed
 
 - **"Report a problem" is offered only for what the launcher may have got

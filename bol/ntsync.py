@@ -41,7 +41,10 @@ _NTSYNC_DEVICE_MARKER = b"/dev/ntsync"
 
 # Both are produced by one build, so either answers the question; the managed
 # engine runs the WoW64 server, a custom Proton may ship only the classic one.
-_WINESERVER_PATHS = ("files/bin-wow64/wineserver", "files/bin/wineserver")
+# The ARM64EC engine runs bin-arm64's, and only an engine with Proton ARM64's
+# layout has that directory, so it goes first.
+_WINESERVER_PATHS = ("files/bin-arm64/wineserver",
+                     "files/bin-wow64/wineserver", "files/bin/wineserver")
 
 # Patch 0014's server reads this variable before it allows the futex_waitv
 # fallback; the literal is only there when the backend is compiled in.

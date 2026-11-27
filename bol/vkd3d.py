@@ -160,6 +160,165 @@ REQUIRED_VARIANT_HASHES = {
     },
 }
 
+# The experimental ARM64EC engine (bol.engine_arch, docs/ARM64EC.md) is an
+# engine of its own: GE-Proton11-14-aarch64 as its base, our WineGDK built for
+# arm64ec/aarch64/i386/x86_64, our vkd3d-proton built ARM64X for
+# aarch64-windows beside the x86 payload, FEX-Emu's DLLs from the base, and
+# Microsoft's x64 xgameruntime threading sidecar, which FEX runs. Its
+# engine-manifest.json has the x86-64 schema plus "arch": "aarch64".
+#
+# Everything that names bytes starts empty and is filled with the revision
+# once the build is published, never before: one revision, one set of bytes.
+# An empty expectation makes validation refuse the engine (see
+# _incomplete_expectations), so a revision pinned without them cannot be
+# accepted by accident.
+ARM64_ARCHES = ("aarch64-windows", "x86_64-windows", "i386-windows")
+REQUIRED_VARIANT_HASHES_ARM64_BUILD_REV = ""
+REQUIRED_ARM64_ENGINE_GLIBC_MAX = "2.41"
+# The DXVK of the base (GE's aarch64 build) and our two vkd3d slot pairs.
+REQUIRED_ARM64_COMPONENTS = {
+    "dxvk": "",
+    "vkd3d_ext_dgc": "",
+    "vkd3d_nv_dgc": "",
+}
+REQUIRED_ARM64_VKD3D_BASE_COMMIT = ""
+REQUIRED_ARM64_VKD3D_REVERT = ""
+REQUIRED_ARM64_PROTON_BASE_REPOSITORY = "GloriousEggroll/proton-ge-custom"
+REQUIRED_ARM64_PROTON_BASE_RELEASE = "GE-Proton11-14"
+REQUIRED_ARM64_PROTON_BASE_ARCHIVE = "GE-Proton11-14-aarch64.tar.gz"
+REQUIRED_ARM64_PROTON_BASE_ARCHIVE_SHA256 = ""
+ARM64_FEX_DLL_PATHS = (
+    "files/lib/wine/aarch64-windows/libarm64ecfex.dll",
+    "files/lib/wine/aarch64-windows/libwow64fex.dll",
+)
+REQUIRED_ARM64_CRITICAL_FILE_PATHS = (
+    "proton",
+    "toolmanifest.vdf",
+    "files/bin-arm64/wine",
+    "files/bin-arm64/wineserver",
+    "files/share/wine/wine.inf",
+    "files/lib/wine/aarch64-windows/ntdll.dll",
+    "files/lib/wine/aarch64-windows/combase.dll",
+    "files/lib/wine/aarch64-windows/user32.dll",
+    "files/lib/wine/aarch64-windows/xgameruntime.dll",
+    "files/lib/wine/aarch64-windows/windows.storage.dll",
+    "files/lib/wine/aarch64-windows/windows.storage.applicationdata.dll",
+    "files/lib/wine/aarch64-unix/ntdll.so",
+) + ARM64_FEX_DLL_PATHS + (
+    XGAMERUNTIME_THREADING_PATH,
+    "files/lib/wine/i386-windows/ntdll.dll",
+)
+REQUIRED_ARM64_EXECUTABLE_FILE_PATHS = (
+    "proton",
+    "files/bin-arm64/wine",
+    "files/bin-arm64/wineserver",
+)
+REQUIRED_ARM64_RUNTIME_LINK_TARGETS: Dict[str, str] = {}
+REQUIRED_VARIANT_HASHES_ARM64: Dict[str, Dict[str, str]] = {
+    EXT_DGC: {},
+    NV_DGC: {},
+}
+
+
+@dataclass(frozen=True)
+class EngineExpectations:
+    """What one architecture's managed engine must contain to be accepted."""
+
+    arch: str
+    vkd3d_arches: Tuple[str, ...]
+    variant_hashes_build_rev: str
+    variant_hashes: Mapping[str, Mapping[str, str]]
+    components: Mapping[str, str]
+    vkd3d_base_commit: str
+    vkd3d_revert: str
+    base_fields: Mapping[str, str]
+    base_label: str
+    glibc_max: str
+    critical_file_paths: Tuple[str, ...]
+    executable_file_paths: Tuple[str, ...]
+    runtime_link_targets: Mapping[str, str]
+    pinned_critical_hashes: Mapping[str, str]
+
+
+def engine_expectations(arch: str = "x86_64") -> EngineExpectations:
+    """The expectations for ``arch`` ("x86_64" or "aarch64").
+
+    Built from the module's names on each call, so a test or a packaging
+    script that adjusts one of them is what validation then checks.
+    """
+
+    if arch == "aarch64":
+        return EngineExpectations(
+            arch="aarch64",
+            vkd3d_arches=ARM64_ARCHES,
+            variant_hashes_build_rev=REQUIRED_VARIANT_HASHES_ARM64_BUILD_REV,
+            variant_hashes=REQUIRED_VARIANT_HASHES_ARM64,
+            components=REQUIRED_ARM64_COMPONENTS,
+            vkd3d_base_commit=REQUIRED_ARM64_VKD3D_BASE_COMMIT,
+            vkd3d_revert=REQUIRED_ARM64_VKD3D_REVERT,
+            base_fields={
+                "repository": REQUIRED_ARM64_PROTON_BASE_REPOSITORY,
+                "release": REQUIRED_ARM64_PROTON_BASE_RELEASE,
+                "archive": REQUIRED_ARM64_PROTON_BASE_ARCHIVE,
+                "archive_sha256": REQUIRED_ARM64_PROTON_BASE_ARCHIVE_SHA256,
+                "threading_dll_sha256": XGAMERUNTIME_THREADING_SHA256,
+            },
+            base_label=REQUIRED_ARM64_PROTON_BASE_ARCHIVE,
+            glibc_max=REQUIRED_ARM64_ENGINE_GLIBC_MAX,
+            critical_file_paths=REQUIRED_ARM64_CRITICAL_FILE_PATHS,
+            executable_file_paths=REQUIRED_ARM64_EXECUTABLE_FILE_PATHS,
+            runtime_link_targets=REQUIRED_ARM64_RUNTIME_LINK_TARGETS,
+            pinned_critical_hashes=REQUIRED_PINNED_CRITICAL_HASHES,
+        )
+    if arch != "x86_64":
+        raise BolError("Unknown game engine architecture %r." % (arch,))
+    return EngineExpectations(
+        arch="x86_64",
+        vkd3d_arches=ARCHES,
+        variant_hashes_build_rev=REQUIRED_VARIANT_HASHES_BUILD_REV,
+        variant_hashes=REQUIRED_VARIANT_HASHES,
+        components=REQUIRED_COMPONENTS,
+        vkd3d_base_commit=REQUIRED_VKD3D_BASE_COMMIT,
+        vkd3d_revert=REQUIRED_VKD3D_REVERT,
+        base_fields={
+            "repository": REQUIRED_GDK_PROTON_BASE_REPOSITORY,
+            "release": REQUIRED_GDK_PROTON_BASE_RELEASE,
+            "archive": REQUIRED_GDK_PROTON_BASE_ARCHIVE,
+            "archive_sha256": REQUIRED_GDK_PROTON_BASE_ARCHIVE_SHA256,
+            "threading_dll_sha256": XGAMERUNTIME_THREADING_SHA256,
+        },
+        base_label="release10-32",
+        glibc_max=REQUIRED_ENGINE_GLIBC_MAX,
+        critical_file_paths=REQUIRED_CRITICAL_FILE_PATHS,
+        executable_file_paths=REQUIRED_EXECUTABLE_FILE_PATHS,
+        runtime_link_targets=REQUIRED_RUNTIME_LINK_TARGETS,
+        pinned_critical_hashes=REQUIRED_PINNED_CRITICAL_HASHES,
+    )
+
+
+def _incomplete_expectations(expect: EngineExpectations) -> Optional[str]:
+    """The first reviewed value this launcher lacks for ``expect``, or None.
+
+    The x86-64 set is always complete; the ARM64EC one is until its first
+    build is pinned.
+    """
+
+    if not expect.variant_hashes_build_rev:
+        return "the engine revision"
+    for name, value in expect.components.items():
+        if not value:
+            return "component %s" % name
+    if not expect.vkd3d_base_commit:
+        return "the vkd3d-proton base commit"
+    for name, value in expect.base_fields.items():
+        if not value:
+            return "base %s" % name
+    for variant in VARIANTS:
+        if not expect.variant_hashes.get(variant):
+            return "the %s DLL hashes" % variant
+    return None
+
+
 @dataclass(frozen=True)
 class ValidatedEngineManifest:
     """A schema-checked manifest whose file hashes have all been verified."""
@@ -179,12 +338,15 @@ def _normalise_variant(value: str, source: str = "variant") -> str:
     return variant
 
 
-def _variant_relative_paths(variant: str) -> Tuple[str, ...]:
+def _variant_relative_paths(variant: str,
+                            arches: Optional[Sequence[str]] = None
+                            ) -> Tuple[str, ...]:
     variant = _normalise_variant(variant)
     return tuple(
         "files/lib/wine/vkd3d-proton/%s/%s.bol-%s" %
         (arch, dll, variant)
-        for arch in ARCHES for dll in DLL_NAMES
+        for arch in (ARCHES if arches is None else arches)
+        for dll in DLL_NAMES
     )
 
 
@@ -265,7 +427,8 @@ def _validated_distribution_files(
 _VALIDATED: Dict[tuple, Tuple[ValidatedEngineManifest, tuple]] = {}
 
 
-def _manifest_signature(root: Path, manifest: ValidatedEngineManifest):
+def _manifest_signature(root: Path, manifest: ValidatedEngineManifest,
+                        expect: Optional[EngineExpectations] = None):
     """What the files a validation read look like on disk, without reading.
 
     Size, modification time, inode and mode of the manifest, of every file
@@ -275,8 +438,9 @@ def _manifest_signature(root: Path, manifest: ValidatedEngineManifest):
     relatives = set(manifest.critical_files)
     for files in manifest.variants.values():
         relatives.update(files)
-    relatives.update(REQUIRED_EXECUTABLE_FILE_PATHS)
-    relatives.update(REQUIRED_RUNTIME_LINK_TARGETS)
+    expect = expect or engine_expectations()
+    relatives.update(expect.executable_file_paths)
+    relatives.update(expect.runtime_link_targets)
     signature = []
     for path in [manifest.path] + [
             root.joinpath(*PurePosixPath(relative).parts)
@@ -291,7 +455,8 @@ def _manifest_signature(root: Path, manifest: ValidatedEngineManifest):
 def validate_engine_manifest(
         engine_root: Path, build_rev: str,
         required_variant: Optional[str] = None,
-        enforce_pins: bool = False) -> ValidatedEngineManifest:
+        enforce_pins: bool = False,
+        arch: str = "x86_64") -> ValidatedEngineManifest:
     """Validate the engine manifest, once per process for unchanged files.
 
     One PLAY asks three times: setup, the launch that follows it, and the
@@ -301,21 +466,24 @@ def validate_engine_manifest(
     then; anything else, a failure included, is validated in full.
     """
     root = Path(engine_root)
+    expect = engine_expectations(arch)
     key = (str(root), build_rev,
            None if required_variant is None
-           else _normalise_variant(required_variant), bool(enforce_pins))
+           else _normalise_variant(required_variant), bool(enforce_pins),
+           arch)
     known = _VALIDATED.get(key)
     if known is not None:
         try:
-            if _manifest_signature(root, known[0]) == known[1]:
+            if _manifest_signature(root, known[0], expect) == known[1]:
                 return known[0]
         except OSError:
             pass
         del _VALIDATED[key]
     manifest = _validate_engine_manifest(
-        root, build_rev, required_variant, enforce_pins)
+        root, build_rev, required_variant, enforce_pins, expect)
     try:
-        _VALIDATED[key] = (manifest, _manifest_signature(root, manifest))
+        _VALIDATED[key] = (manifest,
+                           _manifest_signature(root, manifest, expect))
     except OSError:
         pass
     return manifest
@@ -324,7 +492,9 @@ def validate_engine_manifest(
 def _validate_engine_manifest(
         engine_root: Path, build_rev: str,
         required_variant: Optional[str] = None,
-        enforce_pins: bool = False) -> ValidatedEngineManifest:
+        enforce_pins: bool = False,
+        expect: Optional[EngineExpectations] = None
+        ) -> ValidatedEngineManifest:
     """Validate schema 1 and every variant payload hash.
 
     Manifest file keys are safe POSIX paths relative to ``engine_root`` and
@@ -334,11 +504,20 @@ def _validate_engine_manifest(
     """
 
     root = Path(engine_root)
-    if enforce_pins and build_rev != REQUIRED_VARIANT_HASHES_BUILD_REV:
+    expect = expect or engine_expectations()
+    pinned_rev = expect.variant_hashes_build_rev
+    if enforce_pins or (expect.arch != "x86_64" and pinned_rev
+                        and build_rev == pinned_rev):
+        missing_pin = _incomplete_expectations(expect)
+        if missing_pin:
+            raise BolError(
+                "This launcher has no reviewed %s for the %s game engine "
+                "yet, so it accepts none." % (missing_pin, expect.arch))
+    if enforce_pins and build_rev != pinned_rev:
         raise BolError(
             "No compiled engine hash allow-list exists for build revision "
             "'%s'; this launcher only accepts '%s'." %
-            (build_rev, REQUIRED_VARIANT_HASHES_BUILD_REV))
+            (build_rev, pinned_rev))
     if required_variant is not None:
         required_variant = _normalise_variant(required_variant)
     path = root / "engine-manifest.json"
@@ -363,13 +542,19 @@ def _validate_engine_manifest(
     if manifest_rev != build_rev:
         raise BolError("Game engine revision mismatch: manifest has '%s', "
                        "launcher expects '%s'." % (manifest_rev, build_rev))
+    # The x86-64 manifests predate the field; an ARM64EC one must say so, and
+    # neither engine may stand in for the other.
+    manifest_arch = payload.get("arch", "x86_64")
+    if manifest_arch != expect.arch:
+        raise BolError("Game engine architecture mismatch: manifest has %r, "
+                       "launcher expects '%s'." % (manifest_arch, expect.arch))
     raw_variants = payload.get("variants")
     if not isinstance(raw_variants, dict):
         raise BolError("Invalid engine manifest: variants must be an object.")
     components = payload.get("components")
     if not isinstance(components, dict):
         raise BolError("Invalid engine manifest: components must be an object.")
-    for component, expected_version in REQUIRED_COMPONENTS.items():
+    for component, expected_version in expect.components.items():
         actual_version = components.get(component)
         if actual_version != expected_version:
             raise BolError(
@@ -389,31 +574,24 @@ def _validate_engine_manifest(
             "'%s'." % (actual, WINEGDK_SOURCE_COMMIT))
     universal = provenance.get("vkd3d_universal")
     if not isinstance(universal, dict) \
-            or universal.get("base_commit") != REQUIRED_VKD3D_BASE_COMMIT \
-            or universal.get("restored_by_reverting") != REQUIRED_VKD3D_REVERT:
+            or universal.get("base_commit") != expect.vkd3d_base_commit \
+            or universal.get("restored_by_reverting") != expect.vkd3d_revert:
         raise BolError("Game engine vkd3d source provenance does not match the "
                        "reviewed universal DGC build.")
     gdk_proton_base = provenance.get("gdk_proton_base")
-    required_gdk_proton_fields = {
-        "repository": REQUIRED_GDK_PROTON_BASE_REPOSITORY,
-        "release": REQUIRED_GDK_PROTON_BASE_RELEASE,
-        "archive": REQUIRED_GDK_PROTON_BASE_ARCHIVE,
-        "archive_sha256": REQUIRED_GDK_PROTON_BASE_ARCHIVE_SHA256,
-        "threading_dll_sha256": XGAMERUNTIME_THREADING_SHA256,
-    }
     if not isinstance(gdk_proton_base, dict) or any(
             gdk_proton_base.get(key) != expected
-            for key, expected in required_gdk_proton_fields.items()):
+            for key, expected in expect.base_fields.items()):
         raise BolError(
             "Game engine GDK-Proton base provenance does not match the "
-            "reviewed release10-32 archive.")
+            "reviewed %s archive." % expect.base_label)
     build = provenance.get("build")
     if not isinstance(build, dict) \
-            or build.get("glibc_max") != REQUIRED_ENGINE_GLIBC_MAX:
+            or build.get("glibc_max") != expect.glibc_max:
         actual = build.get("glibc_max") if isinstance(build, dict) else None
         raise BolError(
             "Game engine ABI mismatch: manifest glibc_max is %r, expected "
-            "'%s'." % (actual, REQUIRED_ENGINE_GLIBC_MAX))
+            "'%s'." % (actual, expect.glibc_max))
 
     winegdk_distribution = _validated_distribution_files(
         root, winegdk, "provenance.winegdk")
@@ -434,7 +612,7 @@ def _validate_engine_manifest(
         raise BolError(
             "Invalid engine manifest: critical_files must be a non-empty "
             "object.")
-    required_critical_files = set(REQUIRED_CRITICAL_FILE_PATHS)
+    required_critical_files = set(expect.critical_file_paths)
     required_critical_files.update(winegdk_distribution)
     required_critical_files.update(vkd3d_distribution)
     required_critical_files.update(gdk_proton_distribution)
@@ -461,8 +639,8 @@ def _validate_engine_manifest(
                 (relative, expected_hash, actual_hash))
         critical_files[relative] = expected_hash
 
-    if enforce_pins or manifest_rev == REQUIRED_VARIANT_HASHES_BUILD_REV:
-        for relative, pinned_hash in REQUIRED_PINNED_CRITICAL_HASHES.items():
+    if enforce_pins or manifest_rev == pinned_rev:
+        for relative, pinned_hash in expect.pinned_critical_hashes.items():
             declared_hash = critical_files.get(relative)
             if declared_hash != pinned_hash:
                 raise BolError(
@@ -470,7 +648,7 @@ def _validate_engine_manifest(
                     "manifest has %r, expected %s." %
                     (relative, declared_hash, pinned_hash))
 
-    for relative in REQUIRED_EXECUTABLE_FILE_PATHS:
+    for relative in expect.executable_file_paths:
         candidate = root.joinpath(*PurePosixPath(relative).parts)
         try:
             mode = candidate.stat().st_mode
@@ -482,7 +660,7 @@ def _validate_engine_manifest(
             raise BolError(
                 "Required engine file is not executable: %s" % relative)
 
-    for relative, expected_target in REQUIRED_RUNTIME_LINK_TARGETS.items():
+    for relative, expected_target in expect.runtime_link_targets.items():
         candidate = root.joinpath(*PurePosixPath(relative).parts)
         if not candidate.is_symlink():
             raise BolError(
@@ -522,7 +700,8 @@ def _validate_engine_manifest(
                 raise _nv_variant_missing("variants.nv-dgc.files is empty")
             raise BolError("Invalid engine manifest: variants.%s.files must be "
                            "a non-empty object." % variant)
-        expected = set(_variant_relative_paths(variant))
+        expected = set(_variant_relative_paths(variant,
+                                               expect.vkd3d_arches))
         missing = expected.difference(raw_files)
         if missing:
             detail = "manifest does not list %s" % sorted(missing)[0]
@@ -531,8 +710,8 @@ def _validate_engine_manifest(
             raise BolError("Invalid engine manifest for %s: %s." %
                            (variant, detail))
 
-        if enforce_pins or manifest_rev == REQUIRED_VARIANT_HASHES_BUILD_REV:
-            pinned_files = REQUIRED_VARIANT_HASHES[variant]
+        if enforce_pins or manifest_rev == pinned_rev:
+            pinned_files = expect.variant_hashes[variant]
             # Equality on the four required paths prevents a repackaged or
             # locally substituted DLL set from authenticating itself merely by
             # updating the hashes stored inside the same archive.
@@ -682,7 +861,7 @@ def _transactional_activate(
 
 def activate_vkd3d_variant(
         engine_root: Path, build_rev: str, variant: str,
-        enforce_pins: bool = True) -> bool:
+        enforce_pins: bool = True, arch: str = "x86_64") -> bool:
     """Transactionally activate a verified variant; return whether it changed.
 
     Each live DLL is replaced with ``os.replace`` from the same directory, and
@@ -695,11 +874,12 @@ def activate_vkd3d_variant(
     with _engine_lock(root):
         manifest = validate_engine_manifest(
             root, build_rev, required_variant=variant,
-            enforce_pins=enforce_pins)
+            enforce_pins=enforce_pins, arch=arch)
         variant_files = manifest.variants[variant]
         operations = []
         all_targets = []
-        for relative in _variant_relative_paths(variant):
+        for relative in _variant_relative_paths(
+                variant, engine_expectations(arch).vkd3d_arches):
             expected_hash = variant_files[relative]
             source = root.joinpath(*PurePosixPath(relative).parts)
             target_relative = _target_for_variant_source(relative, variant)
@@ -721,7 +901,8 @@ def activate_vkd3d_variant(
 def prepare_universal_vkd3d(
         engine_root: Path, build_rev: str,
         environ: Optional[Mapping[str, str]] = None,
-        enforce_pins: bool = True) -> Tuple[str, bool]:
+        enforce_pins: bool = True,
+        arch: str = "x86_64") -> Tuple[str, bool]:
     """Validate/activate the universal payload without opening Vulkan.
 
     The reviewed r12 EXT and NV slots are byte-identical: the DLL contains both
@@ -739,5 +920,6 @@ def prepare_universal_vkd3d(
     variant = (_normalise_variant(override, "BOL_VKD3D_VARIANT")
                if override.strip() else EXT_DGC)
     changed = activate_vkd3d_variant(
-        engine_root, build_rev, variant, enforce_pins=enforce_pins)
+        engine_root, build_rev, variant, enforce_pins=enforce_pins,
+        arch=arch)
     return variant, changed

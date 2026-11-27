@@ -14,7 +14,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import selinux, userns
+from . import engine_arch, selinux, userns
 from .archive import safe_extract_tar
 from .config import (
     CACHE,
@@ -30,6 +30,8 @@ from .config import (
     UMU_REPO,
     UMU_RUN_SHA256,
     UMU_VERSION,
+    WINEGDK_ARM64_BUILD_REV,
+    WINEGDK_ARM64_OUT,
     WINEGDK_BUILD_REV,
     WINEGDK_OUT,
 )
@@ -48,6 +50,56 @@ _MANAGED_RUNTIME_ARCH_DIRS = (
     ("files/lib/wine/x86_64-windows", "drive_c/windows/system32"),
     ("files/lib/wine/i386-windows", "drive_c/windows/syswow64"),
 )
+# The ARM64EC engine's system32 holds its ARM64X/ARM64EC builds, as Proton's
+# script lays it out (host_pe_arch "aarch64-windows"). One prefix serves both
+# engines -- the player's worlds and sign-in are in it -- so switching engines
+# refreshes these from whichever runs, through the revision marker below.
+_MANAGED_RUNTIME_ARCH_DIRS_ARM64 = (
+    ("files/lib/wine/aarch64-windows", "drive_c/windows/system32"),
+    ("files/lib/wine/i386-windows", "drive_c/windows/syswow64"),
+)
+
+# Where an ARM64EC Wine looks for the x86-64 emulator it loads into each
+# process, and for the WoW64 one 32-bit code runs through: the default value
+# of these keys names a DLL in system32 (Wine's ntdll load_arm64ec_module and
+# wow64 get_cpu_dll_name). Upstream Wine's wine.inf registers Microsoft's
+# xtajit64.dll and xtajit.dll there and never overwrites a value; Valve's
+# Wine registers FEX-Emu's DLLs instead. Our WineGDK is upstream Wine, and a
+# prefix the x86-64 engine made has neither, so the launcher writes FEX's.
+FEX_WOW64_REGISTRY = (
+    (r"Software\Microsoft\Wow64\amd64", "libarm64ecfex.dll"),
+    (r"Software\Microsoft\Wow64\x86", "libwow64fex.dll"),
+)
+
+
+def _same_path(a, b):
+    try:
+        return Path(a).resolve(strict=False) == Path(b).resolve(strict=False)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
+def managed_engine(engine):
+    """The managed engine whose tree ``engine`` is, or None for any other.
+
+    Which one follows from the path, not from the setting, so a prefix is
+    refreshed for the engine it is really about to run on.
+    """
+    if engine is None:
+        return None
+    if _same_path(engine, WINEGDK_OUT):
+        return engine_arch.Engine(engine_arch.X86_64, WINEGDK_BUILD_REV, "",
+                                  WINEGDK_OUT)
+    if WINEGDK_ARM64_BUILD_REV and _same_path(engine, WINEGDK_ARM64_OUT):
+        return engine_arch.Engine(engine_arch.ARM64EC, WINEGDK_ARM64_BUILD_REV,
+                                  "", WINEGDK_ARM64_OUT)
+    return None
+
+
+def _runtime_arch_dirs(eng):
+    if eng is not None and eng.arch == engine_arch.ARM64EC:
+        return _MANAGED_RUNTIME_ARCH_DIRS_ARM64
+    return _MANAGED_RUNTIME_ARCH_DIRS
 
 def ensure_umu(force=False):
     binp = UMU_DIR / "umu-run"
@@ -341,7 +393,12 @@ def _prepare_managed_prefix_layout(prefix):
 def proton_umu_cmd(exe, prefix=None):
     """Launch GDK-Proton through umu-launcher (Steam Linux Runtime). The GDK
     networking the LAN/server join needs only works inside that runtime, not
-    with a bare `proton run`."""
+    with a bare `proton run`.
+
+    The experimental ARM64EC engine is the exception: see
+    _proton_direct_cmd for why it runs its proton script directly by
+    default, with the same environment umu would have handed it.
+    """
     if prefix is None:
         prefix = active_prefix()
     if prefix == PFX:
@@ -356,12 +413,12 @@ def proton_umu_cmd(exe, prefix=None):
                 # UMU appends "umu"; this resolves to the app-owned UMU_DIR.
                 "UMU_FOLDERS_PATH": str(DATA),
                 "UMU_RUNTIME_UPDATE": "0"})
-    try:
-        if Path(env["PROTONPATH"]).resolve(strict=False) == \
-                WINEGDK_OUT.resolve(strict=False):
-            env["PROTON_USE_WOW64"] = "1"
-    except (OSError, RuntimeError):
-        pass
+    eng = managed_engine(env["PROTONPATH"])
+    if eng is not None:
+        # The ARM64EC engine's proton script picks bin-arm64 before it reads
+        # this, so it means pure WoW64 for the x86-64 engine and nothing
+        # for the other; set for both, as the managed engine always had it.
+        env["PROTON_USE_WOW64"] = "1"
     # GAMEID selects protonfixes, but UMU also rebuilds the Steam session
     # identity from it: SteamAppId and SteamGameId inside the container become
     # whatever follows "umu-". Its own `umu-default` fallback therefore turns
@@ -372,7 +429,114 @@ def proton_umu_cmd(exe, prefix=None):
     game_id = env.get("GAMEID", "").strip()
     app_id = steam_app_id(env)
     env["GAMEID"] = game_id or (f"umu-{app_id}" if app_id else "umu-default")
+    if eng is not None and eng.arch == engine_arch.ARM64EC:
+        register_fex_emulator(prefix)
+        if engine_arch.runner(env) == engine_arch.DIRECT:
+            return _proton_direct_cmd(exe, Path(env["PROTONPATH"]), env)
     return [sys.executable, str(ensure_umu()), exe], env
+
+
+def _proton_direct_cmd(exe, engine, env):
+    """Run the ARM64EC engine's proton script here, without a container.
+
+    Its toolmanifest asks for Steam Linux Runtime 4 arm64 (appid 4185400),
+    and umu-launcher cannot provide it yet: pressure-vessel exits with
+    status 1 on aarch64 before Proton starts, and a second run stops on
+    KeyError 'steamrt4-arm64' while updating it (umu#716). Running SLR 4
+    arm64's pressure-vessel ourselves would mean reimplementing what umu
+    does wrong, with no ARM machine here to see it work. GE-Proton aarch64,
+    the base of this engine, runs when its script is started directly, so
+    the launcher does that, as Proton's own `proton run` was designed to,
+    and engine_arch.problem() requires the glibc its Unix side was built
+    against (2.41, Steam Linux Runtime 4's) before the engine is offered.
+    BOL_ARM64_RUNNER=umu takes the container path instead.
+
+    What the container used to give is given here explicitly:
+    - umu's environment contract: STEAM_COMPAT_DATA_PATH is the prefix, so
+      the proton script finds the same <prefix>/pfx, the same version and
+      tracked files, and the prefix stays one for both engines;
+      UMU_ID/GAMEID, SteamAppId and SteamGameId the way umu derives them
+      (#199); STEAM_COMPAT_INSTALL_PATH beside the game;
+    - PROTON_USE_WOW64 and STEAM_COMPAT_CLIENT_INSTALL_PATH, set above;
+    - the CA bundle: the game reads its own (bol.fixups installs it beside
+      the game, #374), and Wine's crypt32 the system's root store, which a
+      container used to hide; SSL_CERT_FILE/SSL_CERT_DIR are set from this
+      system when not already, so any OpenSSL or GnuTLS in the engine finds
+      the same roots the container's did.
+    """
+    env = dict(env)
+    proton = engine / "proton"
+    game_id = env.get("GAMEID") or "umu-default"
+    env["UMU_ID"] = game_id
+    numeric = re.match(r"^umu-([0-9A-Za-z_]+)$", game_id)
+    app_id = numeric.group(1) if numeric else "0"
+    env["STEAM_COMPAT_APP_ID"] = app_id
+    env.setdefault("UMU_STEAM_GAME_ID", os.environ.get("SteamGameId", ""))
+    env["SteamAppId"] = app_id
+    env["SteamGameId"] = app_id
+    prefix = env["WINEPREFIX"]
+    env["STEAM_COMPAT_DATA_PATH"] = prefix
+    env["STEAM_COMPAT_SHADER_PATH"] = str(Path(prefix) / "shadercache")
+    env["STEAM_COMPAT_TOOL_PATHS"] = str(engine)
+    env.setdefault("STORE", "")
+    exe_path = Path(exe)
+    if not env.get("STEAM_COMPAT_INSTALL_PATH"):
+        env["STEAM_COMPAT_INSTALL_PATH"] = (
+            str(exe_path.parent) if exe_path.is_absolute() else "")
+    # Nothing here starts a runtime: these would only confuse a script that
+    # looks for one.
+    for key in ("UMU_FOLDERS_PATH", "UMU_RUNTIME_UPDATE", "PROTONPATH"):
+        env.pop(key, None)
+    for name, value in _system_ca_environment().items():
+        env.setdefault(name, value)
+    return [str(proton), env.get("PROTON_VERB") or "run", exe], env
+
+
+# The system root store, in the places distributions keep it.
+_CA_FILES = (
+    "/etc/ssl/certs/ca-certificates.crt",   # Debian, Ubuntu, Arch, Gentoo
+    "/etc/pki/tls/certs/ca-bundle.crt",     # Fedora, RHEL
+    "/etc/ssl/ca-bundle.pem",               # openSUSE
+    "/var/lib/ca-certificates/ca-bundle.pem",
+    "/etc/ssl/cert.pem",                    # Alpine, NixOS
+)
+_CA_DIRS = ("/etc/ssl/certs", "/etc/pki/tls/certs")
+
+
+def _system_ca_environment():
+    """SSL_CERT_FILE/SSL_CERT_DIR for this system's root store, or {}."""
+    found = {}
+    for path in _CA_FILES:
+        if os.path.isfile(path):
+            found["SSL_CERT_FILE"] = path
+            break
+    for path in _CA_DIRS:
+        if os.path.isdir(path):
+            found["SSL_CERT_DIR"] = path
+            break
+    return found
+
+
+def register_fex_emulator(prefix):
+    """Point the prefix's ARM64EC and WoW64 emulators at FEX-Emu.
+
+    Only possible once Wine has made the prefix; a new prefix gets it on
+    the launch after the one that boots it, which is every PLAY. Returns
+    whether a value changed. A failure is reported, not fatal: the engine
+    then says itself that it has no emulator.
+    """
+    from .wine_registry import reg_sz, update_prefix_registry
+    pfx = Path(prefix)
+    if not prefix_ready(pfx):
+        return False
+    changes = [reg_sz(key, "", dll) for key, dll in FEX_WOW64_REGISTRY]
+    try:
+        return update_prefix_registry(pfx, machine=changes)
+    except BolError as exc:
+        warn(f"Could not register FEX-Emu in the Wine prefix: {exc}")
+    except (OSError, ValueError) as exc:
+        warn(f"Could not register FEX-Emu in the Wine prefix ({exc}).")
+    return False
 
 
 def prefix_ready(prefix: Path):
@@ -404,8 +568,7 @@ def managed_bootstrap_prefix(prefix):
     try:
         return (
             Path(prefix).resolve(strict=False) == PFX.resolve(strict=False)
-            and Path(engine).resolve(strict=False)
-            == WINEGDK_OUT.resolve(strict=False)
+            and managed_engine(engine) is not None
         )
     except (OSError, RuntimeError):
         return False
@@ -512,10 +675,19 @@ def runtime_setup_pending():
 
     Mirrors umu-launcher's own check: it looks for an unpacked
     ``sniper_platform_*`` under the runtime directory and rebuilds the whole
-    runtime when none is there.
+    runtime when none is there. The ARM64EC engine started directly has no
+    runtime to install; through umu, its runtime is Steam Linux Runtime 4
+    arm64, unpacked as ``steamrt4_platform_*``.
     """
+    eng = managed_engine(proton_path())
+    if eng is not None and eng.arch == engine_arch.ARM64EC:
+        if engine_arch.runner() == engine_arch.DIRECT:
+            return False
+        runtime, platform_glob = "steamrt4-arm64", "steamrt4_platform_*"
+    else:
+        runtime, platform_glob = "steamrt3", "sniper_platform_*"
     try:
-        return not any((UMU_DIR / "steamrt3").glob("sniper_platform_*"))
+        return not any((UMU_DIR / runtime).glob(platform_glob))
     except OSError:
         return True
 
@@ -787,15 +959,15 @@ def repair_managed_prefix_user32(prefix=None):
     engine = proton_path()
     if engine is None:
         return False
+    eng = managed_engine(engine)
     try:
         if pfx.resolve(strict=False) != PFX.resolve(strict=False) \
-                or Path(engine).resolve(strict=False) != \
-                WINEGDK_OUT.resolve(strict=False):
+                or eng is None:
             return False
     except (OSError, RuntimeError):
         return False
 
-    source = (Path(engine) / "files/lib/wine/x86_64-windows/user32.dll")
+    source = Path(engine) / eng.host_pe_dir / "user32.dll"
     target = pfx / "drive_c/windows/system32/user32.dll"
     if not source.is_file() or source.is_symlink():
         raise BolError(
@@ -867,8 +1039,7 @@ def _managed_runtime_guards(pfx, engine):
         return False
     try:
         return Path(pfx).resolve(strict=False) == PFX.resolve(strict=False) \
-            and Path(engine).resolve(strict=False) == \
-            WINEGDK_OUT.resolve(strict=False)
+            and managed_engine(engine) is not None
     except (OSError, RuntimeError):
         return False
 
@@ -893,8 +1064,9 @@ def _write_managed_engine_rev(pfx, rev):
 
 
 def _record_managed_engine_rev_if_managed(pfx):
-    if _managed_runtime_guards(pfx, proton_path()):
-        _write_managed_engine_rev(pfx, WINEGDK_BUILD_REV)
+    engine = proton_path()
+    if _managed_runtime_guards(pfx, engine):
+        _write_managed_engine_rev(pfx, managed_engine(engine).build_rev)
 
 
 def managed_prefix_engine_is_stale(prefix=None):
@@ -905,9 +1077,12 @@ def managed_prefix_engine_is_stale(prefix=None):
     engines are never considered stale and are left untouched.
     """
     pfx = Path(prefix or PFX)
-    if not _managed_runtime_guards(pfx, proton_path()):
+    engine = proton_path()
+    if not _managed_runtime_guards(pfx, engine):
         return False
-    return read_managed_engine_rev(pfx) != WINEGDK_BUILD_REV
+    # The two engines have different revisions, so a switch between them
+    # counts as stale too, and refreshes system32 for the one about to run.
+    return read_managed_engine_rev(pfx) != managed_engine(engine).build_rev
 
 
 def _dll_differs(source, target):
@@ -1005,7 +1180,8 @@ def refresh_managed_prefix_runtime(prefix=None):
     try:
         resolved_root = pfx.resolve(strict=True)
         operations = []
-        for engine_rel, prefix_rel in _MANAGED_RUNTIME_ARCH_DIRS:
+        for engine_rel, prefix_rel in _runtime_arch_dirs(
+                managed_engine(engine)):
             src_dir = Path(engine) / engine_rel
             dst_dir = pfx / prefix_rel
             if not src_dir.is_dir() or not dst_dir.is_dir():
@@ -1040,7 +1216,8 @@ def refresh_managed_prefix_runtime(prefix=None):
     for source, target in operations:
         changed |= _replace_managed_dll(source, target)
     if changed:
-        ok("Managed Wine runtime refreshed to %s." % WINEGDK_BUILD_REV)
+        ok("Managed Wine runtime refreshed to %s." %
+           managed_engine(engine).build_rev)
     return changed
 
 

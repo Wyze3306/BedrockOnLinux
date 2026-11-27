@@ -26,6 +26,7 @@ from .auth import (
 )
 from . import (
     discord,
+    engine_arch,
     fullscreen_fix,
     gameevents,
     instances,
@@ -83,6 +84,7 @@ from .prefix import (
     boot_prefix,
     game_frame_limit,
     launch_lock,
+    managed_engine,
     patch_options,
     prefix_processes,
     proton_umu_cmd,
@@ -149,9 +151,17 @@ def _prepare_graphics_engine():
     """Activate the universal DGC pair without opening Vulkan in the launcher."""
     if custom_proton():
         return None
+    engine = proton_path()
+    # The engine the prefix is wired to, x86-64 or ARM64EC: each has its own
+    # revision and its own vkd3d slots (bol.engine_arch).
+    eng = managed_engine(engine)
     try:
-        variant, changed = prepare_universal_vkd3d(
-            proton_path(), WINEGDK_BUILD_REV)
+        if eng is not None and eng.arch == engine_arch.ARM64EC:
+            variant, changed = prepare_universal_vkd3d(
+                engine, eng.build_rev, arch=eng.manifest_arch)
+        else:
+            variant, changed = prepare_universal_vkd3d(
+                engine, WINEGDK_BUILD_REV)
     except BolError as exc:
         die(str(exc))
     info(f"Graphics command path: {variant}"
@@ -1415,7 +1425,12 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     # pressure-vessel's own locale generation: a host without en_US.UTF-8 or
     # without the player's locale gets the copy built at the first launch,
     # instead of 3 to 6 seconds of locale generation at every one.
-    slr_locales.configure(env)
+    # The kept copy is built in Steam Linux Runtime 3, which the ARM64EC
+    # engine does not run in: started directly it has no pressure-vessel,
+    # and through umu its runtime is SLR 4 arm64, whose glibc differs.
+    launch_engine = managed_engine(proton_path())
+    if launch_engine is None or launch_engine.arch != engine_arch.ARM64EC:
+        slr_locales.configure(env)
     # Outermost of all, so the scope holds everything above it, gamescope
     # included; and after the custom environment, where its opt-out lives.
     if joined:
@@ -1678,7 +1693,10 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     wayland_attempt = env.get("PROTON_ENABLE_WAYLAND") == "1"
     if use_gamescope:
         ml = LOGS / "minecraft.log"
-        ran = ml.exists() and "umu-launcher" in ml.read_text(errors="ignore")[:8000]
+        head = ml.read_text(errors="ignore")[:8000] if ml.exists() else ""
+        # umu's banner, or the proton script's own lines when the ARM64EC
+        # engine ran it directly (bol.prefix._proton_direct_cmd).
+        ran = "umu-launcher" in head or "Proton: " in head
         if broken or not ran:
             warn("gamescope could not present the game. Automatic relaunch is "
                  "disabled for GPU safety; turn off BOL_GAMESCOPE and click "

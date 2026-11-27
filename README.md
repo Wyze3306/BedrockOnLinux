@@ -120,6 +120,18 @@ checkout with `git clone https://github.com/Wyze3306/BedrockOnLinux` and
 
 `bedrock-on-linux doctor` shows on its `cpu` line which emulator is used.
 
+**ARM engine (experimental).** Once a build of it is published, Settings ▸
+Advanced ▸ Engine offers a second game engine on ARM computers with 4 KiB
+pages (Apple silicon counts, inside muvm). Wine, the graphics and the GPU
+driver then run as native ARM code, and FEX-Emu, carried inside the engine,
+translates only the game. It is off by default and needs glibc 2.41 or newer
+(Debian 13, Ubuntu 25.04, Fedora 42). If it cannot start, the usual engine is
+used instead. `BOL_ENGINE_ARCH=arm64ec` or `x86_64` picks one for a single run,
+and the `engine` line of `doctor` says which one runs. The Microsoft sign-in
+and the game download run as native ARM programs whichever engine is chosen,
+so with the ARM engine no x86-64 emulator has to be registered with the
+kernel.
+
 ## What it connects to
 
 The first time it starts, before it has contacted anything, the launcher shows
