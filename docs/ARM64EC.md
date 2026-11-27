@@ -13,10 +13,10 @@ archives are untouched, byte for byte.
 
 | Piece | Recipe | Release |
 |---|---|---|
-| WineGDK, `--enable-archs=arm64ec,aarch64,i386,x86_64` | `build-winegdk.yml arch=aarch64`, `scripts/build-winegdk-container.sh` with `BOL_WINEGDK_TARGET=aarch64` | `winegdk-…-aarch64` |
+| WineGDK, `--enable-archs=arm64ec,aarch64,i386,x86_64` | `build-winegdk.yml arch=aarch64`, `scripts/build-winegdk-container.sh` with `BOL_WINEGDK_TARGET=aarch64` | `winegdk-75637b674e1f-1ca76fabc4d8-stripped-aarch64` |
 | vkd3d-proton 3.0.1 + NV-DGC + our two fixes, as ARM64X | `build-vkd3d.yml arch=aarch64`, `scripts/build-vkd3d-arm64x.sh` | `vkd3d-arm64x-3.0.1-nv-dgc-3bd519b4cb37` |
 | xodus-cli p15 and its WebKitGTK runtime for aarch64 | `build-xodus.yml arch=aarch64` | `xodus-64d39eb87a56-p15-aarch64` |
-| The engine, `GDK-Proton-xuser-arm64` | `build-engine.yml arch=aarch64`, `scripts/package-engine-arm64.sh` | `engine-arm64ec-native<n>` |
+| The engine, `GDK-Proton-xuser-arm64` | `build-engine.yml arch=aarch64`, `scripts/package-engine-arm64.sh` | `engine-arm64ec-native1` |
 
 Where it departs from the study:
 
@@ -39,6 +39,16 @@ Where it departs from the study:
   now come from `aarch64-windows` (ARM64X); the x64 curl/OpenSSL libraries and
   Microsoft's `xgameruntime.dll.threading` stay x64, from the same pinned
   GDK-Proton10-32 archive, and load through FEX like the game.
+- **Reproducible like the x86 prefix, plus one step.** clang assembles the
+  `*-windows` objects with the wall-clock time in their COFF header, and the
+  ones Wine installs inside `lib*.a` were the only bytes two builds did not
+  share; `scripts/coff-stamp.py` writes `SOURCE_DATE_EPOCH` there (aarch64
+  only). Three CI builds of the prefix and two packagings of the engine gave
+  the same bytes.
+- **The launcher's validator is the packager's last check:**
+  `package-engine-arm64.sh` writes `engine-manifest.json` from
+  `bol.vkd3d.engine_expectations("aarch64")` and runs
+  `validate_engine_manifest` on it with every pin enforced.
 - **Smoke test:** `scripts/arm64ec-smoke` runs in the SDK image on the ARM
   runner: `wine --version`, `wineboot`, then an x86-64 probe that must run
   through FEX, see an ARM64 machine and load our ARM64X `xgameruntime.dll` and
