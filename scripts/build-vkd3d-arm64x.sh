@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Build the experimental ARM64EC engine's vkd3d-proton (#250, docs/ARM64EC.md):
 # the x86 payload's exact source (v3.0.1 + restored NV-DGC + the occlusion and
-# frame-limiter fixes) compiled as ARM64X, so that the x64 game, running as
+# frame-limiter fixes) compiled as ARM64X, plus one ARM64X-only backport
+# (hybrid_patchable command-queue vtable), so that the x64 game, running as
 # ARM64EC under FEX, calls native ARM code for every D3D12 call instead of
 # emulating the translation layer too.
 #
@@ -25,6 +26,7 @@ ARM_DIR="$PROJECT_ROOT/third_party/vkd3d-proton-arm64x"
 UNIVERSAL_LOCK="$UNIVERSAL_DIR/provenance.env"
 ARM_LOCK="$ARM_DIR/provenance.env"
 CROSS_FILE="$ARM_DIR/build-arm64x.txt"
+HYBRID_PATCH="$ARM_DIR/hybrid-patchable-command-queue.patch"
 EXPECTED_HASHES="$ARM_DIR/OUTPUT-SHA256SUMS"
 SUBMODULE_LOCK="$UNIVERSAL_DIR/submodules.lock"
 REVERT_PATCH="$UNIVERSAL_DIR/restore-nv-dgc.patch"
@@ -38,7 +40,7 @@ die() {
 }
 
 [[ $# -eq 1 ]] || die "usage: $0 WORK_ROOT"
-for f in "$UNIVERSAL_LOCK" "$ARM_LOCK" "$CROSS_FILE" "$SUBMODULE_LOCK" \
+for f in "$UNIVERSAL_LOCK" "$ARM_LOCK" "$CROSS_FILE" "$HYBRID_PATCH" "$SUBMODULE_LOCK" \
          "$REVERT_PATCH" "$OCCLUSION_PATCH" "$LIMITER_PATCH" "$LICENSE_FILE" \
          "$ARM_DIR/README.md"; do
   [[ -f "$f" ]] || die "incomplete vkd3d provenance bundle: ${f#"$PROJECT_ROOT"/}"
@@ -80,6 +82,8 @@ assert_equal() {
   [[ "$2" == "$3" ]] || die "$1 drift: got '$2', expected '$3'"
 }
 assert_equal "cross file" "$(hash_file "$CROSS_FILE")" "$VKD3D_ARM64X_CROSS_FILE_SHA256"
+assert_equal "vendored hybrid_patchable backport" "$(hash_file "$HYBRID_PATCH")" \
+  "$VKD3D_ARM64X_HYBRID_PATCH_SHA256"
 assert_equal "vendored revert patch" "$(hash_file "$REVERT_PATCH")" "$VKD3D_REVERT_PATCH_SHA256"
 assert_equal "vendored occlusion patch" "$(hash_file "$OCCLUSION_PATCH")" "$VKD3D_OCCLUSION_PATCH_SHA256"
 assert_equal "vendored frame-limiter patch" "$(hash_file "$LIMITER_PATCH")" "$VKD3D_LIMITER_PATCH_SHA256"
@@ -122,6 +126,9 @@ git -C "$SOURCE_DIR" apply --index --whitespace=nowarn "$OCCLUSION_PATCH" \
   || die "occlusion patch does not apply"
 git -C "$SOURCE_DIR" apply --index --whitespace=nowarn "$LIMITER_PATCH" \
   || die "frame-limiter patch does not apply"
+echo "== Backporting hybrid_patchable on the command queue vtable (ARM64X only)"
+git -C "$SOURCE_DIR" apply --index --whitespace=nowarn "$HYBRID_PATCH" \
+  || die "hybrid_patchable backport does not apply"
 install -m 0644 "$CROSS_FILE" "$SOURCE_DIR/build-arm64x.txt"
 
 echo "== Toolchain"
@@ -188,7 +195,8 @@ mkdir -p "$PROVENANCE_OUT"
 install -m 0644 "$UNIVERSAL_LOCK" "$PROVENANCE_OUT/provenance.env"
 install -m 0644 "$ARM_LOCK" "$PROVENANCE_OUT/provenance-arm64x.env"
 install -m 0644 "$CROSS_FILE" "$SUBMODULE_LOCK" "$REVERT_PATCH" \
-  "$OCCLUSION_PATCH" "$LIMITER_PATCH" "$LICENSE_FILE" "$PROVENANCE_OUT/"
+  "$OCCLUSION_PATCH" "$LIMITER_PATCH" "$HYBRID_PATCH" "$LICENSE_FILE" \
+  "$PROVENANCE_OUT/"
 install -m 0644 "$ARM_DIR/README.md" "$PROVENANCE_OUT/README.md"
 install -m 0644 "$PROJECT_ROOT/scripts/build-vkd3d-arm64x.sh" "$PROVENANCE_OUT/"
 [[ ! -s "$EXPECTED_HASHES" ]] || install -m 0644 "$EXPECTED_HASHES" "$PROVENANCE_OUT/"
