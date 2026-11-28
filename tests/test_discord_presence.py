@@ -219,6 +219,20 @@ class EnablementTests(unittest.TestCase):
         self.assertFalse(session.active)
 
 
+class ConfiguredApplicationTests(unittest.TestCase):
+    def test_the_project_ships_its_own_application(self):
+        # Registered on discord.com/developers as "BedrockOnLinux": that
+        # name is what Discord prints after "Playing".
+        from bol.config import DISCORD_APP_ID
+        self.assertTrue(DISCORD_APP_ID.isdigit(), DISCORD_APP_ID)
+        self.assertEqual(discord.presence_app_id({}), DISCORD_APP_ID)
+
+    def test_the_environment_still_overrides_it(self):
+        self.assertEqual(
+            discord.presence_app_id({"BOL_DISCORD_APP_ID": "424242"}),
+            "424242")
+
+
 class SessionTests(unittest.TestCase):
     def setUp(self):
         # Short path: a Unix socket address is limited to about 100 bytes.
@@ -451,7 +465,8 @@ class ArtworkTests(unittest.TestCase):
 
 class DoctorSummaryTests(unittest.TestCase):
     def test_each_reason_for_seeing_nothing_reads_differently(self):
-        no_app = discord.presence_summary({}, {})
+        with mock.patch.object(discord, "DISCORD_APP_ID", ""):
+            no_app = discord.presence_summary({}, {})
         self.assertIn("no Discord application", no_app)
         env = {"BOL_DISCORD_APP_ID": "424242"}
         self.assertIn("off", discord.presence_summary(

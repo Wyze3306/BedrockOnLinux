@@ -13,10 +13,13 @@ launcher is found by word of mouth, and this is the launcher saying its own
 name. Nothing about the account, the world or the server is sent — Discord is
 told the edition and version, and nothing else.
 
-Discord also recognises Minecraft.Windows.exe on its own and would print
-"Playing Minecraft" beside, or instead of, this. The activity is therefore
-tied to the game's own process id once that process exists: Discord then
-knows the detected game and this presence are one session.
+Discord also recognises Minecraft.Windows.exe on its own: with nothing from
+the launcher, that is the "Playing Minecraft" people saw. Measured on Discord
+Canary (2026-11-28), a presence from this application is what the profile
+shows while the game runs, with no second "Minecraft" line. The activity is
+still tied to the game's own process id once that process exists, which is
+what the pid field is for: the session belongs to the game, not to the
+launcher window.
 
 Discord clears a presence by itself the moment the socket closes, so a
 launcher that is killed mid-game cannot leave anyone permanently "in game".

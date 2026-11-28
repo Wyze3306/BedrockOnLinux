@@ -252,7 +252,7 @@ DISCORD_INVITE = "https://discord.gg/5YJq54Yhbu"
 # empty, the "Playing Minecraft" people saw was Discord recognising
 # Minecraft.Windows.exe on its own, not this launcher. BOL_DISCORD_APP_ID
 # overrides it.
-DISCORD_APP_ID = ""
+DISCORD_APP_ID = "1576221860558020649"
 # Rich Presence artwork. Each of these is either an asset key uploaded to the
 # application (Rich Presence > Art Assets) or a full https:// URL, which
 # Discord fetches and proxies itself -- and the URL form is why the image
