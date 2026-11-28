@@ -15,6 +15,7 @@ from .auth import (
     msa_app_id,
     msa_refresh,
     msa_signed_in,
+    msa_signed_out_by_update,
     msa_save_for_account_epoch,
     msa_session_snapshot,
     wine_apply_winegdk_prereqs,
@@ -122,8 +123,8 @@ from .x11 import tag_steam_game_windows
 # one place: it is the answer to "why can I not play without signing in?".
 _OFFLINE_MODE_NOTICE = (
     "offline mode — single-player worlds and LAN play work, while Realms, "
-    "servers, the Marketplace and Xbox friends stay unavailable until "
-    "Xbox Live sign-in succeeds."
+    "servers, the Marketplace, the skin packs the account owns and Xbox "
+    "friends stay unavailable until Xbox Live sign-in succeeds."
 )
 
 # Minecraft Education's sign-in is the game's own (#351): a Microsoft 365
@@ -1347,11 +1348,23 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         except Exception as e:
             warn(f"Could not clear an old Microsoft token from the Wine "
                  f"prefix ({e}); continuing.")
-        warn("No Microsoft account is linked, so Minecraft starts in "
-             + _OFFLINE_MODE_NOTICE + " Use 'Sign in' to add one."
-             if bedrock else
-             f"No Microsoft account is linked, so {title} cannot sign in to "
-             "Xbox Live. Use 'Sign in' to add one.")
+        if msa_signed_out_by_update():
+            # Signed in yesterday: "no account is linked" would read as the
+            # launcher having lost it (#396).
+            warn("The Microsoft account an earlier version of the launcher "
+                 "linked has to sign in again, because Xbox Live now signs "
+                 "in another way, so Minecraft starts in "
+                 + _OFFLINE_MODE_NOTICE + " Use 'Sign in' to link it again."
+                 if bedrock else
+                 "The Microsoft account an earlier version of the launcher "
+                 f"linked has to sign in again, so {title} cannot sign in to "
+                 "Xbox Live. Use 'Sign in' to link it again.")
+        else:
+            warn("No Microsoft account is linked, so Minecraft starts in "
+                 + _OFFLINE_MODE_NOTICE + " Use 'Sign in' to add one."
+                 if bedrock else
+                 f"No Microsoft account is linked, so {title} cannot sign in "
+                 "to Xbox Live. Use 'Sign in' to add one.")
     elif not bedrock:
         if not wine_reg_set_refresh_token(tok):
             die("Could not write the Microsoft login token into the Wine "

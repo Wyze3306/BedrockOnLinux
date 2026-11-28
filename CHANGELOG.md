@@ -110,6 +110,17 @@
   mouse and controller would not work. Education does not use GameInput
   and ships none, so there is nothing to install for it; its mouse works
   without it (#351).
+- **Skin packs missing from the Dressing Room now point at the sign-in
+  (#396).** The free packs players look for, such as 1st Birthday and
+  Timeless Toys, are no longer part of the game: they come from the
+  Marketplace, belong to the Xbox account, and show under Classic Skins ▸
+  Owned only while the game is signed in to Xbox Live (they download into
+  `premium_cache/skin_packs`, not into the `skin_packs` folder). The
+  offline warnings now say the account's skin packs are among what offline
+  mode leaves out. An account linked by an earlier version, which this one
+  signs out once (#386), is now told so in those words, that nothing it
+  owns is lost, and how to sign in again, once even when the offline
+  warning was turned off.
 - **"Report a problem" is offered only for what the launcher may have got
   wrong.** When PLAY stops on something the player fixes from the message
   itself (a Microsoft account that does not own the game, the ten-device

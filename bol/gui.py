@@ -32,7 +32,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from .auth import NativeAuth, msa_logout, msa_signed_in, msa_gamertag
+from .auth import (NativeAuth, msa_logout, msa_signed_in, msa_gamertag,
+                   msa_signed_out_by_update)
 from .config import (
     GAMES, LOGS, PRETTY, VERSION, get_install_location, clear_install_location,
     default_install_location, is_relocation_allowed,
@@ -1527,11 +1528,26 @@ STORE_LINK_EXPLAINER = (
 
 OFFLINE_PLAY_EXPLAINER = (
     "Minecraft will start, but in offline mode: no Realms, no servers, no "
-    "friends and no Marketplace. Signing in for online play is a separate "
-    "step from the sign-in that downloaded the game — the launcher never "
-    "does it on its own, because playing offline is a legitimate thing to "
-    "want."
+    "friends, no Marketplace, and none of the skin packs your account owns, "
+    "free ones included. Signing in for online play is a separate step from "
+    "the sign-in that downloaded the game — the launcher never does it on "
+    "its own, because playing offline is a legitimate thing to want."
 )
+
+# The same warning for a player this version signed out (#386): they were
+# signed in the day before, so the warning has to say why they no longer
+# are, or the skin packs gone from the Dressing Room read as lost (#396).
+UPDATE_SIGNED_OUT_EXPLAINER = (
+    "Xbox Live now signs in another way, so the Microsoft account an earlier "
+    "version of the launcher linked has to sign in once more. Nothing it "
+    "owns is lost: until it signs in, Minecraft starts in offline mode, "
+    "with no Realms, no servers, no friends, no Marketplace, and none of the "
+    "skin packs your account owns, free ones included."
+)
+
+# Set once the update's sign-out has been told: that warning shows even to a
+# player who turned the offline one off, but only the one time.
+UPDATE_SIGNOUT_TOLD = "update_signout_told"
 
 
 class AccountRow(QWidget):
@@ -3315,7 +3331,7 @@ class MainWindow(QMainWindow):
             return True
         return False
 
-    def _offer_online_sign_in(self):
+    def _offer_online_sign_in(self, signed_out_by_update=False):
         """PLAY was pressed with no account for online play.
 
         Nothing has failed -- offline is a real way to play -- so this warns
@@ -3324,10 +3340,18 @@ class MainWindow(QMainWindow):
         one never does, and its absence used to show up only inside the game,
         as Realms and servers quietly missing (#240).
 
+        ``signed_out_by_update`` words it for an account an earlier version
+        linked, which this one signs out once (#386, #396).
+
         Returns "signin" or "play".
         """
-        box = self._box(QMessageBox.Warning, "Not signed in for online play",
-                        OFFLINE_PLAY_EXPLAINER)
+        if signed_out_by_update:
+            box = self._box(QMessageBox.Warning, "Sign in again to play online",
+                            UPDATE_SIGNED_OUT_EXPLAINER)
+        else:
+            box = self._box(QMessageBox.Warning,
+                            "Not signed in for online play",
+                            OFFLINE_PLAY_EXPLAINER)
         again = QCheckBox("Don't warn me again")
         box.setCheckBox(again)
         # RejectRole so Escape lands here too: dismissing the warning leaves
@@ -3348,13 +3372,24 @@ class MainWindow(QMainWindow):
         False means the warning sent the player to the sign-in instead, and
         PLAY resumes on its own once that finishes.
         """
-        if msa_signed_in() or not self.settings.get("warn_offline_play", True):
+        if msa_signed_in():
+            return True
+        signed_out_by_update = msa_signed_out_by_update()
+        # The update's sign-out is told once even to a player who turned this
+        # warning off: they did so while playing offline on purpose, not to
+        # find their account's skin packs missing in-game one day (#396).
+        tell_update = (signed_out_by_update
+                       and not self.settings.get(UPDATE_SIGNOUT_TOLD, False))
+        if not tell_update and not self.settings.get("warn_offline_play", True):
             return True
         if getattr(self, "_acct_mode", "in") in ("loading", "cancel"):
             # A device code is already in flight or on screen; warning about
             # the sign-in the player is in the middle of doing helps nobody.
             return True
-        if self._offer_online_sign_in() == "play":
+        if tell_update:
+            self._save_setting(UPDATE_SIGNOUT_TOLD, True)
+        if self._offer_online_sign_in(
+                signed_out_by_update=signed_out_by_update) == "play":
             return True
         self.ui_state["play_after_signin"] = True
         if _alive(getattr(self, "accounts_menu", None)):

@@ -475,8 +475,63 @@ class PlayingOfflineIsWarnedAboutTests(unittest.TestCase):
             self.assertNotIn("play_after_signin", window.ui_state)
 
     def test_the_warning_says_what_offline_costs(self):
-        for missing in ("Realms", "servers", "friends"):
+        # Skin packs too: the account's own, free ones included, are what a
+        # player notices first, in the Dressing Room (#396).
+        for missing in ("Realms", "servers", "friends", "skin packs"):
             self.assertIn(missing, gui.OFFLINE_PLAY_EXPLAINER)
+            self.assertIn(missing, gui.UPDATE_SIGNED_OUT_EXPLAINER)
+
+    def test_an_account_the_update_signed_out_is_told_so(self):
+        # #386 signs out, once, every account an earlier version linked.
+        with headless_window() as window, self._armed(window) as patched, \
+                mock.patch.object(gui, "msa_signed_out_by_update",
+                                  return_value=True):
+            window.do_play()
+        patched._offer_online_sign_in.assert_called_once_with(
+            signed_out_by_update=True)
+
+    def test_the_update_sign_out_is_told_even_with_the_warning_off(self):
+        # Turned off while playing offline on purpose, not to find the
+        # account's skin packs gone from the Dressing Room one day (#396).
+        with headless_window(warn_offline_play=False) as window, \
+                self._armed(window) as patched, \
+                mock.patch.object(gui, "msa_signed_out_by_update",
+                                  return_value=True), \
+                mock.patch.object(window, "_save_setting") as saved:
+            window.do_play()
+        patched._offer_online_sign_in.assert_called_once_with(
+            signed_out_by_update=True)
+        saved.assert_any_call(gui.UPDATE_SIGNOUT_TOLD, True)
+        self.assertTrue(patched._start_worker.called)
+
+    def test_the_update_sign_out_overrides_the_choice_only_once(self):
+        with headless_window(warn_offline_play=False,
+                             **{gui.UPDATE_SIGNOUT_TOLD: True}) as window, \
+                self._armed(window) as patched, \
+                mock.patch.object(gui, "msa_signed_out_by_update",
+                                  return_value=True):
+            window.do_play()
+        self.assertFalse(patched._offer_online_sign_in.called)
+        self.assertTrue(patched._start_worker.called)
+
+    def test_the_update_warning_says_why_and_that_nothing_is_lost(self):
+        seen = {}
+
+        def answer(box):
+            seen["title"] = box.windowTitle()
+            seen["text"] = box.text()
+            seen["buttons"] = [b.text() for b in box.buttons()]
+            return 0
+
+        with headless_window() as window, \
+                mock.patch.object(gui.QMessageBox, "exec", answer):
+            choice = window._offer_online_sign_in(signed_out_by_update=True)
+        self.assertEqual(choice, "play")
+        self.assertEqual(seen["text"], gui.UPDATE_SIGNED_OUT_EXPLAINER)
+        self.assertIn("again", seen["title"])
+        self.assertIn("earlier version", seen["text"])
+        self.assertIn("Nothing it owns is lost", seen["text"])
+        self.assertIn("Sign in", seen["buttons"])
 
     def _dialog(self, window, click=None):
         """The real warning, answered by picking one of its own buttons

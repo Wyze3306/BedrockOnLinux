@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from .auth import NativeAuth, msa_signed_in
+from .auth import NativeAuth, msa_signed_in, msa_signed_out_by_update
 from .config import APP, PRETTY, VERSION
 from .content import cmd_import
 from .doctor import doctor
@@ -744,10 +744,23 @@ def main():
             # friends come up missing in-game with nothing having mentioned
             # a sign-in (#240).
             if not msa_signed_in() and _plays_xbox_live():
-                warn("Not signed in for online play: no Realms, no servers, "
-                     "no friends and no Marketplace."
-                     if is_bedrock(selected_edition()) else
-                     "Not signed in: the game cannot reach Xbox Live.")
+                bedrock = is_bedrock(selected_edition())
+                if msa_signed_out_by_update():
+                    # The account was there yesterday: say the update signed
+                    # it out, or its skin packs vanishing from the Dressing
+                    # Room reads as content lost (#396).
+                    warn("Signed out by this update: Xbox Live now signs in "
+                         "another way, so the account an earlier version "
+                         "linked has to sign in once more."
+                         + (" Until then: no Realms, no servers, no friends, "
+                            "no Marketplace and none of the skin packs the "
+                            "account owns." if bedrock else ""))
+                else:
+                    warn("Not signed in for online play: no Realms, no "
+                         "servers, no friends, no Marketplace and none of "
+                         "the skin packs the account owns."
+                         if bedrock else
+                         "Not signed in: the game cannot reach Xbox Live.")
                 info(f"Sign in with:  {APP} login")
             # A poweroff or a stopped scope with the game running lets the
             # session finish its teardown before the launcher goes.
