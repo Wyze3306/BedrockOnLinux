@@ -23,12 +23,18 @@ from .config import (
     OPENSSL_XCURL_ARCHIVE_SHA256,
     OPENSSL_XCURL_REV,
     OPENSSL_XCURL_SET,
-    WINEGDK_PREBUILT_REPO,
 )
 from .log import BolError, info, ok, warn
 from .pe import apply_patch
 from .prefix import active_prefix
-from .util import asset_url, download, gh_releases, run
+from .util import (
+    AssetMissing,
+    download,
+    download_first,
+    files_url,
+    release_asset_url,
+    run,
+)
 
 # Where distributions keep the same Mozilla roots curl.se publishes: Debian
 # and Arch, Fedora, openSUSE, then the generic names.
@@ -471,27 +477,12 @@ def _ensure_openssl_xcurl_set(rev, pinned_sha256, direct_url, exact=False):
     tar = next((anchor / asset for anchor in anchors
                 if (anchor / asset).is_file()), None)
     local_archive = tar is not None
-    url = None
-    if not local_archive and direct_url:
-        url = direct_url
-        tar = CACHE / asset
-    elif not local_archive:
-        try:
-            # Every release, not the newest thirty: the set stays in the
-            # release it was uploaded to, and once thirty more had been
-            # published above it, no new install could find it any more.
-            rels = gh_releases(WINEGDK_PREBUILT_REPO, fetch_all=True)
-        except Exception as e:
-            warn(f"OpenSSL XCurl set lookup failed ({e}).")
-            return have
-        url = None
-        for rel in rels or []:
-            url, _name, _ = asset_url(rel, lambda n: n == asset)
-            if url:
-                break
-        if not url:
-            warn(f"OpenSSL XCurl set asset '{asset}' not published yet.")
-            return have
+    # The launcher's file store first, then the xcurl-<rev> release the set
+    # was published under before the store existed (docs/release-files.md).
+    # The data feed names one address of its own.
+    urls = (direct_url,) if direct_url else (
+        files_url(asset), release_asset_url(f"xcurl-{rev}", asset))
+    if not local_archive:
         tar = CACHE / asset
     expected_hash = pinned_sha256.strip().lower()
     retry_available = not local_archive
@@ -501,8 +492,12 @@ def _ensure_openssl_xcurl_set(rev, pinned_sha256, direct_url, exact=False):
                 return have
             info("Downloading the online-login components (one-time) …")
             try:
-                download(url, tar, "Online-login components",
-                         **({"attempts": 2} if exact else {}))
+                download_first(urls, tar, "Online-login components",
+                               fetch=download, missing_ok=True,
+                               **({"attempts": 2} if exact else {}))
+            except AssetMissing:
+                warn(f"OpenSSL XCurl set asset '{asset}' not published yet.")
+                return have
             except BolError:
                 return have
 
@@ -545,8 +540,7 @@ def _ensure_openssl_xcurl_set(rev, pinned_sha256, direct_url, exact=False):
             return have
         if not retry_available:
             return have
-        # Retry exactly once in this call. The release lookup is deliberately
-        # not repeated; only the reviewed asset URL above is downloaded again.
+        # Retry exactly once in this call, from the same addresses.
         retry_available = False
 
     assert tmp is not None

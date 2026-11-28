@@ -1,0 +1,119 @@
+# Copy the files this branch's pins name into the launcher's file store
+# (scripts/release-files.sh, docs/release-files.md), from the releases of
+# their own they were published under before the store existed.
+#
+# Every copy is checked before it is uploaded: against the sidecar it was
+# published with, against the SHA-256 committed in bol/config.py where there
+# is one, and against its build provenance attestation. A file the store
+# already holds is left as it is. Nothing is deleted: the old releases stay
+# until a person removes them, once nothing downloads from them any more.
+#
+# Run it once on a branch whose pins predate the store, publish off first to
+# see what it would copy.
+
+name: Carry files over to the file store
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload to the file store (off = only check what would be copied)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  carry-over:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PUBLISH: ${{ inputs.publish }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Copy the pinned files into the store
+        run: |
+          set -euo pipefail
+          cfg=bol/config.py
+          pin() { grep -m1 "^$1 = " "$cfg" | cut -d'"' -f2; }
+          work="$RUNNER_TEMP/carry"
+          # carry NAME TAG OLD_NAME SHA256 ATTESTED
+          #   NAME in the store, OLD_NAME (empty = NAME) in release TAG.
+          #   SHA256 empty: no pin is committed for it. ATTESTED=no for the
+          #   xodus source archive, which its build never attested.
+          carry() {
+            local name="$1" tag="$2" old="${3:-$1}" want="$4" attested="${5:-yes}" have got
+            have="$(scripts/release-files.sh asset-sha "$name")"
+            if [ -n "$have" ]; then
+              if [ -n "$want" ] && [ "$have" != "$want" ]; then
+                echo "::error::$name is in the store as $have, but bol/config.py pins $want." >&2
+                return 1
+              fi
+              echo "$name: already in the store."
+              return 0
+            fi
+            rm -rf "$work"
+            scripts/release-files.sh fetch "$name" "$work" "$tag" "$old" >/dev/null
+            got="$(sha256sum "$work/$name" | cut -d' ' -f1)"
+            if [ -n "$want" ] && [ "$got" != "$want" ]; then
+              echo "::error::$name from $tag is $got, but bol/config.py pins $want." >&2
+              return 1
+            fi
+            if [ "$attested" = yes ]; then
+              gh attestation verify "$work/$name" -R "$GITHUB_REPOSITORY" >/dev/null
+            fi
+            if [ "$PUBLISH" = true ]; then
+              scripts/release-files.sh publish "$work/$name"
+            else
+              echo "$name: would be copied from $tag ($got)."
+            fi
+            rm -rf "$work"
+          }
+
+          rev="$(pin WINEGDK_BUILD_REV)"
+          carry "GDK-Proton-xuser-$rev.tar.gz" "engine-$rev" "" "$(pin WINEGDK_ARCHIVE_SHA256)"
+          wtag="$(scripts/winegdk-release-tag.sh)"
+          carry "winegdk-prefix-${wtag#winegdk-}.tar.gz" "$wtag" "" "$(pin WINEGDK_PREFIX_SHA256)"
+          carry "$(scripts/vkd3d-release-tag.sh --asset)" "$(scripts/vkd3d-release-tag.sh)" \
+            vkd3d-universal-3.0.1-nv-dgc.tar.gz ""
+          xrev="$(pin OPENSSL_XCURL_REV)"
+          carry "openssl-xcurl-set-$xrev.tar.gz" "xcurl-$xrev" "" "$(pin OPENSSL_XCURL_ARCHIVE_SHA256)"
+
+          rev="$(pin XODUS_REV)"
+          carry "xodus-cli-$rev.tar.gz" "xodus-$rev" "" "$(pin XODUS_ARCHIVE_SHA256)"
+          carry "xodus-src-$rev.tar.gz" "xodus-$rev" "" "" no
+          if [ -n "$(pin XODUS_WEBVIEW_SHA256)" ]; then
+            carry "xodus-webview-$(pin XODUS_WEBVIEW_REV).tar.xz" "xodus-$rev" "" \
+              "$(pin XODUS_WEBVIEW_SHA256)"
+          fi
+
+          # The experimental ARM64EC engine and its helpers, where pinned.
+          arm="$(pin WINEGDK_ARM64_BUILD_REV)"
+          if [ -n "$arm" ]; then
+            carry "GDK-Proton-xuser-$arm.tar.gz" "engine-$arm" "" "$(pin WINEGDK_ARM64_ARCHIVE_SHA256)"
+          fi
+          if [ -n "$(pin WINEGDK_ARM64_PREFIX_SHA256)" ]; then
+            carry "winegdk-prefix-${wtag#winegdk-}-aarch64.tar.gz" "$wtag-aarch64" "" \
+              "$(pin WINEGDK_ARM64_PREFIX_SHA256)"
+          fi
+          if tag="$(scripts/vkd3d-release-tag.sh aarch64 2>/dev/null)"; then
+            carry "$(scripts/vkd3d-release-tag.sh --asset aarch64)" "$tag" \
+              vkd3d-arm64x-3.0.1-nv-dgc.tar.gz ""
+          fi
+          if [ -n "$(pin XODUS_ARM64_ARCHIVE_SHA256)" ]; then
+            carry "xodus-cli-$rev-aarch64.tar.gz" "xodus-$rev-aarch64" "" \
+              "$(pin XODUS_ARM64_ARCHIVE_SHA256)"
+            carry "xodus-src-$rev-aarch64.tar.gz" "xodus-$rev-aarch64" \
+              "xodus-src-$rev.tar.gz" "" no
+          fi
+          if [ -n "$(pin XODUS_WEBVIEW_ARM64_SHA256)" ]; then
+            carry "xodus-webview-$(pin XODUS_WEBVIEW_REV)-aarch64.tar.xz" "xodus-$rev-aarch64" "" \
+              "$(pin XODUS_WEBVIEW_ARM64_SHA256)"
+          fi

@@ -22,6 +22,7 @@ from .config import (
     APP,
     CACHE,
     DATA,
+    FILES_TAG,
     FLATPAK_APP_ID,
     GAMES,
     LOGS,
@@ -29,8 +30,9 @@ from .config import (
     PROTON_DIR,
     SETTINGS,
     UMU_DIR,
+    WINEGDK_PREBUILT_REPO,
 )
-from .log import IS_TTY, die, warn
+from .log import IS_TTY, BolError, die, warn
 
 _XDG_MIGRATION_CHECKED = False
 
@@ -293,7 +295,50 @@ _RETRYABLE = (urllib.error.URLError, TimeoutError, socket.timeout,
               http.client.HTTPException)
 
 
-def download(url, dest: Path, label=None, progress=None, attempts=5):
+class AssetMissing(BolError):
+    """The server has no file at this address (HTTP 404)."""
+
+
+def release_asset_url(tag, asset):
+    """Where release `tag` of the launcher's repository serves `asset`."""
+    return (f"https://github.com/{WINEGDK_PREBUILT_REPO}/releases/download/"
+            f"{tag}/{asset}")
+
+
+def files_url(asset):
+    """Where the launcher's file store (config.FILES_TAG) serves `asset`."""
+    return release_asset_url(FILES_TAG, asset)
+
+
+def download_first(urls, dest, label=None, *, fetch=None, missing_ok=False,
+                   **kwargs):
+    """Download to `dest` the first of `urls` the server has.
+
+    Only a missing file (HTTP 404) moves on to the next address; any other
+    failure is that download's own and is raised as it is. The last address
+    fails the way download() does, `missing_ok` included. `fetch` is the
+    download function to call: the caller's own `download`, which its tests
+    replace.
+    """
+    fetch = fetch or download
+    *firsts, last = urls
+    for url in firsts:
+        try:
+            return fetch(url, dest, label, missing_ok=True, **kwargs)
+        except AssetMissing:
+            continue
+    if missing_ok:
+        kwargs["missing_ok"] = True
+    return fetch(last, dest, label, **kwargs)
+
+
+def download(url, dest: Path, label=None, progress=None, attempts=5,
+             missing_ok=False):
+    """Download `url` to `dest`, resuming and retrying a dropped connection.
+
+    With `missing_ok`, a file the server does not have raises AssetMissing,
+    quietly, for the caller to try another address (download_first).
+    """
     label = label or dest.name
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
@@ -338,6 +383,8 @@ def download(url, dest: Path, label=None, progress=None, attempts=5):
             if e.code == 416 and tmp.exists():
                 tmp.unlink(missing_ok=True)
                 last_err = e
+            elif e.code == 404 and missing_ok:
+                raise AssetMissing(f"Not published: {url}") from e
             elif e.code < 500:
                 die(f"Download failed: {url}\n{e}")
             else:

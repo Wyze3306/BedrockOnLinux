@@ -3,9 +3,11 @@
 #
 # It reads the pinned versions from source (bol/config.py + third_party/), and
 # for each Tier-1 component decides reuse-or-build:
-#   - if the pinned, attested release already exists (and, where a SHA is
-#     committed, its published sidecar matches the pin) -> REUSE it,
+#   - if the pinned, attested file is already published (and, where a SHA is
+#     committed, it matches the pin) -> REUSE it,
 #   - otherwise -> BUILD it from source and publish it (attested).
+# Published means in the launcher's file store (scripts/release-files.sh), or
+# in the release of its own a file had before the store existed.
 # The engine and app then always assemble from those (cheap), verifying every
 # input against the committed pins. It NEVER mutates a pin; it only asserts them.
 #
@@ -92,11 +94,18 @@ jobs:
           # Named after the committed output hash lock, so a rebuilt payload
           # resolves to a release of its own (scripts/vkd3d-release-tag.sh).
           vtag="$(scripts/vkd3d-release-tag.sh)"
-          # Reuse a release when it exists and (if a SHA is committed) its
-          # published sidecar matches the pin. Missing or drifted -> rebuild.
+          # Reuse a file when it is published and (if a SHA is committed) it
+          # matches the pin. Missing or drifted -> rebuild. The file store
+          # first (`store` is the file's name there when it differs), then
+          # the release of its own it had before the store.
           needs_build() {
-            local tag="$1" base="$2" pin="$3" got
+            local tag="$1" base="$2" pin="$3" store="${4:-$2}" got
             [ "$force" = "true" ] && { echo true; return; }
+            got="$(scripts/release-files.sh asset-sha "$store")"
+            if [ -n "$got" ]; then
+              if [ -z "$pin" ] || [ "$got" = "$pin" ]; then echo false; else echo true; fi
+              return
+            fi
             gh release view "$tag" -R "$repo" >/dev/null 2>&1 || { echo true; return; }
             if [ -n "$pin" ]; then
               rm -rf /tmp/pb; mkdir -p /tmp/pb
@@ -121,7 +130,8 @@ jobs:
           # reuses on existence, which is safe because the tag is named after
           # that file's hash; build-engine still verifies the DLLs against it
           # and fails fast on drift.
-          bv="$(needs_build "$vtag" "vkd3d-universal-3.0.1-nv-dgc.tar.gz" "")"
+          bv="$(needs_build "$vtag" "vkd3d-universal-3.0.1-nv-dgc.tar.gz" "" \
+            "$(scripts/vkd3d-release-tag.sh --asset)")"
           if [ "${{ github.event_name }}" = "schedule" ]; then
             channel=nightly; publish=true
           elif [ "${{ github.event_name }}" = "push" ]; then

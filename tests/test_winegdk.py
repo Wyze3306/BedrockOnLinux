@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from bol import proton, winegdk
+from bol import proton, util, winegdk
 from bol.log import BolError
 
 
@@ -220,7 +220,7 @@ class WineGDKInstallTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        def download_fresh(_url, dest, _label, _progress):
+        def download_fresh(_url, dest, _label, **_kwargs):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(fresh, dest)
 
@@ -230,15 +230,41 @@ class WineGDKInstallTests(unittest.TestCase):
             installed = winegdk._install_prebuilt_winegdk()
 
         self.assertTrue(installed)
+        # The launcher's file store first (docs/release-files.md).
         download.assert_called_once_with(
             "https://github.com/Wyze3306/BedrockOnLinux/releases/download/"
-            f"engine-{self.REV}/{asset}",
+            f"files/{asset}",
             self.cache / asset,
             "Game engine",
-            None,
+            missing_ok=True,
+            progress=None,
         )
         self.assertEqual((self.engine / "proton").read_text(), "fresh")
         self.assertTrue(stale_metadata.is_file())
+
+    def test_an_engine_missing_from_the_store_comes_from_its_own_release(self):
+        fresh = self._archive(name="fresh.tar.gz", marker="fresh")
+        asset = f"GDK-Proton-xuser-{self.REV}.tar.gz"
+        base = "https://github.com/Wyze3306/BedrockOnLinux/releases/download"
+        urls = []
+
+        def store_is_empty(url, dest, _label, missing_ok=False, **_kwargs):
+            urls.append((url, missing_ok))
+            if "/files/" in url:
+                raise util.AssetMissing(url)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(fresh, dest)
+
+        with mock.patch.object(winegdk, "download",
+                               side_effect=store_is_empty):
+            installed = winegdk._install_prebuilt_winegdk()
+
+        self.assertTrue(installed)
+        self.assertEqual(urls, [
+            (f"{base}/files/{asset}", True),
+            (f"{base}/engine-{self.REV}/{asset}", False),
+        ])
+        self.assertEqual((self.engine / "proton").read_text(), "fresh")
 
     def test_download_prunes_the_archives_of_other_engine_revisions(self):
         """An update must not need room for every engine it ever installed."""
@@ -258,7 +284,7 @@ class WineGDKInstallTests(unittest.TestCase):
         for path in stale + kept:
             path.write_bytes(b"cached")
 
-        def download_fresh(_url, dest, _label, _progress):
+        def download_fresh(_url, dest, _label, **_kwargs):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(fresh, dest)
 
@@ -313,7 +339,7 @@ class WineGDKInstallTests(unittest.TestCase):
         cached.write_bytes(b"stale cached bytes")
         cached.with_suffix(cached.suffix + ".part").write_bytes(b"stale part")
 
-        def download_fresh(_url, dest, _label, _progress):
+        def download_fresh(_url, dest, _label, **_kwargs):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(fresh, dest)
 

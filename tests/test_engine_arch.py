@@ -388,7 +388,7 @@ class ArmInstallTests(FakeHost, unittest.TestCase):
         payload = self.archive("GDK-Proton-xuser-arm64")
         urls = []
 
-        def fake_download(url, dest, *_args):
+        def fake_download(url, dest, *_args, **_kwargs):
             urls.append(url)
             Path(dest).parent.mkdir(parents=True, exist_ok=True)
             Path(dest).write_bytes(payload)
@@ -399,9 +399,10 @@ class ArmInstallTests(FakeHost, unittest.TestCase):
                                   side_effect=fake_download):
             out = winegdk.ensure_winegdk()
         self.assertEqual(out, self.proton_dir / "GDK-Proton-xuser-arm64")
+        # The launcher's file store first (docs/release-files.md).
         self.assertEqual(urls, [
             f"https://github.com/{config.WINEGDK_PREBUILT_REPO}/releases/"
-            f"download/engine-{ARM_REV}/GDK-Proton-xuser-{ARM_REV}.tar.gz"])
+            f"download/files/GDK-Proton-xuser-{ARM_REV}.tar.gz"])
         self.assertTrue((out / "proton").is_file())
         self.assertEqual(self.settings["proton"], str(out))
         self.assertEqual(self.settings["winegdk_arm64_built"],
@@ -414,7 +415,7 @@ class ArmInstallTests(FakeHost, unittest.TestCase):
     def test_unavailable_arm_engine_falls_back_to_x86(self):
         x86 = self.archive("GDK-Proton-xuser")
 
-        def fake_download(url, dest, *_args):
+        def fake_download(url, dest, *_args, **_kwargs):
             if "arm64ec" in url:
                 raise OSError("404")
             Path(dest).parent.mkdir(parents=True, exist_ok=True)

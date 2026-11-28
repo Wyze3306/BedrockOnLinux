@@ -149,14 +149,16 @@ jobs:
           cfg=bol/config.py
           repo="$(grep -m1 '^WINEGDK_PREBUILT_REPO = ' "$cfg" | cut -d'"' -f2)"
 
+          # The launcher's file store first, then the release of its own the
+          # file had before the store existed (scripts/release-files.sh).
           check_pin() {
             local label="$1" tag="$2" asset_glob="$3" pin="$4"
             local asset_repo="${5:-$repo}"
-            echo "== checking ${label} (tag: ${tag})"
+            echo "== checking ${label} (file store, else tag: ${tag})"
             rm -rf /tmp/pin-check; mkdir -p /tmp/pin-check
-            if ! gh release download "$tag" -R "$asset_repo" \
-                -p "$asset_glob" -D /tmp/pin-check 2>/tmp/pin-check.err; then
-              echo "::error::${label}: no release/asset matching '${asset_glob}' found on ${asset_repo} at tag '${tag}'." >&2
+            if ! GITHUB_REPOSITORY="$asset_repo" scripts/release-files.sh fetch \
+                "$asset_glob" /tmp/pin-check "$tag" >/dev/null 2>/tmp/pin-check.err; then
+              echo "::error::${label}: '${asset_glob}' is neither in the file store nor at tag '${tag}' on ${asset_repo}." >&2
               cat /tmp/pin-check.err >&2
               return 1
             fi
@@ -202,8 +204,15 @@ jobs:
           webview_rev="$(grep -m1 '^XODUS_WEBVIEW_REV = ' "$cfg" | cut -d'"' -f2)"
           webview_pin="$(grep -m1 '^XODUS_WEBVIEW_SHA256 = ' "$cfg" | cut -d'"' -f2)"
           xodus_repo="$repo"
+          in_store() {
+            [ -n "$(GITHUB_REPOSITORY="$repo" scripts/release-files.sh asset-sha "$1")" ]
+          }
           xodus_assets_ready() {
             local assets
+            if in_store "xodus-cli-${xodus_rev}.tar.gz"; then
+              [ -z "$webview_pin" ] || in_store "xodus-webview-${webview_rev}.tar.xz"
+              return
+            fi
             assets="$(gh release view "xodus-${xodus_rev}" -R "$repo" \
               --json assets --jq '.assets[].name' 2>/dev/null)" || return 1
             echo "$assets" | grep -Fxq "xodus-cli-${xodus_rev}.tar.gz" || return 1
@@ -222,8 +231,7 @@ jobs:
           fi
           # A PR can pin its attested fork build before the merge publishes
           # the same bytes upstream. Packaging still requires upstream assets.
-          if [ -n "$XODUS_CANDIDATE_REPO" ] && \
-              ! gh release view "xodus-${xodus_rev}" -R "$repo" >/dev/null 2>&1; then
+          if [ -n "$XODUS_CANDIDATE_REPO" ] && ! xodus_assets_ready; then
             xodus_repo="$XODUS_CANDIDATE_REPO"
           fi
           check_pin "xodus-cli (XODUS_ARCHIVE_SHA256)" \

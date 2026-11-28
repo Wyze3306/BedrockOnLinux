@@ -59,6 +59,23 @@ class WebLinkTests(unittest.TestCase):
         self.assertNotIn("file:", out)
         self.assertIn('href="https://x.example/&quot;onclick=&quot;"', out)
 
+    def test_only_launcher_versions_are_listed(self):
+        with headless_window() as window:
+            out = window._render_launcher_changelog_html([
+                {"tag_name": "engine-wow64-archs-native28"},
+                {"tag_name": "nightly"},
+                {"tag_name": "files"},
+                {"tag_name": "vkd3d-3.0.1-nv-dgc-32d230b6254d"},
+                {"tag_name": "v3.0.0"},
+            ])
+            only_files = window._render_launcher_changelog_html(
+                [{"tag_name": "files"}])
+
+        self.assertIn("v3.0.0", out)
+        for tag in ("engine-", "nightly", "files", "vkd3d-"):
+            self.assertNotIn(tag, out)
+        self.assertIn("No releases found.", only_files)
+
 
 class ChangelogClickTests(unittest.TestCase):
     def test_the_views_do_not_open_links_themselves(self):

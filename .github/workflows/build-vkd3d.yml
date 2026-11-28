@@ -135,17 +135,25 @@ jobs:
         run: |
           # A rebuilt payload gets a release of its own rather than replacing
           # the bytes earlier engine revisions were assembled from.
+          # The file store names the payload after the same lock
+          # (STORE_ASSET); VKD3D_TAG is the release it had before the store.
           if [ "$ARCH" = aarch64 ]; then
             if tag="$(scripts/vkd3d-release-tag.sh aarch64)"; then
-              echo "VKD3D_TAG=$tag" >> "$GITHUB_ENV"
-              echo "PUBLISHABLE=true" >> "$GITHUB_ENV"
+              {
+                echo "VKD3D_TAG=$tag"
+                echo "STORE_ASSET=$(scripts/vkd3d-release-tag.sh --asset aarch64)"
+                echo "PUBLISHABLE=true"
+              } >> "$GITHUB_ENV"
             else
               echo "::warning::ARM64X OUTPUT-SHA256SUMS is not committed: pin the hashes above and run again to publish."
               echo "PUBLISHABLE=false" >> "$GITHUB_ENV"
             fi
           else
-            echo "VKD3D_TAG=$(scripts/vkd3d-release-tag.sh)" >> "$GITHUB_ENV"
-            echo "PUBLISHABLE=true" >> "$GITHUB_ENV"
+            {
+              echo "VKD3D_TAG=$(scripts/vkd3d-release-tag.sh)"
+              echo "STORE_ASSET=$(scripts/vkd3d-release-tag.sh --asset)"
+              echo "PUBLISHABLE=true"
+            } >> "$GITHUB_ENV"
           fi
 
       - name: Pack the vkd3d output deterministically
@@ -185,59 +193,60 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILT_SHA256: ${{ steps.pack.outputs.sha256 }}
         run: |
-          # The x86-64 tag is named after the DLL lock only, and the tarball
-          # around those DLLs is not byte-reproducible (it carries the meson build
-          # dirs). Re-uploading onto an existing tag would swap the bytes the
-          # published engines were assembled and attested from, so an existing
-          # release is kept as it is. Its DLLs match this build's: the build
-          # script gated them on OUTPUT-SHA256SUMS, whose hash names the tag.
-          # A release.yml force_rebuild lands here too, so this skips rather
-          # than fails.
-          if ! err="$(gh release view "$VKD3D_TAG" -R "$GITHUB_REPOSITORY" 2>&1 >/dev/null)"; then
-            case "$err" in
-              *"release not found"*)
-                echo "PUBLISH_VKD3D=true" >> "$GITHUB_ENV"
-                exit 0 ;;
-            esac
-            echo "::error::cannot tell whether $VKD3D_TAG is published: $err" >&2
-            exit 1
+          # The x86-64 payload is named after the DLL lock only, and the
+          # tarball around those DLLs is not byte-reproducible (it carries the
+          # meson build dirs). Publishing it again would swap the bytes the
+          # published engines were assembled and attested from, so a payload
+          # already published -- in the file store, or in the release of its
+          # own it had before the store -- is kept as it is. Its DLLs match
+          # this build's: the build script gated them on OUTPUT-SHA256SUMS,
+          # whose hash names it. A release.yml force_rebuild lands here too,
+          # so this skips rather than fails.
+          published="$(scripts/release-files.sh asset-sha "$STORE_ASSET")"
+          where="$STORE_ASSET"
+          if [ -z "$published" ]; then
+            if ! err="$(gh release view "$VKD3D_TAG" -R "$GITHUB_REPOSITORY" 2>&1 >/dev/null)"; then
+              case "$err" in
+                *"release not found"*)
+                  echo "PUBLISH_VKD3D=true" >> "$GITHUB_ENV"
+                  exit 0 ;;
+              esac
+              echo "::error::cannot tell whether $VKD3D_TAG is published: $err" >&2
+              exit 1
+            fi
+            mkdir -p "$RUNNER_TEMP/published"
+            gh release download "$VKD3D_TAG" -R "$GITHUB_REPOSITORY" \
+              -p "$TARBALL.sha256" -D "$RUNNER_TEMP/published"
+            published="$(cut -d' ' -f1 "$RUNNER_TEMP/published/$TARBALL.sha256")"
+            where="$VKD3D_TAG"
           fi
-          mkdir -p "$RUNNER_TEMP/published"
-          gh release download "$VKD3D_TAG" -R "$GITHUB_REPOSITORY" \
-            -p "$TARBALL.sha256" -D "$RUNNER_TEMP/published"
-          published="$(cut -d' ' -f1 "$RUNNER_TEMP/published/$TARBALL.sha256")"
           if [ "$published" = "$BUILT_SHA256" ]; then
-            echo "$VKD3D_TAG already holds these bytes ($published)."
+            echo "$where already holds these bytes ($published)."
           elif [ "$ARCH" = aarch64 ]; then
             # The ARM64X payload is byte-reproducible (its pin is the
             # tarball itself), so different bytes are a broken build.
-            echo "::error::$VKD3D_TAG already holds $published" >&2
+            echo "::error::$where already holds $published" >&2
             exit 1
           else
-            echo "::warning::$VKD3D_TAG already holds $published; this build packed $BUILT_SHA256. Keeping the published release (same DLLs, see OUTPUT-SHA256SUMS); this run's tarball stays a workflow artifact only."
+            echo "::warning::$where already holds $published; this build packed $BUILT_SHA256. Keeping the published payload (same DLLs, see OUTPUT-SHA256SUMS); this run's tarball stays a workflow artifact only."
           fi
           echo "PUBLISH_VKD3D=false" >> "$GITHUB_ENV"
+
+      - name: Name the payload after its lock for the file store
+        if: ${{ inputs.publish && env.PUBLISHABLE == 'true' && env.PUBLISH_VKD3D == 'true' }}
+        run: |
+          cp "$TARBALL" "$STORE_ASSET"
+          sha256sum "$STORE_ASSET" > "$STORE_ASSET.sha256"
 
       - name: Attest build provenance
         if: ${{ inputs.publish && env.PUBLISHABLE == 'true' && env.PUBLISH_VKD3D == 'true' }}
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: ${{ env.TARBALL }}
+          subject-path: ${{ env.STORE_ASSET }}
 
-      - name: Publish the vkd3d payload release
+      # Reproducible universal vkd3d-proton (EXT + restored NV DGC) build.
+      - name: Publish the vkd3d payload to the launcher's file store
         if: ${{ inputs.publish && env.PUBLISHABLE == 'true' && env.PUBLISH_VKD3D == 'true' }}
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: ${{ env.VKD3D_TAG }}
-          target_commitish: ${{ github.sha }}
-          name: ${{ env.ARCH == 'aarch64' && 'vkd3d-proton universal DGC 3.0.1 (ARM64X, experimental)' || 'vkd3d-proton universal DGC 3.0.1' }}
-          make_latest: false
-          prerelease: true
-          body: >
-            Reproducible universal vkd3d-proton (EXT + restored NV DGC) build.
-            SHA-256 ${{ steps.pack.outputs.sha256 }}.
-            Verify provenance with: gh attestation verify <file> --repo ${{ github.repository }}
-          files: |
-            ${{ env.TARBALL }}
-            ${{ env.TARBALL }}.sha256
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release-files.sh publish "$STORE_ASSET"

@@ -145,6 +145,14 @@ WINEGDK_OUT = PROTON_DIR / "GDK-Proton-xuser"
 # Managed engines are accepted only when their archive and source identity
 # match the reviewed pins below.
 WINEGDK_PREBUILT_REPO = "Wyze3306/BedrockOnLinux"
+# Every file the launcher downloads by itself -- the game engines, xodus-cli
+# and its WebKitGTK runtime, the OpenSSL XCurl set -- is an asset of this one
+# release of WINEGDK_PREBUILT_REPO (scripts/release-files.sh), so that its
+# Releases page lists the launcher's versions and nothing else. A file
+# published before the store existed has a release of its own (engine-<rev>,
+# xodus-<rev>, xcurl-<rev>): launchers up to 3.0.0 and other projects
+# download from those, and this one falls back to them.
+FILES_TAG = "files"
 # The commit alone does not identify vendored follow-up patches.
 WINEGDK_SOURCE_MANIFEST_SHA256 = "1ca76fabc4d841432d58fb7c4faaab7a0eb972b7b7a450e633b21e991135904c"
 # How the WineGDK prefix is built from that source, when not the way it first

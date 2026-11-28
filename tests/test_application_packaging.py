@@ -303,13 +303,17 @@ class ApplicationPackagingPolicyTests(unittest.TestCase):
             "make_latest: ${{ env.RELEASE_PRERELEASE == 'false' }}",
             workflow,
         )
+        # The builds the launcher downloads publish to the file store, which
+        # is never a version tag nor "Latest" (tests/test_release_files.py).
+        store = (ROOT / "scripts/release-files.sh").read_text(encoding="utf-8")
+        self.assertIn("--prerelease --latest=false", store)
         for name in (
                 "build-engine.yml", "build-winegdk.yml",
-                "build-xcurl.yml", "build-vkd3d.yml"):
+                "build-xcurl.yml", "build-vkd3d.yml", "build-xodus.yml"):
             component = (ROOT / ".github/workflows" / name).read_text(
                 encoding="utf-8")
-            self.assertIn("target_commitish: ${{ github.sha }}", component)
-            self.assertIn("make_latest: false", component)
+            self.assertIn("scripts/release-files.sh publish", component)
+            self.assertNotIn("make_latest", component)
 
     def test_desktop_entries_launch_gui_and_match_window_class(self):
         for relative in (

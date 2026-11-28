@@ -117,6 +117,15 @@ class ReleaseTagTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(),
                          "vkd3d-3.0.1-nv-dgc-" + lock[:12])
 
+    def test_store_names_carry_the_output_hash_lock(self):
+        lock = _lock()["VKD3D_OUTPUT_HASHES_SHA256"][:12]
+        result = subprocess.run(
+            [_BASH, str(RELEASE_TAG), "--asset"], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(),
+                         f"vkd3d-universal-3.0.1-nv-dgc-{lock}.tar.gz")
+
     def test_tag_refuses_an_output_lock_that_does_not_match(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

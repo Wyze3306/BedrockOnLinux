@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from bol import config, hostarch, webview, xodus
+from bol.util import AssetMissing
 from tests.test_webview import _bundle_archive, _library
 from tests.test_xodus import _cli_archive
 
@@ -105,23 +106,26 @@ class ArmCliTests(unittest.TestCase):
             xodus.ensure_cli()
         self.assertIn(b"arm", (self.target / "xodus-cli").read_bytes())
 
-    def test_downloads_from_the_aarch64_tag(self):
+    def test_downloads_from_the_store_then_the_aarch64_tag(self):
         digest = _cli_archive(self.base / "built.tar.gz")
         payload = (self.base / "built.tar.gz").read_bytes()
         urls = []
 
-        def fake_download(url, dest, *_args, **_kwargs):
+        def fake_download(url, dest, *_args, missing_ok=False, **_kwargs):
             urls.append(url)
+            if "/files/" in url and missing_ok:
+                raise AssetMissing(url)
             Path(dest).parent.mkdir(parents=True, exist_ok=True)
             Path(dest).write_bytes(payload)
 
         with self._patches(digest), \
-                mock.patch.object(xodus, "download", fake_download), \
-                mock.patch.object(xodus, "gh_releases", _no_feed):
+                mock.patch.object(xodus, "download", fake_download):
             xodus.ensure_cli()
+        base = f"https://github.com/{config.WINEGDK_PREBUILT_REPO}/releases"
         self.assertEqual(urls, [
-            f"https://github.com/{config.WINEGDK_PREBUILT_REPO}/releases/"
-            "download/xodus-testrev-aarch64/xodus-cli-testrev-aarch64.tar.gz"])
+            f"{base}/download/files/xodus-cli-testrev-aarch64.tar.gz",
+            f"{base}/download/xodus-testrev-aarch64/"
+            "xodus-cli-testrev-aarch64.tar.gz"])
 
     def test_without_the_pin_the_x86_64_build_is_used(self):
         digest = _cli_archive(self.sibling / "xodus-cli-testrev.tar.gz")
@@ -157,13 +161,17 @@ class ArmWebviewTests(unittest.TestCase):
 
     def test_the_pin_names_the_aarch64_asset_and_tag(self):
         with self._patches("cd" * 32):
-            rev, sha256, url, asset = webview._pin()
+            rev, sha256, urls, asset = webview._pin()
         self.assertEqual(rev, "trixie-9-aarch64")
         self.assertEqual(sha256, "cd" * 32)
         self.assertEqual(asset, "xodus-webview-trixie-9-aarch64.tar.xz")
-        self.assertTrue(url.endswith(
+        store, legacy = urls
+        self.assertTrue(store.endswith(
+            "/releases/download/files/"
+            "xodus-webview-trixie-9-aarch64.tar.xz"), store)
+        self.assertTrue(legacy.endswith(
             "/releases/download/xodus-testrev-aarch64/"
-            "xodus-webview-trixie-9-aarch64.tar.xz"), url)
+            "xodus-webview-trixie-9-aarch64.tar.xz"), legacy)
 
     def test_installs_the_aarch64_runtime(self):
         archive = self.base / "sibling" / "xodus-webview-trixie-9-aarch64.tar.xz"

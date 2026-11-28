@@ -5274,6 +5274,10 @@ class MainWindow(QMainWindow):
         return "\n".join(lines)
 
     def _render_launcher_changelog_html(self, rels) -> str:
+        # Launcher versions only: the repository's other releases hold the
+        # files it downloads (docs/release-files.md) and the daily test build.
+        rels = [rel for rel in rels or []
+                if re.fullmatch(r"v\d+(\.\d+)*", rel.get("tag_name") or "")]
         if not rels:
             return self._wrap_changelog_html("<i class='empty'>No releases found.</i>")
         parts = []

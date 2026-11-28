@@ -42,7 +42,6 @@ from .config import (
     LEGACY_XODUS_KEYRING,
     LOGS,
     MC_PRODUCTS,
-    WINEGDK_PREBUILT_REPO,
     XODUS_ARCHIVE_SHA256,
     XODUS_ARM64_ARCHIVE_SHA256,
     XODUS_BIN,
@@ -52,7 +51,14 @@ from .config import (
     XODUS_REV,
 )
 from .log import BolError, Cancelled, fixable, info, ok, warn
-from .util import _fetch_with_fallback, asset_url, download, gh_releases
+from .util import (
+    AssetMissing,
+    _fetch_with_fallback,
+    download,
+    download_first,
+    files_url,
+    release_asset_url,
+)
 
 
 class XodusError(BolError):
@@ -324,8 +330,14 @@ def cli_available():
 ARM64_SUFFIX = "-aarch64"
 
 
+def _release_urls(rev, asset):
+    """Where `asset` of xodus build `rev` is served: the launcher's file
+    store, else the release of its own builds had before the store."""
+    return (files_url(asset), release_asset_url(f"xodus-{rev}", asset))
+
+
 def _arm64_build():
-    """(marker, sha256, url, asset) of the native aarch64 xodus-cli, or None
+    """(marker, sha256, urls, asset) of the native aarch64 xodus-cli, or None
     where it is not used (bol.hostarch.native_helpers).
 
     The data feed names x86-64 builds only, so an ARM computer keeps to the
@@ -335,9 +347,8 @@ def _arm64_build():
     if not hostarch.native_helpers():
         return None
     asset = f"xodus-cli-{XODUS_REV}{ARM64_SUFFIX}.tar.gz"
-    url = (f"https://github.com/{WINEGDK_PREBUILT_REPO}/releases/download/"
-           f"xodus-{XODUS_REV}{ARM64_SUFFIX}/{asset}")
-    return (XODUS_REV + ARM64_SUFFIX, XODUS_ARM64_ARCHIVE_SHA256, url, asset)
+    return (XODUS_REV + ARM64_SUFFIX, XODUS_ARM64_ARCHIVE_SHA256,
+            _release_urls(XODUS_REV + ARM64_SUFFIX, asset), asset)
 
 
 def effective_rev():
@@ -361,13 +372,14 @@ def ensure_cli():
     """
     arm64 = _arm64_build()
     if arm64:
-        marker, sha256, url, asset = arm64
-        return _ensure_cli(marker, sha256, url, asset=asset)
+        marker, sha256, urls, asset = arm64
+        return _ensure_cli(marker, sha256, urls, asset=asset)
     from . import feed
     rev, sha256, url = feed.resolve("xodus", XODUS_REV, XODUS_ARCHIVE_SHA256)
     if rev != XODUS_REV:
         try:
-            return _ensure_cli(rev, sha256, url, attempts=2)
+            return _ensure_cli(rev, sha256, (url,) if url else None,
+                               attempts=2)
         except BolError as exc:
             warn(f"The updated Minecraft downloader ({rev}) could not be "
                  f"installed ({exc}); using the one this launcher shipped "
@@ -375,7 +387,7 @@ def ensure_cli():
     return _ensure_cli(XODUS_REV, XODUS_ARCHIVE_SHA256, None)
 
 
-def _ensure_cli(rev, pinned_sha256, direct_url, attempts=5, asset=None):
+def _ensure_cli(rev, pinned_sha256, urls, attempts=5, asset=None):
     marker = XODUS_DIR / ".rev"
     if cli_available() and marker.exists() and \
             marker.read_text().strip() == rev:
@@ -396,32 +408,18 @@ def _ensure_cli(rev, pinned_sha256, direct_url, attempts=5, asset=None):
                 if (anchor / asset).is_file()), None)
     local_archive = tar is not None
 
-    if not local_archive and direct_url:
+    if not local_archive:
         tar = CACHE / asset
         if not tar.is_file():
             info("Downloading the Minecraft downloader (one-time) …")
-            download(direct_url, tar, "Xodus downloader", attempts=attempts)
-    elif not local_archive:
-        try:
-            # Every release, as for the OpenSSL XCurl set (bol.fixups).
-            rels = gh_releases(WINEGDK_PREBUILT_REPO, fetch_all=True)
-        except Exception as exc:
-            raise XodusError(
-                f"Could not look up the Xodus downloader ({exc}). Check the "
-                "network connection and try again."
-            ) from exc
-        url = None
-        for rel in rels or []:
-            url, _name, _ = asset_url(rel, lambda n: n == asset)
-            if url:
-                break
-        if not url:
-            raise XodusError(
-                f"The Xodus downloader '{asset}' has not been published yet.")
-        tar = CACHE / asset
-        if not tar.is_file():
-            info("Downloading the Minecraft downloader (one-time) …")
-            download(url, tar, "Xodus downloader")
+            try:
+                download_first(urls or _release_urls(rev, asset), tar,
+                               "Xodus downloader", attempts=attempts,
+                               fetch=download, missing_ok=True)
+            except AssetMissing as exc:
+                raise XodusError(
+                    f"The Xodus downloader '{asset}' has not been published "
+                    "yet.") from exc
 
     expected = pinned_sha256.strip().lower()
     if not expected:

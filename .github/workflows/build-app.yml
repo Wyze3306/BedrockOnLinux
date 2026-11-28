@@ -76,7 +76,10 @@ jobs:
           verify_asset() {
             local asset="$1" expected="$2" directory
             directory="$(mktemp -d)"
-            gh release download "xodus-${rev}" -R "$repo" -p "$asset" -D "$directory"
+            # The launcher's file store, else the release xodus-cli had of
+            # its own before the store existed.
+            GITHUB_REPOSITORY="$repo" scripts/release-files.sh fetch \
+              "$asset" "$directory" "xodus-${rev}"
             echo "${expected}  ${directory}/${asset}" | sha256sum -c -
           }
           verify_asset "xodus-cli-${rev}.tar.gz" "$pin"
@@ -110,15 +113,15 @@ jobs:
           engine_pin="$(grep -m1 '^WINEGDK_ARCHIVE_SHA256 = ' bol/config.py | cut -d'"' -f2)"
           xcurl_pin="$(grep -m1 '^OPENSSL_XCURL_ARCHIVE_SHA256 = ' bol/config.py | cut -d'"' -f2)"
           mkdir -p dist
-          gh release download "engine-${rev}" -R "${{ github.repository }}" \
-            -p "GDK-Proton-xuser-${rev}.tar.gz*" -D dist
+          # The launcher's file store, else the releases of their own the
+          # engine and the set had before the store existed.
+          scripts/release-files.sh fetch "GDK-Proton-xuser-${rev}.tar.gz" dist "engine-${rev}"
           gh attestation verify "dist/GDK-Proton-xuser-${rev}.tar.gz" \
             -R "${{ github.repository }}"
           # Attestation proves provenance; also fail closed unless the bytes equal
           # the committed pin (not the downloaded .sha256 sidecar).
           echo "${engine_pin}  dist/GDK-Proton-xuser-${rev}.tar.gz" | sha256sum -c -
-          gh release download "xcurl-${xrev}" -R "${{ github.repository }}" \
-            -p "openssl-xcurl-set-${xrev}.tar.gz*" -D dist
+          scripts/release-files.sh fetch "openssl-xcurl-set-${xrev}.tar.gz" dist "xcurl-${xrev}"
           gh attestation verify "dist/openssl-xcurl-set-${xrev}.tar.gz" \
             -R "${{ github.repository }}"
           echo "${xcurl_pin}  dist/openssl-xcurl-set-${xrev}.tar.gz" | sha256sum -c -
@@ -237,8 +240,10 @@ jobs:
             # Rolling nightly: one release/tag, moved to HEAD each run (see the
             # "Roll the nightly tag" step). Date + short commit in the name give
             # freshness and traceability without accumulating releases.
+            # The name says it is not a version to play on: it sits at the
+            # top of the Releases page, above the launcher's real versions.
             tag="nightly"
-            name="BedrockOnLinux nightly ${ver} ($(date -u +%Y-%m-%d), ${GITHUB_SHA:0:7})"
+            name="Daily test build, not for playing (BedrockOnLinux ${ver}, $(date -u +%Y-%m-%d), ${GITHUB_SHA:0:7})"
             pre="true"
           elif [ "$channel" = "prerelease" ]; then
             # A versioned pre-release: its own v<VERSION> tag, marked as a

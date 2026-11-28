@@ -109,21 +109,12 @@ jobs:
         with:
           subject-path: ${{ env.TARBALL }}
 
-      - name: Publish the set release
+      # Reproducible from-source OpenSSL-XCurl set: the msys2 MinGW curl
+      # closure (pinned by SHA in third_party/xcurl-msys2.lock) plus the
+      # CA-shim and cryptbase RNG stub compiled from src/. It goes to the
+      # launcher's file store, not to a release of its own.
+      - name: Publish the set to the launcher's file store
         if: ${{ inputs.publish }}
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: xcurl-${{ env.REV }}
-          target_commitish: ${{ github.sha }}
-          name: OpenSSL-XCurl set ${{ env.REV }} (from source)
-          make_latest: false
-          body: >
-            Reproducible from-source OpenSSL-XCurl set: the msys2 MinGW curl
-            closure (pinned by SHA in third_party/xcurl-msys2.lock) plus the
-            CA-shim and cryptbase RNG stub compiled from src/. SHA-256
-            ${{ steps.build.outputs.sha256 }}.
-            Verify with: gh attestation verify <file> --repo ${{ github.repository }}
-          files: |
-            ${{ env.TARBALL }}
-            ${{ env.TARBALL }}.sha256
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release-files.sh publish "$TARBALL"
