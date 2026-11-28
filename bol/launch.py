@@ -30,6 +30,7 @@ from . import (
     fullscreen_fix,
     gameevents,
     instances,
+    mangohud,
     mods,
     msal_flights,
     packcache,
@@ -1147,6 +1148,7 @@ def _launch_uwp(lock_fds, edition_entry, gd, exe, on_started=None,
         gd, debug="err+all,fixme+all,+storecontext,+loaddll" if diag else None)
     apply_custom_env(env, s.get("custom_env") or "")
     _warn_custom_env_overrides(s.get("custom_env") or "")
+    mangohud.hide_unreadable_power(env, s)
     info(f"Starting {title} {mc_version_str(Path(gd)) or ''} on wine-uwp …"
          .replace("  ", " "))
     uwp.before_launch(env)
@@ -1538,6 +1540,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
                                           game_args=game_args)
     else:
         cmd = cmd + game_args
+    gs_argv = []
     if use_gamescope:
         if gs_opt and not env_flag(gs_opt):
             gs_argv = ["gamescope"] + shlex.split(gs_opt)
@@ -1553,6 +1556,8 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
             "Minecraft was not started; click PLAY again.")
     apply_custom_env(env, s.get("custom_env") or "")
     _warn_custom_env_overrides(s.get("custom_env") or "")
+    # After the custom environment, where MANGOHUD=1 is usually set (#395).
+    mangohud.hide_unreadable_power(env, s, gamescope=gs_argv)
     # After the custom environment, which can change LANG or keep
     # pressure-vessel's own locale generation: a host without en_US.UTF-8 or
     # without the player's locale gets the copy built at the first launch,

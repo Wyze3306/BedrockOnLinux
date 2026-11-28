@@ -84,6 +84,18 @@
 
 ### Fixed
 
+- **MangoHud no longer shows an absurd GPU power on cards without a power
+  reading (#395).** The NVIDIA driver of some cards has no power reading
+  (`nvidia-smi` shows N/A), and MangoHud 0.8.4 and older then display
+  leftover memory as watts: 2278630 W with the Flatpak's MangoHud
+  extension, 0.0 W with other builds that happen to leave a zero there.
+  When MangoHud is on for the game (`MANGOHUD=1`, or gamescope's
+  `--mangoapp`) and the driver says it has no reading for the game's card,
+  the launcher now turns MangoHud's GPU power field off for that game,
+  adding `gpu_power=0` after the player's own MangoHud options; the rest of
+  their MangoHud setup is unchanged. A `MANGOHUD_CONFIG` that sets
+  `gpu_power` itself is left as it is. MangoHud's own fix (upstream
+  698bea3, in 0.8.5-rc1) shows 0 W instead.
 - **"Report a problem" is offered only for what the launcher may have got
   wrong.** When PLAY stops on something the player fixes from the message
   itself (a Microsoft account that does not own the game, the ten-device
