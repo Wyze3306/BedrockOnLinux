@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs the vendor's own AppRun from the AppImage tree apply_extra unpacked. It
+# points SSL_CERT_FILE at the bundled CA list and execs usr/bin/bedrock-on-linux
+# with the bundled CPython, which finds its libraries through RUNPATHs.
+exec /app/extra/bedrock-on-linux/AppRun "$@"

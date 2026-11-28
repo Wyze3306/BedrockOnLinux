@@ -1,0 +1,39 @@
+id: io.github.wyze3306.BedrockOnLinux
+name: BedrockOnLinux
+summary: Install and play Minecraft Bedrock (the Windows GDK edition) on Linux
+website: https://github.com/Wyze3306/BedrockOnLinux
+source_url: https://github.com/Wyze3306/BedrockOnLinux
+build:
+  manifest: io.github.wyze3306.BedrockOnLinux.yml
+  branch: stable
+  mode: extra-data
+catalog:
+  category: Game
+  tags:
+    - Minecraft
+    - Bedrock
+    - Launcher
+    - Wine
+upstream:
+  # Upstream's own Flatpak manifest, kept for Flathub. It builds the launcher
+  # from source on a Python module stack; this package unpacks the released
+  # AppImage, which carries its own Python, so those modules have nothing to do.
+  manifest: flatpak/io.github.wyze3306.BedrockOnLinux.yml
+  accept_missing_modules:
+    - python3
+    - python3-dependencies
+update:
+  command: ./resolve-update.sh
+  # The repository also publishes the launcher's own engine and tool builds
+  # (engine-*, winegdk-*, xodus-*, xcurl-*, vkd3d-*) and a nightly as releases
+  # of their own. They are downloads the app fetches, not the app: only the
+  # vX.Y.Z tags carry its AppImage.
+  stale_ignore: '^(engine|winegdk|xodus|xcurl|vkd3d|nightly)'
+policy:
+  proprietary: false
+  dangerous_permissions:
+    # Minecraft is a game played with a GPU (Vulkan through vkd3d-proton) and,
+    # often, a game controller: Wine's winebus reads pads through hidraw and
+    # evdev, which have no portal. The same grant as upstream's own Flatpak
+    # manifest.
+    - --device=all

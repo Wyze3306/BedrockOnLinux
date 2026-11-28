@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.wyze3306.BedrockOnLinux</id>
+  <launchable type="desktop-id">io.github.wyze3306.BedrockOnLinux.desktop</launchable>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>BedrockOnLinux</name>
+  <summary>Install and play Minecraft Bedrock on Linux</summary>
+
+  <description>
+    <p>
+      BedrockOnLinux installs and runs the Windows (GDK) edition of Minecraft
+      Bedrock on Linux. You sign in with your Microsoft account, pick a
+      version, and press Play: the launcher downloads the game from Microsoft
+      with your account, prepares its own Wine engine, and starts it.
+      Multiplayer servers, Realms, friends and the Marketplace work from
+      inside the game. You must own Minecraft; no game files are included.
+    </p>
+    <p>
+      On first launch the launcher downloads its WineGDK engine and Microsoft
+      Store downloader from the project's own releases, and umu-launcher, each
+      checked against a SHA-256 pinned in the launcher. umu-launcher then
+      fetches Valve's Steam Linux Runtime, the container the game runs in;
+      that runtime follows Valve's releases and is not pinned by the launcher.
+    </p>
+    <p>
+      This is a community package. It installs the official AppImage from the
+      project's GitHub releases, unmodified. Updates come through Flatpak; the
+      launcher's own update check says so instead of replacing itself.
+    </p>
+  </description>
+
+  <categories>
+    <category>Game</category>
+    <category>ActionGame</category>
+  </categories>
+
+  <keywords>
+    <keyword>minecraft</keyword>
+    <keyword>bedrock</keyword>
+    <keyword>gdk</keyword>
+    <keyword>wine</keyword>
+    <keyword>proton</keyword>
+    <keyword>mcbe</keyword>
+  </keywords>
+
+  <url type="homepage">https://github.com/Wyze3306/BedrockOnLinux</url>
+  <url type="bugtracker">https://github.com/Wyze3306/BedrockOnLinux/issues</url>
+  <url type="vcs-browser">https://github.com/Wyze3306/BedrockOnLinux</url>
+
+  <developer id="io.github.wyze3306">
+    <name>Wyze3306</name>
+  </developer>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#84d160</color>
+    <color type="primary" scheme_preference="dark">#23262e</color>
+  </branding>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>The launcher, ready to play</caption>
+      <image>https://raw.githubusercontent.com/Wyze3306/BedrockOnLinux/v2.3.1/screenshot.png</image>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="violence-fantasy">mild</content_attribute>
+    <content_attribute id="social-chat">moderate</content_attribute>
+    <content_attribute id="money-purchasing">mild</content_attribute>
+  </content_rating>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>gamepad</control>
+  </supports>
+
+  <releases>
+    <release version="2.3.1" date="2026-11-11">
+      <url type="details">https://github.com/Wyze3306/BedrockOnLinux/releases/tag/v2.3.1</url>
+    </release>
+  </releases>
+</component>

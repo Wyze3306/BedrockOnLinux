@@ -1,0 +1,84 @@
+id: io.github.wyze3306.BedrockOnLinux
+# The id is upstream's own: the one its Flatpak build and its launcher use
+# (bol/config.py FLATPAK_APP_ID).
+#
+# The GNOME runtime, as upstream's own manifest uses, for one library:
+# libwebkit2gtk-4.1. The Microsoft sign-in that downloads Minecraft opens in a
+# WebKitGTK webview (xodus-cli), and org.freedesktop.Platform has no WebKitGTK.
+# The AppImage brings everything else: its own CPython 3.12, PySide6 (Qt 6)
+# and cryptography, found through RUNPATHs inside its tree.
+runtime: org.gnome.Platform
+runtime-version: "51"
+sdk: org.gnome.Sdk
+command: bedrock-on-linux
+separate-locales: false
+build-options:
+  no-debuginfo: true
+finish-args:
+  - --share=ipc
+  # Minecraft and the launcher's engine are downloaded at run time, the
+  # Microsoft account signs in, and the game plays online.
+  - --share=network
+  # The launcher window is native Wayland when the session has it, but
+  # Minecraft draws through Wine's X11 driver, so XWayland is needed too.
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  # GPU (Vulkan) and game controllers, which Wine reads through hidraw and
+  # evdev. Declared in flatpark.yml.
+  - --device=all
+  # Wine needs ptrace (devel) and runs 32-bit Windows code (multiarch). The
+  # game runs in a Steam Linux Runtime container that pressure-vessel asks
+  # the org.freedesktop.portal.Flatpak portal for as a sub-sandbox of this
+  # app; that needs no permission. per-app-dev-shm gives the sub-sandbox the
+  # app's /dev/shm, without which pressure-vessel warns about flatpak#4214.
+  - --allow=devel
+  - --allow=multiarch
+  - --allow=per-app-dev-shm
+  # Read-only, for the launcher's one-time copy of an earlier native
+  # install's data (worlds, settings) into the sandbox's data directory.
+  # The native folder is left as it was.
+  - --filesystem=~/.local/share/bedrock-on-linux:ro
+  # Discord Rich Presence: one socket each for the host and the Flatpak build
+  # of Discord, nothing else. No :create, which would put a directory where
+  # Discord makes its socket.
+  - --filesystem=xdg-run/discord-ipc-0
+  - --filesystem=xdg-run/app/com.discordapp.Discord/discord-ipc-0
+modules:
+  - name: bedrock-on-linux
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 apply_extra.sh /app/bin/apply_extra
+      - install -Dm755 bedrock-on-linux-wrapper /app/bin/bedrock-on-linux
+      - install -Dm644 io.github.wyze3306.BedrockOnLinux.desktop /app/share/applications/io.github.wyze3306.BedrockOnLinux.desktop
+      - install -Dm644 io.github.wyze3306.BedrockOnLinux.metainfo.xml /app/share/metainfo/io.github.wyze3306.BedrockOnLinux.metainfo.xml
+      - install -Dm644 io.github.wyze3306.BedrockOnLinux.png /app/share/icons/hicolor/256x256/apps/io.github.wyze3306.BedrockOnLinux.png
+    sources:
+      # Kept outside the managed block, which update-pins rebuilds from the
+      # resolver's output.
+      - type: extra-data
+        filename: appimage-tools.tar.xz
+        only-arches:
+          - x86_64
+        url: https://github.com/flatpark/prebuilt/releases/download/appimage-tools-v3/appimage-tools-appimage-tools-v3-fd-26.08-x86_64.tar.xz
+        sha256: 2ad7847e871c2f7f24506ecf202ea971ab684aaa457e2f6a594f6bfac96f1297
+        size: 57508
+      # BEGIN MANAGED EXTRA-DATA
+      - type: extra-data
+        filename: bedrock-on-linux.AppImage
+        only-arches:
+          - x86_64
+        url: https://github.com/Wyze3306/BedrockOnLinux/releases/download/v2.3.1/BedrockOnLinux-2.3.1-x86_64.AppImage
+        sha256: 15a4a978b711f268f34c5761c68b93e852701c133586a8f188748b6e8972fedb
+        size: 174414328
+      # END MANAGED EXTRA-DATA
+      - type: file
+        path: apply_extra.sh
+      - type: file
+        path: bedrock-on-linux-wrapper
+      - type: file
+        path: io.github.wyze3306.BedrockOnLinux.desktop
+      - type: file
+        path: io.github.wyze3306.BedrockOnLinux.metainfo.xml
+      - type: file
+        path: io.github.wyze3306.BedrockOnLinux.png
