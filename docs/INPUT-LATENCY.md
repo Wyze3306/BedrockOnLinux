@@ -96,7 +96,7 @@ and vkd3d-proton isolates the swap chain from the game:
   and vkd3d-proton's limiter at 60 FPS measured 89, then 80 ms. The game's
   own Max Framerate at 60 does as well as the pace (70, then 69 ms), but it
   waits by spinning a whole core in Wine's message loop, which is why the
-  launcher swaps it for vkd3d-proton's.
+  launcher paces the game just under it with vkd3d-proton's (#202).
 - **winewayland halves it.** With true presentation feedback from the
   compositor the present-wait means *shown*, and the frame reaches the
   screen one refresh after the game presents it: 73 ms against 154 for the
@@ -143,6 +143,41 @@ limiter's cost. It was measured in cage nested in gamescope only, where its
 full-screen popup window stalled after one frame in the test application and
 only rightward motions reached the game. It needs a run on a real GNOME or KDE
 session first.
+
+## Measured again on 3.0.0 (2026-11-28)
+
+Minecraft 1.26.65, engine `native28`, the same headless gamescope at
+1600x900 and 60 Hz, a Creative world at render distance 16, standing at
+0,0 then turning the camera for 20 s. The machine ran other work meanwhile
+(load 22–33 on 12 threads), so the absolute numbers are higher than above;
+the configurations were measured back to back under the same load.
+
+| Configuration | shown, ms | turning: average FPS | turning: 1% low |
+|---|---|---|---|
+| vsync on, no pace (2.3.1) | 137 [109–160] | 56 | 22 |
+| vsync on, paced at 59.82 FPS (3.0.0 default) | **102** [82–116] | 56 | 22 |
+| vsync off, 60 FPS cap | 94 [74–111] | 59 | 21 |
+| vsync off, 240 FPS cap | 87 [66–104] | 60 | 19 |
+| vsync off, uncapped | 92 [76–113] | 66 | 19 |
+| paced, *Improved Input Response* on | 98 [80–126] | 50 | 16 |
+
+- The pace still takes about a third off the delay.
+- **The pace does not cause the stutter.** The frame times while turning have
+  the same spikes with and without it (1% low 22 FPS both), and the same
+  again standing still (28 and 27). Here they come from the load on the
+  machine: the game's main thread used 22% of a core and the GPU 25% at a
+  low clock, so the game waited for a CPU to run on, not for work. Uncapped,
+  it reached only 66–70 FPS for the same reason, so the caps above 60 could
+  not show their lower delay.
+- *Improved Input Response* changed nothing measurable; that run was also
+  the most loaded one (load 33).
+- Respawning in a single-player world (`/kill` far from spawn and near it,
+  after four 3000-block teleports) froze nothing: worst frame 47–275 ms.
+  The freeze reported on respawn needs other players around, which this
+  setup cannot sign in to.
+- Full screen with *Keep the mouse inside the window* (F11 in the virtual
+  desktop): the picture fills the screen, with no white band and the
+  hotbar on screen (d608b6f).
 
 ## How it was measured
 

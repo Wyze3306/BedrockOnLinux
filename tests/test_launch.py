@@ -111,8 +111,6 @@ class ReadyLaunchHarness:
             # from a launch test: the first is a real settings file, the
             # second would start a real probe scope.
             mock.patch.object(launch, "find_options_file", return_value=None),
-            mock.patch.object(launch, "set_aside_game_frame_limit",
-                              side_effect=record("set_aside_frame_limit")),
             mock.patch.object(launch, "restore_game_frame_limits",
                               side_effect=record("restore_frame_limits", [])),
             mock.patch.object(launch, "guard_game_command", side_effect=guard),
@@ -1704,9 +1702,10 @@ class XboxPresenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
 class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
     """What a launch does to the game's own settings and process, in order.
 
-    The player's Max Framerate is set aside only once the settings file has
-    been repaired and before its copy is taken, so the copy is of the file
-    the game really starts from; it is put back only after the game is gone.
+    The player's Max Framerate is never set aside any more (#202): a value an
+    earlier version left aside goes back once the settings file has been
+    repaired and before its copy is taken, so the copy is of the file the
+    game really starts from.
     """
 
     def _play(self, environ=None, swap_guard=False, signed_out=False,
@@ -1732,24 +1731,23 @@ class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
                 account=account,
             )
 
-    def test_a_paced_launch_sets_the_limit_aside_between_repair_and_copy(self):
+    def test_a_paced_launch_leaves_the_limit_in_place(self):
+        # The launcher's limiter sits under the game's own limit now; the
+        # file keeps what the player chose, so the game's menu shows it.
         self.assertEqual(self._play(environ={"BOL_FRAME_RATE": "60"}), 0)
         self.assertEqual(
             self.options_calls,
-            ["restore_truncated", "before_launch", "set_aside_frame_limit",
+            ["restore_truncated", "before_launch", "restore_frame_limits",
              "snapshot", "game",
              "restore_truncated", "patch_options", "restore_frame_limits"])
 
-    def test_the_worlds_are_backed_up_from_the_repaired_untouched_file(self):
+    def test_the_worlds_are_backed_up_from_the_repaired_file(self):
         # After a torn settings file is put back, so the backup is never of
-        # the torn one; before the launcher sets anything aside for the
-        # session, so restoring it never brings back a session's setting.
+        # the torn one.
         self.assertEqual(self._play(environ={"BOL_FRAME_RATE": "60"}), 0)
         calls = self.options_calls
         self.assertLess(calls.index("restore_truncated"),
                         calls.index("before_launch"))
-        self.assertLess(calls.index("before_launch"),
-                        calls.index("set_aside_frame_limit"))
 
     def test_a_session_played_signed_out_is_explained_to_the_window(self):
         notices = []
@@ -1770,17 +1768,15 @@ class GameSettingsHandoverLaunchTests(ReadyLaunchHarness, unittest.TestCase):
                                     account={}), 0)
         self.assertEqual(notices, [])
 
-    def test_an_unpaced_launch_writes_no_limit_but_still_puts_one_back(self):
-        # Nothing to hand over this time; a value an interrupted session
-        # left aside still has to find its way home.
+    def test_an_unpaced_launch_still_puts_a_limit_left_aside_back(self):
+        # A value an earlier version left aside still has to find its way
+        # home.
         self.assertEqual(self._play(environ={"BOL_FRAME_RATE": "0"}), 0)
-        self.assertNotIn("set_aside_frame_limit", self.options_calls)
         self.assertEqual(self.options_calls[-1], "restore_frame_limits")
 
-    def test_an_unpaced_launch_puts_a_limit_left_aside_back_before_the_game(
-            self):
-        # Nothing holds it this session: left at Unlimited, the game would
-        # start with no limit at all (#314).
+    def test_a_limit_left_aside_goes_back_before_the_game(self):
+        # Left at Unlimited, the game would start with no limit at all and
+        # show none (#314, #202).
         self.assertEqual(self._play(environ={"BOL_FRAME_RATE": "0"}), 0)
         calls = self.options_calls
         self.assertLess(calls.index("restore_frame_limits"),

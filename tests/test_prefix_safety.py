@@ -1838,12 +1838,12 @@ class MultiplayerWarningPatchTests(unittest.TestCase):
 
 
 class GameFrameLimitHandoverTests(unittest.TestCase):
-    """The player's Max Framerate is set aside for a session, never lost.
+    """A Max Framerate an earlier version set aside comes back, never lost.
 
-    Minecraft's own limiter spins in Wine's message pump (#173), so the
-    launcher holds the same rate through vkd3d-proton and switches the game's
-    off for the session — and then has to give the player back exactly the
-    value they had, whatever happened in between.
+    Up to 3.0.0 the launcher switched Minecraft's own limiter off for each
+    session -- the file read Unlimited, the player's value waited beside it
+    -- and put it back after the game. It no longer does (#202), but a value
+    still waiting from such a session has to find its way home.
     """
 
     _LIMITED = _OPTIONS_HEAD + b"gfx_max_framerate:60\r\n" + _OPTIONS_TAIL
@@ -1852,28 +1852,26 @@ class GameFrameLimitHandoverTests(unittest.TestCase):
     def _sidecar(self, path):
         return path.with_name(path.name + prefix.FRAME_LIMIT_SUFFIX)
 
-    def test_the_limit_is_set_aside_and_only_its_line_changes(self):
-        with tempfile.TemporaryDirectory() as td:
-            path = _write_options(td, self._LIMITED)
-            self.assertEqual(
-                prefix.set_aside_game_frame_limit(path, prefix_idle=True), 60)
-            # CRLF, key order and every other line are the game's own.
-            self.assertEqual(path.read_bytes(), self._UNLIMITED)
-            self.assertEqual(self._sidecar(path).read_bytes(), b"60\n")
+    def _left_aside(self, path, value=60):
+        """The state an earlier version's session left behind."""
+        data = path.read_bytes().replace(b"framerate:%d" % value,
+                                         b"framerate:0")
+        path.write_bytes(data)
+        self._sidecar(path).write_bytes(b"%d\n" % value)
 
-    def test_the_value_comes_back_once_the_game_has_exited(self):
+    def test_the_value_comes_back(self):
         with tempfile.TemporaryDirectory() as td:
             path = _write_options(td, self._LIMITED)
-            prefix.set_aside_game_frame_limit(path, prefix_idle=True)
+            self._left_aside(path)
             restored = prefix.restore_game_frame_limits(td, prefix_idle=True)
             self.assertEqual(restored, [path])
             self.assertEqual(path.read_bytes(), self._LIMITED)
             self.assertFalse(self._sidecar(path).exists())
 
-    def test_a_limit_chosen_in_game_during_the_session_is_kept(self):
+    def test_a_limit_chosen_in_game_since_is_kept(self):
         with tempfile.TemporaryDirectory() as td:
             path = _write_options(td, self._LIMITED)
-            prefix.set_aside_game_frame_limit(path, prefix_idle=True)
+            self._left_aside(path)
             # The player moved the slider to 90 while playing.
             chosen = self._LIMITED.replace(b"framerate:60", b"framerate:90")
             path.write_bytes(chosen)
@@ -1885,69 +1883,27 @@ class GameFrameLimitHandoverTests(unittest.TestCase):
     def test_nothing_is_put_back_while_the_game_may_still_be_saving(self):
         with tempfile.TemporaryDirectory() as td:
             path = _write_options(td, self._LIMITED)
-            prefix.set_aside_game_frame_limit(path, prefix_idle=True)
+            self._left_aside(path)
             self.assertEqual(
                 prefix.restore_game_frame_limits(td, prefix_idle=False), [])
             self.assertEqual(path.read_bytes(), self._UNLIMITED)
-            # The value waits for the next exit instead of being dropped.
+            # The value waits for the next launch instead of being dropped.
             self.assertTrue(self._sidecar(path).exists())
 
-    def test_a_session_that_never_finished_still_counts_the_players_limit(self):
-        # The launcher was killed with the game running: the file still
-        # reads Unlimited and the value is still beside it.
+    def test_a_value_still_waiting_counts_as_the_players_limit(self):
+        # Read before it is put back, it is still the player's limit.
         with tempfile.TemporaryDirectory() as td:
             path = _write_options(td, self._LIMITED)
-            prefix.set_aside_game_frame_limit(path, prefix_idle=True)
+            self._left_aside(path)
             self.assertEqual(prefix.game_frame_limit(path), 60)
-            # The next launch finds nothing left to write, and the limit.
-            self.assertEqual(
-                prefix.set_aside_game_frame_limit(path, prefix_idle=True), 60)
-            self.assertEqual(path.read_bytes(), self._UNLIMITED)
-            prefix.restore_game_frame_limits(td, prefix_idle=True)
-            self.assertEqual(path.read_bytes(), self._LIMITED)
 
-    def test_an_unlimited_player_is_neither_limited_nor_written(self):
+    def test_an_unlimited_player_has_no_limit(self):
         with tempfile.TemporaryDirectory() as td:
             path = _write_options(td, self._UNLIMITED)
             self.assertIsNone(prefix.game_frame_limit(path))
-            self.assertIsNone(
-                prefix.set_aside_game_frame_limit(path, prefix_idle=True))
+            self.assertEqual(
+                prefix.restore_game_frame_limits(td, prefix_idle=True), [])
             self.assertEqual(path.read_bytes(), self._UNLIMITED)
-            self.assertFalse(self._sidecar(path).exists())
-
-    def test_a_torn_file_is_never_completed_by_the_handover(self):
-        torn = self._LIMITED[:-7]
-        with tempfile.TemporaryDirectory() as td:
-            path = _write_options(td, torn)
-            self.assertIsNone(
-                prefix.set_aside_game_frame_limit(path, prefix_idle=True))
-            self.assertEqual(path.read_bytes(), torn)
-
-    def test_nothing_is_set_aside_while_the_prefix_is_in_use(self):
-        with tempfile.TemporaryDirectory() as td:
-            path = _write_options(td, self._LIMITED)
-            self.assertIsNone(
-                prefix.set_aside_game_frame_limit(path, prefix_idle=False))
-            self.assertEqual(path.read_bytes(), self._LIMITED)
-            self.assertFalse(self._sidecar(path).exists())
-
-    def test_a_failed_write_leaves_the_game_pacing_itself(self):
-        with tempfile.TemporaryDirectory() as td:
-            path = _write_options(td, self._LIMITED)
-            real_write = prefix._write_file_atomically
-
-            def fail_on_options(target, data):
-                if target == path:
-                    return False
-                return real_write(target, data)
-
-            with mock.patch.object(prefix, "_write_file_atomically",
-                                   side_effect=fail_on_options):
-                self.assertIsNone(
-                    prefix.set_aside_game_frame_limit(path, prefix_idle=True))
-            self.assertEqual(path.read_bytes(), self._LIMITED)
-            # No orphan value that a later exit could write over a new one.
-            self.assertFalse(self._sidecar(path).exists())
 
     def test_a_sidecar_holding_no_limit_is_cleared_not_applied(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1967,7 +1923,7 @@ class GameFrameLimitHandoverTests(unittest.TestCase):
             path = _write_options(td, self._LIMITED)
             (Path(td) / "drive_c/users/user").symlink_to("steamuser")
             self.assertEqual(len(prefix._options_files(td)), 1)
-            prefix.set_aside_game_frame_limit(path, prefix_idle=True)
+            self._left_aside(path)
             restored = prefix.restore_game_frame_limits(td, prefix_idle=True)
             self.assertEqual(len(restored), 1)
             self.assertEqual(path.read_bytes(), self._LIMITED)
@@ -1979,8 +1935,8 @@ class GameFrameLimitHandoverTests(unittest.TestCase):
             signed_in = _write_options(
                 td, self._LIMITED.replace(b"framerate:60", b"framerate:30"),
                 user="2533274")
-            prefix.set_aside_game_frame_limit(shared, prefix_idle=True)
-            prefix.set_aside_game_frame_limit(signed_in, prefix_idle=True)
+            self._left_aside(shared)
+            self._left_aside(signed_in, 30)
             prefix.restore_game_frame_limits(td, prefix_idle=True)
             self.assertIn(b"gfx_max_framerate:60\r\n", shared.read_bytes())
             self.assertIn(b"gfx_max_framerate:30\r\n", signed_in.read_bytes())

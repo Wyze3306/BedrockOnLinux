@@ -505,10 +505,19 @@ class FrameRateLimitTests(unittest.TestCase):
 
     def test_an_explicit_rate_applies_to_a_paced_loop_too(self):
         env = {}
+        applied, _ = self._apply(env=env, environ={"BOL_FRAME_RATE": "45"},
+                                 gfx_vsync="1", gfx_max_framerate="60")
+        self.assertEqual(applied, 45)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "45")
+
+    def test_an_explicit_rate_never_lifts_the_players_own_limit(self):
+        # The game's limiter still holds its 60, so the launcher's sits just
+        # under it rather than above, where the game would spin (#173).
+        env = {}
         applied, _ = self._apply(env=env, environ={"BOL_FRAME_RATE": "90"},
                                  gfx_vsync="1", gfx_max_framerate="60")
-        self.assertEqual(applied, 90)
-        self.assertEqual(env["VKD3D_FRAME_RATE"], "90")
+        self.assertEqual(applied, 59.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
 
     def test_an_explicit_rate_needs_no_display_and_no_settings(self):
         env = {}
@@ -550,12 +559,31 @@ class FrameRateLimitTests(unittest.TestCase):
         self.assertIsNone(applied)
         self.assertNotIn("VKD3D_FRAME_RATE", env)
 
-    def test_the_players_own_limit_is_held_at_the_same_rate(self):
+    def test_the_players_own_limit_is_paced_just_under(self):
+        # Under it, so the game's own limiter finds its deadline already
+        # passed and never spins; it stays on, so the game's menu shows the
+        # player's 60 instead of Unlimited (#202).
         env = {}
         applied, _ = self._apply(env=env, gfx_vsync="0",
                                  gfx_max_framerate="60")
-        self.assertEqual(applied, 60)
-        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+        self.assertEqual(applied, 59.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
+
+    def test_the_players_own_limit_is_never_rewritten(self):
+        # Rewritten as Unlimited for a session, it could never be set back to
+        # Unlimited in game: that choice read like the launcher's own write,
+        # and the old value came back after the game (#202).
+        with tempfile.TemporaryDirectory() as td:
+            prefix = _prefix(td, gfx_vsync="0", gfx_max_framerate="60")
+            options = perfcheck.find_options_file(prefix)
+            before = options.read_bytes()
+            with mock.patch.object(launch, "info"), \
+                    mock.patch.object(launch, "warn"):
+                launch._configure_frame_rate_limit(
+                    {}, {}, prefix, environ={}, refresh_probe=lambda: 60.0)
+            self.assertEqual(options.read_bytes(), before)
+            self.assertEqual(
+                list(options.parent.glob("*.bol-max-framerate")), [])
 
     def test_the_players_own_limit_is_held_with_vsync_on_too(self):
         # Measured in a loaded world: vsync on, Max Framerate 60 on a 144 Hz
@@ -565,47 +593,57 @@ class FrameRateLimitTests(unittest.TestCase):
         env = {}
         applied, _ = self._apply(env=env, gfx_vsync="1",
                                  gfx_max_framerate="60")
-        self.assertEqual(applied, 60)
-        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+        self.assertEqual(applied, 59.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
 
-    def test_vsync_at_the_players_limit_needs_no_second_limiter(self):
-        # #202: vkd3d-proton's limiter ends each wait spinning, 22% of a core
-        # at 60 FPS. Vsync on a 60 Hz display already holds the game at 60.
+    def test_vsync_at_the_players_limit_is_paced_just_under_it(self):
+        # A display a hair faster than the game's 60 leaves its own limiter
+        # waiting, spinning a core (#173); one a hair slower may be reported
+        # as 60. vkd3d-proton's limiter costs a twentieth of a core instead
+        # (native23, #202).
         for refresh in (60.0, 59.94, 60.05):
             env = {}
             applied, _ = self._apply(env=env, refresh_hz=refresh,
                                      gfx_vsync="1", gfx_max_framerate="60")
-            # Still returned, so the game's own spinning limiter is set aside.
-            self.assertEqual(applied, 60, refresh)
-            self.assertNotIn("VKD3D_FRAME_RATE", env, refresh)
+            self.assertEqual(applied, 59.88, refresh)
+            self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88", refresh)
+
+    def test_vsync_well_under_the_players_limit_needs_no_limiter(self):
+        # Vsync holds the game below its own limit, which then never waits.
+        env = {}
+        applied, _ = self._apply(env=env, refresh_hz=60.0, gfx_vsync="1",
+                                 gfx_max_framerate="144")
+        self.assertIsNone(applied)
+        self.assertNotIn("VKD3D_FRAME_RATE", env)
 
     def test_vsync_on_a_fast_display_holds_a_matching_limit(self):
         env = {}
         applied, _ = self._apply(env=env, refresh_hz=143.85, gfx_vsync="1",
                                  gfx_max_framerate="144")
-        self.assertEqual(applied, 144)
-        self.assertNotIn("VKD3D_FRAME_RATE", env)
+        # 143.85 Hz is within the margin of the game's 144.
+        self.assertEqual(applied, 143.71)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "143.71")
 
     def test_a_limit_under_the_refresh_rate_is_still_held(self):
         env = {}
         applied, _ = self._apply(env=env, refresh_hz=60.0, gfx_vsync="1",
                                  gfx_max_framerate="59")
-        self.assertEqual(applied, 59)
-        self.assertEqual(env["VKD3D_FRAME_RATE"], "59")
+        self.assertEqual(applied, 58.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "58.88")
 
     def test_vsync_off_still_needs_the_launchers_limiter(self):
         env = {}
         applied, _ = self._apply(env=env, refresh_hz=60.0, gfx_vsync="0",
                                  gfx_max_framerate="60")
-        self.assertEqual(applied, 60)
-        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+        self.assertEqual(applied, 59.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
 
     def test_an_unmeasured_display_keeps_the_launchers_limiter(self):
         env = {}
         applied, warned = self._apply(env=env, refresh_hz=None, gfx_vsync="1",
                                       gfx_max_framerate="60")
-        self.assertEqual(applied, 60)
-        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+        self.assertEqual(applied, 59.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
         self.assertFalse(warned.called)
 
     def test_a_display_probe_that_raises_keeps_the_launchers_limiter(self):
@@ -618,10 +656,10 @@ class FrameRateLimitTests(unittest.TestCase):
                     mock.patch.object(launch, "warn"):
                 applied = launch._configure_frame_rate_limit(
                     env, {}, prefix, environ={}, refresh_probe=boom)
-        self.assertEqual(applied, 60)
-        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+        self.assertEqual(applied, 59.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
 
-    def test_a_held_limit_that_vsync_keeps_adds_no_limiter(self):
+    def test_a_limit_an_older_version_left_aside_is_paced_too(self):
         env = {}
         with tempfile.TemporaryDirectory() as td:
             prefix = _prefix(td, gfx_vsync="1", gfx_max_framerate="0")
@@ -632,14 +670,15 @@ class FrameRateLimitTests(unittest.TestCase):
                     mock.patch.object(launch, "warn"):
                 applied = launch._configure_frame_rate_limit(
                     env, {}, prefix, environ={}, refresh_probe=lambda: 60.0)
-        self.assertEqual(applied, 60)
-        self.assertNotIn("VKD3D_FRAME_RATE", env)
+        # restore_game_frame_limits writes the 60 back before the game starts.
+        self.assertEqual(applied, 59.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
 
     def test_the_players_own_limit_needs_no_display_probe(self):
         env = {}
         applied, warned = self._apply(env=env, refresh_hz=None,
                                       gfx_vsync="0", gfx_max_framerate="75")
-        self.assertEqual(applied, 75)
+        self.assertEqual(applied, 74.85)
         self.assertFalse(warned.called)
 
     def test_the_display_switch_does_not_drop_the_players_own_limit(self):
@@ -648,7 +687,7 @@ class FrameRateLimitTests(unittest.TestCase):
         env = {}
         applied, _ = self._apply(env=env, settings={"limit_frame_rate": False},
                                  gfx_vsync="0", gfx_max_framerate="60")
-        self.assertEqual(applied, 60)
+        self.assertEqual(applied, 59.88)
 
     def test_uncapped_on_request_leaves_the_game_to_pace_itself(self):
         env = {}
@@ -670,8 +709,8 @@ class FrameRateLimitTests(unittest.TestCase):
                     env, {}, prefix, environ={},
                     refresh_probe=lambda: 143.85)
         # The player's 60, not the display's 144 the file alone would give.
-        self.assertEqual(applied, 60)
-        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+        self.assertEqual(applied, 59.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
 
     def test_the_legacy_renderer_leaves_the_game_its_own_limit(self):
         # Proton leaves vkd3d-proton out of the prefix for WineD3D, so a
@@ -702,8 +741,8 @@ class FrameRateLimitTests(unittest.TestCase):
             env=env, settings={"renderer": "opengl",
                                "custom_env": "PROTON_USE_WINED3D=0"},
             gfx_vsync="0", gfx_max_framerate="60")
-        self.assertEqual(applied, 60)
-        self.assertEqual(env["VKD3D_FRAME_RATE"], "60")
+        self.assertEqual(applied, 59.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
 
     def test_an_inherited_legacy_switch_is_not_the_launchs(self):
         # The launch drops an inherited PROTON_USE_WINED3D before Proton
@@ -712,7 +751,7 @@ class FrameRateLimitTests(unittest.TestCase):
         applied, _ = self._apply(
             env=env, environ={"PROTON_USE_WINED3D": "1"},
             gfx_vsync="0", gfx_max_framerate="60")
-        self.assertEqual(applied, 60)
+        self.assertEqual(applied, 59.88)
 
     def test_an_explicit_rate_is_named_as_ignored_by_the_legacy_renderer(self):
         env = {}
@@ -742,8 +781,7 @@ class FrameRateLimitTests(unittest.TestCase):
         applied, _ = self._apply(env=env, refresh_hz=59.94, xwayland=True,
                                  gfx_vsync="1", gfx_max_framerate="60")
         self.assertEqual(env["VKD3D_FRAME_RATE"], "59.82")
-        # The player's own limit, so it is still set aside for the session.
-        self.assertEqual(applied, 60)
+        self.assertEqual(applied, 59.82)
 
     def test_the_pace_always_lands_under_the_display(self):
         for refresh in (23.976, 59.94, 59.95, 60.0, 74.97, 120.0, 143.85,
@@ -781,16 +819,19 @@ class FrameRateLimitTests(unittest.TestCase):
         applied, _ = self._apply(env=env, refresh_hz=60.0, xwayland=True,
                                  settings={"limit_frame_rate": False},
                                  gfx_vsync="1", gfx_max_framerate="60")
-        # As before the pacing: vsync holds 60, the game's spin is set aside.
-        self.assertEqual(applied, 60)
-        self.assertNotIn("VKD3D_FRAME_RATE", env)
+        # Vsync and the game's own limiter both at 60: the game would spin
+        # whenever the display runs a hair faster, so the launcher still
+        # sits just under the player's limit. The switch is about the
+        # display's rate, not the player's.
+        self.assertEqual(applied, 59.88)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "59.88")
 
-    def test_xwayland_keeps_a_limit_under_the_display_as_it_is(self):
+    def test_xwayland_paces_a_limit_under_the_display_just_under_it(self):
         env = {}
         applied, _ = self._apply(env=env, refresh_hz=60.0, xwayland=True,
                                  gfx_vsync="1", gfx_max_framerate="30")
-        self.assertEqual(applied, 30)
-        self.assertEqual(env["VKD3D_FRAME_RATE"], "30")
+        self.assertEqual(applied, 29.94)
+        self.assertEqual(env["VKD3D_FRAME_RATE"], "29.94")
 
     def test_xwayland_keeps_the_cap_of_an_unpaced_loop_as_it_is(self):
         env = {}

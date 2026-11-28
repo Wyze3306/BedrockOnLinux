@@ -1660,14 +1660,12 @@ def patch_options(prefix_idle=None):
         ok("Multiplayer warning disabled")
 
 
-# Minecraft's own Max Framerate waits for each frame's deadline by polling for
-# window messages, and under Wine every empty poll is a sched_yield between two
-# getrusage calls: the main thread, which builds every frame, sits at a full
-# core doing nothing, half of it in the kernel (#173). vkd3d-proton's limiter
-# sleeps instead, but it only gets the job while the game's own limiter is off.
-# So for the length of a session the player's value waits in this file beside
-# options.txt and the setting reads Unlimited; once the game has exited, the
-# value goes back where the player left it.
+# Up to 3.0.0 the launcher switched Minecraft's own Max Framerate off for each
+# session, since under Wine it spins a core (#173): the player's value waited
+# in this file beside options.txt, the setting read Unlimited, and the value
+# went back once the game had exited. The launcher now paces the game just
+# under that limit instead and leaves the file alone (#202), but a value an
+# interrupted session of an older version left here still goes back.
 FRAME_LIMIT_SUFFIX = ".bol-max-framerate"
 
 _MAX_FRAMERATE_KEY = b"gfx_max_framerate"
@@ -1690,7 +1688,7 @@ def _option_line_int(data, key: bytes):
 
 
 def _held_frame_limit(options_path: Path):
-    """The Max Framerate a session set aside and has not put back, or None."""
+    """The Max Framerate an older session set aside and never put back."""
     try:
         value = int((_read_bytes(_frame_limit_path(options_path))
                      or b"").strip())
@@ -1702,7 +1700,7 @@ def _held_frame_limit(options_path: Path):
 def game_frame_limit(options_path):
     """The player's own Max Framerate in one settings file, or None.
 
-    A value set aside by an earlier session still counts while the file reads
+    A value an older version set aside still counts while the file reads
     Unlimited: that session ended before it could put it back — the launcher
     was killed, or the machine went down with the game.
     """
@@ -1715,49 +1713,14 @@ def game_frame_limit(options_path):
     return _held_frame_limit(path) if value == 0 else None
 
 
-def set_aside_game_frame_limit(options_path, prefix_idle=None):
-    """Switch Minecraft's own Max Framerate off for one session.
-
-    Returns the player's limit once the file reads Unlimited with the value
-    kept beside it, or None when nothing changed: no limit set, a torn file,
-    a prefix still in use, a write that failed. None is always safe — the
-    game then paces itself exactly as it did before.
-    """
-    if not options_path:
-        return None
-    path = Path(options_path)
-    data = _read_bytes(path)
-    if not _options_intact(data):
-        return None
-    limit = _option_line_int(data, _MAX_FRAMERATE_KEY)
-    if limit is None or limit <= 0:
-        # Already Unlimited: a value an interrupted session kept is still
-        # waiting beside the file, and nothing needs writing.
-        return _held_frame_limit(path) if limit == 0 else None
-    if not _prefix_is_idle(prefix_idle):
-        return None
-    # The player's value is written down first, so that no interruption
-    # between the two writes can lose it.
-    side = _frame_limit_path(path)
-    if not _write_file_atomically(side, b"%d\n" % limit):
-        return None
-    if not _write_file_atomically(
-            path, _set_option_line(data, _MAX_FRAMERATE_KEY, b"0")):
-        try:
-            side.unlink()
-        except OSError:
-            pass
-        return None
-    return limit
-
-
 def restore_game_frame_limits(prefix=None, prefix_idle=None):
-    """Put back every Max Framerate a session set aside.
+    """Put back every Max Framerate an older version's session set aside.
 
-    Runs once the game has exited. A file that still reads Unlimited gets the
-    player's value back; one that reads anything else was changed in-game
-    during the session, and that newer choice is the one kept. A torn file is
-    left for restore_truncated_game_options and retried after the next game.
+    Runs before each game starts and after it exits. A file that still reads
+    Unlimited gets the player's value back; one that reads anything else was
+    changed in game since, and that newer choice is the one kept. A torn file
+    is left for restore_truncated_game_options and retried after the next
+    game.
     """
     restored = []
     for path in _options_files(prefix):
