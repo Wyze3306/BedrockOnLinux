@@ -57,14 +57,19 @@ def _cli_archive(path, body=b"#!/bin/sh\nexit 0\n"):
 # graphics stack of the machine running it.
 _EGL_PATCH = mock.patch.object(xodus.webview, "host_egl_failure",
                                lambda env=None: None)
+# Likewise its GIO, whether the proxy resolver it would pick survives (#249).
+_PROXY_PATCH = mock.patch.object(xodus.webview, "host_proxy_aborts",
+                                 lambda env=None: False)
 
 
 def setUpModule():
     _EGL_PATCH.start()
+    _PROXY_PATCH.start()
 
 
 def tearDownModule():
     _EGL_PATCH.stop()
+    _PROXY_PATCH.stop()
 
 
 @contextlib.contextmanager

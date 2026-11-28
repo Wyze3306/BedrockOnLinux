@@ -157,20 +157,47 @@ _A11Y_OPT_IN = "BOL_WEBVIEW_A11Y"
 # GIO_EXTRA_MODULES for it (#249). Loading the library proves nothing about
 # that, so the probe asks the GIO that WebKitGTK itself loads, in the
 # environment xodus-cli gets.
+#
+# The same process then asks that GIO for its default proxy resolver, which
+# is the first thing WebKitGTK's network process does with it. glib-networking
+# ships a GNOME resolver that reads the org.gnome.system.proxy settings, and
+# GIO builds it before asking whether it applies: where that schema
+# (gsettings-desktop-schemas) is not on XDG_DATA_DIRS, building it is a fatal
+# "Settings schema 'org.gnome.system.proxy' is not installed". The network
+# process dies with it, twice, and the sign-in window says "WebKit encountered
+# an internal error" (#249: the nonguix package, whose wrapper sets
+# XDG_DATA_DIRS to its own inputs, on a real Guix). The TLS answer is printed
+# before that question is asked, so a probe killed by it still has one.
 _TLS_PROBE = (
-    "import ctypes, sys\n"
+    "import ctypes, os, sys\n"
     "ctypes.CDLL('libwebkit2gtk-4.1.so.0', mode=ctypes.RTLD_GLOBAL)\n"
     "gio = ctypes.CDLL('libgio-2.0.so.0')\n"
     "gio.g_tls_backend_get_default.restype = ctypes.c_void_p\n"
     "gio.g_tls_backend_supports_tls.argtypes = [ctypes.c_void_p]\n"
     "backend = gio.g_tls_backend_get_default()\n"
-    "sys.exit(0 if backend and gio.g_tls_backend_supports_tls(backend)"
-    " else 3)\n"
+    "if not (backend and gio.g_tls_backend_supports_tls(backend)):\n"
+    "    sys.exit(3)\n"
+    "os.write(1, b'tls\\n')\n"
+    "gio.g_proxy_resolver_get_default.restype = ctypes.c_void_p\n"
+    "gio.g_proxy_resolver_get_default()\n"
+    "sys.exit(0)\n"
 )
 _TLS_MISSING = 3
+_TLS_SAID = "tls"
 _TLS_PROBE_KEYS = ("LD_LIBRARY_PATH", "GIO_MODULE_DIR", "GIO_EXTRA_MODULES",
-                   "GIO_USE_TLS")
+                   "GIO_USE_TLS", "GIO_USE_PROXY_RESOLVER", "XDG_DATA_DIRS",
+                   "GSETTINGS_SCHEMA_DIR")
 _TLS_CACHE = {}
+
+# Where the default resolver is fatal, GIO is told to use another one for
+# xodus-cli: libproxy (glib-networking's, which honours https_proxy and the
+# rest, and PAC files), the plain environment-variable resolver of builds
+# without libproxy, and GLib's own "dummy", which connects directly, as a
+# last resort. Each is tried in the probe before it is chosen, because GIO
+# falls back to its usual order -- and to the same abort -- when the one it
+# was told to use is not installed.
+_PROXY_VAR = "GIO_USE_PROXY_RESOLVER"
+_PROXY_FALLBACKS = ("libproxy", "environment", "dummy")
 
 # WebKitGTK up to 2.52 draws every page through EGL, with or without a GPU:
 # the web process opens a surfaceless EGL display when the EGL library offers
@@ -188,8 +215,21 @@ _TLS_CACHE = {}
 # sign-in over to the bundled runtime instead of opening a window that cannot
 # draw. Should a WebKitGTK still give up, the line it prints when it does is
 # recognised as it arrives (EGL_ABORT).
+#
+# The libEGL in question is the one WebKitGTK gets, through libepoxy, which
+# opens it on first use. Guix and Nix patch an absolute path into libepoxy, so
+# that libEGL is nowhere a lookup by name would find it, and asking for
+# "libEGL.so.1" from here reported a WebKitGTK that draws fine as one that
+# cannot (#249). Loading WebKitGTK first and letting libepoxy open its own
+# makes the lookup by name return that same library; where libepoxy is not
+# there to ask, the name is all there is.
 _EGL_PROBE = (
     "import ctypes, sys\n"
+    "try:\n"
+    "    ctypes.CDLL('libwebkit2gtk-4.1.so.0', mode=ctypes.RTLD_GLOBAL)\n"
+    "    ctypes.CDLL('libepoxy.so.0').epoxy_has_egl()\n"
+    "except (OSError, AttributeError):\n"
+    "    pass\n"
     "try:\n"
     "    egl = ctypes.CDLL('libEGL.so.1')\n"
     "except OSError as exc:\n"
@@ -300,17 +340,61 @@ def host_tls_available(env=None):
     timeout) is "cannot tell", and answers True so that nothing which used
     to work is taken away on a guess.
     """
+    return _gio_answer(env)[0]
+
+
+def host_proxy_aborts(env=None):
+    """Whether GIO's default proxy resolver stops the process that asks for
+    it, in the GIO the host's WebKitGTK loads -- which makes WebKitGTK's
+    network process die as it starts. False when the probe could not tell,
+    and when there is no TLS to get that far with."""
+    return not _gio_answer(env)[1]
+
+
+def _gio_answer(env=None):
+    """(TLS available, proxy resolver survives) for ``env``, probed once."""
     source = os.environ if env is None else env
     key = tuple(source.get(name) for name in _TLS_PROBE_KEYS)
     if key not in _TLS_CACHE:
         try:
             proc = subprocess.run([sys.executable, "-c", _TLS_PROBE],
-                                  env=dict(source), stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL, timeout=30)
-            _TLS_CACHE[key] = proc.returncode != _TLS_MISSING
+                                  env=dict(source), stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, text=True,
+                                  errors="replace", timeout=30)
         except (OSError, subprocess.SubprocessError):
-            _TLS_CACHE[key] = True
+            proc = None
+        if proc is None or proc.returncode == 0:
+            _TLS_CACHE[key] = (True, True)
+        elif proc.returncode == _TLS_MISSING:
+            _TLS_CACHE[key] = (False, True)
+        else:
+            # Killed after saying TLS works: by the proxy resolver. Killed
+            # before: it cannot tell, and nothing is taken away on a guess.
+            said = (proc.stdout or "").split()
+            _TLS_CACHE[key] = (True, _TLS_SAID not in said)
     return _TLS_CACHE[key]
+
+
+def portable_proxy_resolver(env):
+    """Point GIO at a proxy resolver that does not kill WebKitGTK's network
+    process, when its default one would. Returns what it replaced, in
+    restore_env()'s shape; a resolver the session already chose is kept."""
+    if (env.get(_PROXY_VAR) or "").strip() or not host_proxy_aborts(env):
+        return {}
+    for name in _PROXY_FALLBACKS:
+        trial = dict(env)
+        trial[_PROXY_VAR] = name
+        if host_proxy_aborts(trial):
+            continue
+        previous = {_PROXY_VAR: env.get(_PROXY_VAR)}
+        env[_PROXY_VAR] = name
+        info("This system's GIO stops WebKitGTK's network process as it "
+             "picks a proxy resolver (glib-networking's GNOME one, without "
+             "the org.gnome.system.proxy settings of "
+             "gsettings-desktop-schemas). The Microsoft sign-in uses the "
+             f"{name} proxy resolver instead.")
+        return previous
+    return {}
 
 
 def egl_failure(env=None):
@@ -1024,6 +1108,8 @@ def apply(binary, env, force=False):
     window is just as fragile against the host's WebKitGTK as against the
     bundled one. The library itself is only added where the host has none,
     which is the exception; everywhere it is packaged, that half is a no-op.
+    Where the host's is kept, GIO is steered off a proxy resolver that would
+    kill its network process (portable_proxy_resolver).
 
     The return value is always a restore map, in restore_env()'s shape. A
     failure leaves ``env`` exactly as it was found, and raises BolError with
@@ -1046,7 +1132,7 @@ def apply(binary, env, force=False):
         if failure is None:
             blank = host_egl_failure(env)
             if host_tls_available(env) and blank is None:
-                return previous
+                return _keep_first(previous, portable_proxy_resolver(env))
             if blank is not None:
                 # The bundle's WebKitGTK draws without one (#273).
                 info(f"This system's WebKitGTK cannot draw the Microsoft "
@@ -1073,7 +1159,7 @@ def apply(binary, env, force=False):
             # cannot be fetched is no reason to refuse the host's library.
             info(f"The bundled WebKitGTK runtime is unavailable ({exc}); "
                  "keeping the system's WebKitGTK.")
-            return previous
+            return _keep_first(previous, portable_proxy_resolver(env))
         restore_env(env, previous)
         raise BolError(missing_message(str(exc))) from exc
     _, replaced = runtime_env(env, root)
@@ -1102,7 +1188,7 @@ def apply(binary, env, force=False):
                 info("The bundled WebKitGTK runtime did not load on this "
                      "system (" + failure.splitlines()[0] + "); keeping the "
                      "system's WebKitGTK.")
-            return previous
+            return _keep_first(previous, portable_proxy_resolver(env))
         _keep_first(previous, replaced)
         restore_env(env, previous)
         raise BolError(too_old or missing_message(
@@ -1126,6 +1212,11 @@ def status():
         if blank is not None:
             return (f"host WebKitGTK cannot draw: {blank}; the bundled "
                     "runtime is used instead"), None
+        if not (os.environ.get(_PROXY_VAR) or "").strip() \
+                and host_proxy_aborts():
+            return ("OK (store sign-in; GIO's default proxy resolver "
+                    "aborts, missing org.gnome.system.proxy, so another one "
+                    "is used)"), None
         return "OK (store sign-in)", None
     if installed():
         return "OK (bundled runtime)", None

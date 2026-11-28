@@ -128,6 +128,17 @@
   (#249).** When the system's WebKitGTK loads but a probe sends the sign-in
   to the bundled runtime, a bundle that cannot load or be downloaded used to
   stop every Store command; the system's library is now kept instead.
+- **Guix: the Microsoft sign-in window opens instead of "WebKit encountered
+  an internal error" (#249).** On Guix, glib-networking's GNOME proxy
+  resolver needs the `org.gnome.system.proxy` settings of
+  gsettings-desktop-schemas, and without them it stopped WebKitGTK's
+  network process as soon as the page loaded. The launcher now notices and
+  has WebKitGTK use the libproxy resolver for the sign-in; the game gets
+  its environment back untouched. The launcher's own HTTPS requests also
+  use the system's certificates when the OpenSSL Python was built against
+  finds none of its own (Guix or Nix without `SSL_CERT_FILE`, or a sandbox
+  that hides `~/.guix-profile`), and the doctor no longer reports "cannot
+  draw" for a WebKitGTK whose libEGL is only reachable through libepoxy.
 - **"Report a problem" describes the game when none is selected yet.** The
   Minecraft section of such a report read "unavailable: AttributeError"
   instead of the builds on disk.

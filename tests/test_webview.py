@@ -39,16 +39,22 @@ _TLS_PATCH = mock.patch.object(webview, "host_tls_available",
 _REAL_EGL_CHECK = webview.host_egl_failure
 _EGL_PATCH = mock.patch.object(webview, "host_egl_failure",
                                lambda env=None: None)
+# And the proxy resolver its GIO would pick, which the same probe asks about.
+_REAL_PROXY_CHECK = webview.host_proxy_aborts
+_PROXY_PATCH = mock.patch.object(webview, "host_proxy_aborts",
+                                 lambda env=None: False)
 
 
 def setUpModule():
     _TLS_PATCH.start()
     _EGL_PATCH.start()
+    _PROXY_PATCH.start()
 
 
 def tearDownModule():
     _TLS_PATCH.stop()
     _EGL_PATCH.stop()
+    _PROXY_PATCH.stop()
 
 
 def _encrypted_build(game_dir):
@@ -875,12 +881,12 @@ class TlsBackendTests(unittest.TestCase):
         webview._TLS_CACHE.clear()
         self.addCleanup(webview._TLS_CACHE.clear)
 
-    def _probe(self, returncode=None, raises=None):
+    def _probe(self, returncode=None, raises=None, stdout=""):
         def run(argv, **kwargs):
             self.argv, self.kwargs = argv, kwargs
             if raises is not None:
                 raise raises
-            return mock.Mock(returncode=returncode)
+            return mock.Mock(returncode=returncode, stdout=stdout)
         with mock.patch.object(webview.subprocess, "run", side_effect=run):
             return _REAL_TLS_PROBE({"GIO_MODULE_DIR": "/nowhere"})
 
@@ -936,6 +942,151 @@ class TlsBackendTests(unittest.TestCase):
         self.assertIsNone(package)
 
 
+class ProxyResolverTests(unittest.TestCase):
+    """#249 on a real Guix: GIO's GNOME proxy resolver, built without its
+    settings schema, kills WebKitGTK's network process as it starts."""
+
+    _KILLED = -5  # SIGTRAP, what g_error() ends a process with
+
+    def setUp(self):
+        webview._TLS_CACHE.clear()
+        self.addCleanup(webview._TLS_CACHE.clear)
+
+    def _probe(self, returncode, stdout=""):
+        def run(argv, **kwargs):
+            self.argv = argv
+            return mock.Mock(returncode=returncode, stdout=stdout)
+        with mock.patch.object(webview.subprocess, "run", side_effect=run):
+            return (_REAL_TLS_PROBE({"GIO_MODULE_DIR": "/x"}),
+                    _REAL_PROXY_CHECK({"GIO_MODULE_DIR": "/x"}))
+
+    def test_a_probe_killed_after_tls_is_the_proxy_resolver(self):
+        self.assertEqual(self._probe(self._KILLED, "tls\n"), (True, True))
+        # The question comes after the TLS answer, in the same process.
+        source = self.argv[-1]
+        self.assertLess(source.index("g_tls_backend_supports_tls"),
+                        source.index("tls\\n"))
+        self.assertLess(source.index("tls\\n"),
+                        source.index("g_proxy_resolver_get_default"))
+
+    def test_a_probe_killed_before_tls_cannot_tell(self):
+        self.assertEqual(self._probe(self._KILLED), (True, False))
+
+    def test_no_tls_asks_nothing_of_the_proxy(self):
+        self.assertEqual(self._probe(webview._TLS_MISSING), (False, False))
+
+    def test_a_working_resolver_is_reported(self):
+        self.assertEqual(self._probe(0, "tls\n"), (True, False))
+
+    def test_both_questions_share_one_probe(self):
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append(argv)
+            return mock.Mock(returncode=0, stdout="tls\n")
+        with mock.patch.object(webview.subprocess, "run", side_effect=run):
+            _REAL_TLS_PROBE({"GIO_MODULE_DIR": "/x"})
+            _REAL_PROXY_CHECK({"GIO_MODULE_DIR": "/x"})
+        self.assertEqual(len(calls), 1)
+
+    @staticmethod
+    def _aborts_unless(*working):
+        return lambda env=None: (env or {}).get(
+            "GIO_USE_PROXY_RESOLVER") not in working
+
+    def test_libproxy_stands_in_for_a_fatal_default(self):
+        env = {"PATH": "/usr/bin"}
+        with mock.patch.object(webview, "host_proxy_aborts",
+                               self._aborts_unless("libproxy", "dummy")), \
+                mock.patch.object(webview, "info") as said:
+            previous = webview.portable_proxy_resolver(env)
+        self.assertEqual(env["GIO_USE_PROXY_RESOLVER"], "libproxy")
+        self.assertIn("org.gnome.system.proxy", said.call_args.args[0])
+        webview.restore_env(env, previous)
+        self.assertEqual(env, {"PATH": "/usr/bin"})
+
+    def test_the_first_resolver_that_survives_is_taken(self):
+        env = {}
+        with mock.patch.object(webview, "host_proxy_aborts",
+                               self._aborts_unless("dummy")), \
+                mock.patch.object(webview, "info"):
+            webview.portable_proxy_resolver(env)
+        self.assertEqual(env["GIO_USE_PROXY_RESOLVER"], "dummy")
+
+    def test_nothing_changes_where_the_default_survives(self):
+        env = {"PATH": "/usr/bin"}
+        with mock.patch.object(webview, "host_proxy_aborts",
+                               lambda env=None: False):
+            self.assertEqual(webview.portable_proxy_resolver(env), {})
+        self.assertEqual(env, {"PATH": "/usr/bin"})
+
+    def test_a_resolver_the_session_chose_is_kept(self):
+        env = {"GIO_USE_PROXY_RESOLVER": "gnome"}
+        with mock.patch.object(webview, "host_proxy_aborts",
+                               side_effect=AssertionError("probed")):
+            self.assertEqual(webview.portable_proxy_resolver(env), {})
+        self.assertEqual(env, {"GIO_USE_PROXY_RESOLVER": "gnome"})
+
+    def test_nothing_is_set_when_no_resolver_survives(self):
+        env = {}
+        with mock.patch.object(webview, "host_proxy_aborts",
+                               lambda env=None: True):
+            self.assertEqual(webview.portable_proxy_resolver(env), {})
+        self.assertEqual(env, {})
+
+    def test_the_sign_in_gets_it_and_the_game_does_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "xodus-cli"
+            binary.write_text(f"#!{SH}\nexit 0\n")
+            binary.chmod(0o755)
+            env = {"PATH": "/usr/bin"}
+            with mock.patch.object(webview, "host_proxy_aborts",
+                                   self._aborts_unless("libproxy")), \
+                    mock.patch.object(webview, "prepare") as prepare, \
+                    mock.patch.object(webview, "info"):
+                webview._HOST_PROBE.clear()
+                previous = webview.apply(binary, env)
+            prepare.assert_not_called()
+            self.assertEqual(env["GIO_USE_PROXY_RESOLVER"], "libproxy")
+            webview.restore_env(env, previous)
+            self.assertNotIn("GIO_USE_PROXY_RESOLVER", env)
+
+    def test_a_host_kept_over_a_bundle_that_does_not_load_gets_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            binary = base / "xodus-cli"
+            bundle = str(base / "bundle" / "lib")
+            binary.write_text(
+                f"#!{SH}\ncase \"$LD_LIBRARY_PATH\" in *{bundle}*)\n"
+                "  echo 'xodus-cli: error while loading shared libraries: "
+                "libxkbcommon.so.0: cannot open shared object file' >&2\n"
+                "  exit 127;;\nesac\nexit 0\n")
+            binary.chmod(0o755)
+            env = {"PATH": "/usr/bin"}
+            with mock.patch.object(webview, "host_egl_failure",
+                                   lambda env=None: "no EGL"), \
+                    mock.patch.object(webview, "host_proxy_aborts",
+                                      self._aborts_unless("libproxy")), \
+                    mock.patch.object(webview, "prepare",
+                                      return_value=base / "bundle"), \
+                    mock.patch.object(webview, "info"):
+                webview._HOST_PROBE.clear()
+                webview.apply(binary, env)
+            self.assertNotIn(bundle, env.get("LD_LIBRARY_PATH", ""))
+            self.assertEqual(env["GIO_USE_PROXY_RESOLVER"], "libproxy")
+
+    def test_doctor_says_another_resolver_is_used(self):
+        with mock.patch.object(webview, "host_has_webkitgtk", lambda: True), \
+                mock.patch.object(webview, "host_proxy_aborts",
+                                  lambda env=None: True), \
+                mock.patch.dict(os.environ):
+            os.environ.pop("GIO_USE_PROXY_RESOLVER", None)
+            summary, package = webview.status()
+        self.assertTrue(summary.startswith("OK"))
+        self.assertIn("org.gnome.system.proxy", summary)
+        self.assertIsNone(package)
+
+
 class EglDisplayTests(unittest.TestCase):
     """WebKitGTK cannot draw a page without an EGL display (#273)."""
 
@@ -962,6 +1113,16 @@ class EglDisplayTests(unittest.TestCase):
         self.assertIn("EGL_MESA_platform_surfaceless", self.argv[-1])
         self.assertIn("eglGetDisplay", self.argv[-1])
         self.assertEqual(self.kwargs["env"], {"DISPLAY": ":0"})
+
+    def test_libegl_is_looked_for_where_webkitgtk_finds_it(self):
+        # Guix and Nix give no libEGL.so.1 to the loader's search: WebKitGTK
+        # links libepoxy, which opens mesa's by its full path (#249).
+        self._probe(returncode=0)
+        source = self.argv[-1]
+        self.assertLess(source.index("libwebkit2gtk-4.1.so.0"),
+                        source.index("epoxy_has_egl"))
+        self.assertLess(source.index("epoxy_has_egl"),
+                        source.index("CDLL('libEGL.so.1')"))
 
     def test_a_missing_library_is_reported(self):
         failure = self._probe(returncode=webview._EGL_NO_LIBRARY,
