@@ -37,6 +37,11 @@
   glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39); the Flatpak
   brings its own. 1.21.51 plays; how far back the others go is up to
   wine-uwp, and 1.20.81 still crashes a few seconds after its title screen.
+  A package of a UWP build you kept yourself (.appx, .msix or a bundle of
+  them, patched or not) installs with Import, or by dropping it on the
+  window, beside the builds downloaded here: it must be Minecraft for
+  Windows for x64 (wine-uwp runs no 32-bit build), and the same Store check
+  applies.
 
 - **ARM engine, experimental (#250).** On an ARM computer with 4 KiB pages
   (Apple silicon counts, inside muvm), Settings ▸ Advanced ▸ Engine can switch

@@ -482,6 +482,13 @@ def import_content(src, prefix=None, destinations=None):
     src = Path(src).expanduser()
     if not src.exists():
         die(f"File not found: {src}")
+    from .uwp import is_package_file  # noqa: PLC0415 - rarely needed
+    if src.is_file() and is_package_file(src):
+        # A build of the game, not content for it: a UWP package the player
+        # kept (#387), installed beside the builds downloaded here.
+        from .gamesetup import import_uwp_package  # noqa: PLC0415 - cycle
+        dest = import_uwp_package(src)
+        return [f"Minecraft build: Minecraft for Windows (UWP) {dest.name}"]
     ext = "" if src.is_dir() else src.suffix.lower()
     name = src.name if src.is_dir() else src.stem
     base = _mojang_dir(prefix)
@@ -519,7 +526,8 @@ def import_content(src, prefix=None, destinations=None):
 def cmd_import(paths):
     if not paths:
         die("Usage: bedrock-on-linux import "
-            "<file.mcpack|.mcworld|.mcaddon|.mctemplate|.mcskin|.zip|folder> …")
+            "<file.mcpack|.mcworld|.mcaddon|.mctemplate|.mcskin|.zip|folder"
+            "|.appx> …")
     if _mc_running():
         warn("Minecraft appears to be running — close it before importing so "
              "the game picks up new content on next launch.")

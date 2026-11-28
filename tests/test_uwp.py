@@ -477,6 +477,190 @@ class StoreEngagementTests(unittest.TestCase):
             fetched.assert_not_called()
 
 
+def _package(path, manifest=None, members=(), signed=True, bundle=None):
+    """A package file as Windows Update or a player's backup has it."""
+    with zipfile.ZipFile(path, "w") as archive:
+        if bundle is not None:
+            archive.writestr("AppxMetadata/AppxBundleManifest.xml", bundle)
+        else:
+            archive.writestr("AppxManifest.xml", manifest or _APPX_MANIFEST)
+        for name, data in members:
+            archive.writestr(name, data)
+        if signed:
+            archive.writestr("AppxSignature.p7x", b"PKCX")
+    return Path(path)
+
+
+_PUBLISHER = ("CN=Microsoft Corporation, O=Microsoft Corporation, "
+              "L=Redmond, S=Washington, C=US")
+_APPX_MANIFEST = (
+    '<?xml version="1.0" encoding="utf-8"?><Package>'
+    '<!-- <Identity Name="Not.This" /> -->'
+    '<Identity Name="Microsoft.MinecraftUWP" '
+    f'Publisher="{_PUBLISHER}" Version="1.18.1201.0" '
+    'ProcessorArchitecture="x64" /></Package>')
+_BUNDLE_MANIFEST = (
+    '<Bundle><Identity Name="Microsoft.MinecraftUWP" '
+    f'Publisher="{_PUBLISHER}" Version="1.16.4002.0" />'
+    '<Packages>'
+    '<Package Type="resource" Version="1.16.4002.0" ResourceId="en" '
+    'FileName="en.appx" />'
+    '<Package Type="application" Version="1.16.4002.0" Architecture="x86" '
+    'FileName="x86.appx" />'
+    '<Package Type="application" Version="1.16.4002.0" Architecture="x64" '
+    'FileName="x64.appx" />'
+    '</Packages></Bundle>')
+
+
+class PackageFileTests(unittest.TestCase):
+    """uwp.read_package: what a player's own package file is."""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.addCleanup(self.td.cleanup)
+        self.dir = Path(self.td.name)
+
+    def test_the_package_version_is_the_build_versiondb_names(self):
+        for packed, build in (("1.18.1201.0", "1.18.12.1"),
+                              ("1.18.2.0", "1.18.0.2"),
+                              ("1.16.22101.0", "1.16.221.1"),
+                              ("1.21.5101.0", "1.21.51.1")):
+            self.assertEqual(uwp.build_of_package_version(packed), build)
+
+    def test_an_x64_package_is_read_from_its_manifest(self):
+        found = uwp.read_package(_package(self.dir / "mc.appx"))
+        self.assertEqual((found["build"], found["arch"], found["bundle"],
+                          found["signed"]), ("1.18.12.1", "x64", False, True))
+
+    def test_a_patched_package_without_a_signature_is_still_read(self):
+        found = uwp.read_package(_package(self.dir / "mc.appx", signed=False))
+        self.assertFalse(found["signed"])
+
+    def test_a_bundle_gives_its_x64_application_package(self):
+        found = uwp.read_package(
+            _package(self.dir / "mc.appxbundle", bundle=_BUNDLE_MANIFEST))
+        self.assertEqual((found["build"], found["arch"], found["bundle"]),
+                         ("1.16.40.2", "x64", True))
+
+    def test_a_32_bit_build_is_refused_with_the_reason(self):
+        manifest = _APPX_MANIFEST.replace('"x64"', '"x86"')
+        with self.assertRaisesRegex(uwp.UwpError, "x64 builds only") as got:
+            uwp.read_package(_package(self.dir / "mc.appx", manifest))
+        self.assertIn("1.18.12.1 for x86", str(got.exception))
+        bundle = _BUNDLE_MANIFEST.replace(
+            '<Package Type="application" Version="1.16.4002.0" '
+            'Architecture="x64" FileName="x64.appx" />', "")
+        with self.assertRaisesRegex(uwp.UwpError, "x64 builds only"):
+            uwp.read_package(_package(self.dir / "b.appxbundle",
+                                      bundle=bundle))
+
+    def test_another_app_or_publisher_is_not_minecraft(self):
+        for manifest in (
+                _APPX_MANIFEST.replace("Microsoft.MinecraftUWP", "Other.App"),
+                _APPX_MANIFEST.replace("CN=Microsoft Corporation, ",
+                                       "CN=Someone, ")):
+            with self.assertRaisesRegex(uwp.UwpError,
+                                        "not Minecraft for Windows"):
+                uwp.read_package(_package(self.dir / "x.appx", manifest))
+
+    def test_an_encrypted_or_unreadable_file_is_said_so(self):
+        encrypted = self.dir / "mc.eappx"
+        encrypted.write_bytes(b"EXPH" + bytes(60))
+        with self.assertRaisesRegex(uwp.UwpError, "encrypted"):
+            uwp.read_package(encrypted)
+        junk = self.dir / "mc.appx"
+        junk.write_bytes(b"not a zip")
+        with self.assertRaisesRegex(uwp.UwpError, "not an app package"):
+            uwp.read_package(junk)
+        with self.assertRaisesRegex(uwp.UwpError, "no app manifest"):
+            uwp.read_package(_package(self.dir / "empty.appx",
+                                      manifest="<Package/>"))
+
+    def test_only_package_names_are_routed_to_it(self):
+        for name in ("a.appx", "A.MSIX", "b.appxbundle", "c.msixbundle"):
+            self.assertTrue(uwp.is_package_file(name))
+        for name in ("a.mcpack", "a.zip", "a.eappx"):
+            self.assertFalse(uwp.is_package_file(name))
+
+
+class ImportTests(unittest.TestCase):
+    def setUp(self):
+        self.paths = _Paths(self)
+        self.package_file = _package(self.paths.root / "kept.appx")
+        self.dest = self.paths.games / "uwp" / "1.18.12.1"
+        for target, kwargs in (
+                ("prepare", {}),
+                ("ensure_store_engagement", {}),
+                ("prefix_ready", {"return_value": True}),
+                ("windows_files_ready", {"return_value": True}),
+                ("_free_space", {"return_value": 100 << 30}),
+                ("host_problem", {"return_value": None})):
+            patcher = mock.patch.object(uwp, target, **kwargs)
+            setattr(self, target.strip("_"), patcher.start())
+            self.addCleanup(patcher.stop)
+
+    def _install_step(self, cmd, env, what, progress=None, **kwargs):
+        self.assertEqual(Path(cmd[2]), self.package_file.resolve())
+        stage = Path(cmd[3]) / "stage" / cmd[cmd.index("--stage") + 1]
+        _write_build(stage)
+        return []
+
+    def test_a_kept_package_is_installed_and_left_where_it_was(self):
+        package = uwp.read_package(self.package_file)
+        with mock.patch.object(uwp, "require_ownership") as owned, \
+                mock.patch.object(uwp, "_run",
+                                  side_effect=self._install_step) as ran, \
+                mock.patch.object(uwp, "download") as downloaded:
+            uwp.import_package(UWP, package, self.dest)
+        owned.assert_called_once_with(UWP)
+        downloaded.assert_not_called()
+        cmd = ran.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--stage") + 1], "1.18.12.1")
+        self.assertTrue((self.dest / "Minecraft.Windows.exe").is_file())
+        self.assertTrue(self.package_file.is_file())
+        self.assertFalse((uwp.install_data() / "stage" / "1.18.12.1")
+                         .exists())
+
+    def test_ownership_comes_before_anything_is_prepared(self):
+        package = uwp.read_package(self.package_file)
+        with mock.patch.object(uwp, "require_ownership",
+                               side_effect=xodus.NotOwned("no copy")), \
+                mock.patch.object(uwp, "_run") as ran, \
+                self.assertRaises(xodus.NotOwned):
+            uwp.import_package(UWP, package, self.dest)
+        self.prepare.assert_not_called()
+        ran.assert_not_called()
+
+    def test_games_puts_it_under_its_build_and_keeps_an_installed_one(self):
+        def fake_import(edition, package, dest, progress=None):
+            _write_build(Path(dest))
+            return dest
+
+        with mock.patch.object(games, "GAMES", self.paths.games), \
+                mock.patch.object(games.uwp, "import_package",
+                                  side_effect=fake_import) as imported:
+            dest = games.import_uwp_build(self.package_file)
+            self.assertEqual(dest, self.dest)
+            record = games._install_record(dest)
+            self.assertEqual((record["edition"], record["version"],
+                              record["source_url"]),
+                             ("uwp", "1.18.12.1", "file:kept.appx"))
+            with self.assertRaisesRegex(BolError, "already installed"):
+                games.import_uwp_build(self.package_file)
+            self.assertEqual(imported.call_count, 1)
+            games.import_uwp_build(self.package_file, replace=True)
+            self.assertEqual(imported.call_count, 2)
+
+    def test_the_import_command_takes_a_package_as_a_build(self):
+        from bol import content, gamesetup
+        with mock.patch.object(gamesetup, "import_uwp_package",
+                               return_value=self.dest) as imported:
+            done = content.import_content(self.package_file)
+        imported.assert_called_once_with(self.package_file)
+        self.assertEqual(done, ["Minecraft build: Minecraft for Windows (UWP) "
+                                "1.18.12.1"])
+
+
 class LaunchTests(unittest.TestCase):
     def test_a_copy_the_account_does_not_own_never_starts(self):
         with tempfile.TemporaryDirectory() as td:

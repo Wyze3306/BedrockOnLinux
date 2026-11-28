@@ -22,6 +22,7 @@ from .games import (
     _game_root,
     edition_exe,
     edition_for_dir,
+    import_uwp_build,
     install_game,
     is_bedrock,
     list_versions,
@@ -52,6 +53,19 @@ def do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
             prefix_operation_lock("install or update BedrockOnLinux"):
         return _do_setup(game_dir, mc_edition, mc_version, proton_tag,
                          force, progress)
+
+
+def import_uwp_package(path, progress=None, replace=False):
+    """Install a UWP package file the player has (#387), with the shared
+    files held as setup holds them. The selected build is left as it is."""
+    arch_problem = hostarch.problem()
+    if arch_problem:
+        raise BolError(arch_problem)
+    with shared_assets_lock(
+            "import a Minecraft package", exclusive=True), \
+            prefix_operation_lock("import a Minecraft package"):
+        mkdirs()
+        return import_uwp_build(path, progress, replace=replace)
 
 
 def setup_or_join(edition, version, progress=None, busy=None):

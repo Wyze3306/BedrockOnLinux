@@ -590,7 +590,8 @@ def main():
     )
     ip = sub.add_parser("import",
                         help=("import .mcpack/.mcaddon/.mcworld/.mctemplate/"
-                              ".mcskin"))
+                              ".mcskin, or a UWP build's own .appx/.msix "
+                              "package"))
     ip.add_argument("files", nargs="+", metavar="FILE",
                     help="content file(s) to import")
     sub.add_parser("repair", help="reset the Wine prefix")

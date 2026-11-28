@@ -656,6 +656,19 @@ def _manifest_identity(folder):
     return attrs
 
 
+def _require_room(dest, version):
+    """Refuse, before anything is fetched, when the build cannot fit."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    free = _free_space(dest.parent)
+    first = not (prefix_ready() and windows_files_ready())
+    needed = (3 << 30) + (_FIRST_INSTALL_ROOM if first else 0)
+    if free is not None and free < needed:
+        raise UwpError(
+            f"Not enough free space to install Minecraft {version}: it needs "
+            f"about {needed / (1 << 30):.0f} GiB and "
+            f"{free / (1 << 30):.1f} GiB is free on {dest.parent}.")
+
+
 def install(edition, entry, dest, progress=None):
     """Install one UWP build into ``dest`` (games/uwp/<version>/)."""
     dest = Path(dest)
@@ -668,21 +681,11 @@ def install(edition, entry, dest, progress=None):
     # Before anything is downloaded: these builds are for the account's own
     # copy, and nothing else would ask.
     require_ownership(edition)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    free = _free_space(dest.parent)
-    first = not (prefix_ready() and windows_files_ready())
-    needed = (3 << 30) + (_FIRST_INSTALL_ROOM if first else 0)
-    if free is not None and free < needed:
-        raise UwpError(
-            f"Not enough free space to install Minecraft {version}: it needs "
-            f"about {needed / (1 << 30):.0f} GiB and "
-            f"{free / (1 << 30):.1f} GiB is free on {dest.parent}.")
+    _require_room(dest, version)
     prepare(progress)
     ensure_store_engagement(progress)
 
-    data = install_data()
-    stage = data / "stage" / version
-    package = data / f"Minecraft.Windows_{version}.appx"
+    package = install_data() / f"Minecraft.Windows_{version}.appx"
     try:
         digest, url = _package_url(update_id)
         info(f"Downloading Minecraft {version} from Microsoft's Windows "
@@ -693,6 +696,19 @@ def install(edition, entry, dest, progress=None):
                 f"The downloaded Minecraft {version} does not match the "
                 "package Windows Update published, so it was not installed. "
                 "Try again.")
+        _install_package(edition, package, version, dest, progress)
+    finally:
+        package.unlink(missing_ok=True)
+        Path(str(package) + ".part").unlink(missing_ok=True)
+    return dest
+
+
+def _install_package(edition, package, version, dest, progress=None):
+    """wineuwp-install ``package`` (a file it only reads), then move the
+    build it makes into ``dest``, once it is seen to be Minecraft."""
+    data = install_data()
+    stage = data / "stage" / version
+    try:
         info(f"Installing Minecraft {version} into wine-uwp …")
         env = environment()
         _run(["wine", "wineuwp-install", str(package), str(data),
@@ -711,12 +727,151 @@ def install(edition, entry, dest, progress=None):
                            "Minecraft for Windows.")
         _replace_dir(stage, dest)
     finally:
-        package.unlink(missing_ok=True)
-        Path(str(package) + ".part").unlink(missing_ok=True)
+        shutil.rmtree(stage, ignore_errors=True)
         for leftover in (stage.with_name(version + ".new"),
                          stage.with_name(version + ".old")):
             shutil.rmtree(leftover, ignore_errors=True)
     return dest
+
+
+# ----------------------------------------------------- a package file
+
+
+# What a player may have kept of a UWP build: the package Windows Update
+# served (an .appx; .msix is the same format), or a bundle of them.
+PACKAGE_SUFFIXES = (".appx", ".msix", ".appxbundle", ".msixbundle")
+# The publisher the family name's "8wekyb3d8bbwe" is the hash of.
+_PUBLISHER = ("CN=Microsoft Corporation, O=Microsoft Corporation, "
+              "L=Redmond, S=Washington, C=US")
+_MANIFEST_CAP = 4 << 20
+_ENCRYPTED_MAGIC = (b"EXPH", b"EXBH")
+
+
+def is_package_file(path):
+    """Whether ``path`` is named as a UWP package or bundle."""
+    return Path(path).suffix.lower() in PACKAGE_SUFFIXES
+
+
+def build_of_package_version(version):
+    """The build a package version is: Bedrock packs its patch and build
+    into the third field, so 1.18.1201.0 is 1.18.12.1 and 1.18.2.0 is
+    1.18.0.2, as mc-w10-versiondb names them."""
+    parts = str(version).split(".")
+    if len(parts) != 4 or not all(part.isdigit() for part in parts) \
+            or parts[3] != "0":
+        return str(version)
+    major, minor, packed = int(parts[0]), int(parts[1]), int(parts[2])
+    return f"{major}.{minor}.{packed // 100}.{packed % 100}"
+
+
+def _xml_attrs(tag):
+    return dict(re.findall(r'([\w:]+)\s*=\s*"([^"]*)"', tag))
+
+
+def _zip_text(archive, name):
+    """A small text member of a package, found whatever its case."""
+    member = next((item for item in archive.infolist()
+                   if item.filename.lower() == name.lower()), None)
+    if member is None:
+        return None
+    if member.file_size > _MANIFEST_CAP:
+        raise UwpError(f"The package's {name} is too large to be a "
+                       "manifest.")
+    with archive.open(member) as handle:
+        text = handle.read(_MANIFEST_CAP).decode("utf-8", "replace")
+    return re.sub(r"<!--.*?-->", "", text, flags=re.S)
+
+
+def read_package(path):
+    """What a package file holds, before anything is done with it:
+    ``{"path", "name", "publisher", "version", "build", "arch", "bundle",
+    "signed"}``, or UwpError saying why it cannot be installed.
+
+    Only the manifest is read. A package that is not Microsoft's own
+    signature -- one someone patched -- is still installed: the copy is the
+    account's either way, which is what is checked (import_package).
+    """
+    path = Path(path).expanduser()
+    try:
+        with open(path, "rb") as handle:
+            magic = handle.read(4)
+    except OSError as exc:
+        raise UwpError(f"{path.name} could not be read ({exc}).") from exc
+    if magic in _ENCRYPTED_MAGIC:
+        raise UwpError(
+            f"{path.name} is an encrypted Store package. Import the .appx "
+            "of the build instead, or install it from the list of versions.")
+    try:
+        archive = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise UwpError(f"{path.name} is not an app package (.appx, .msix "
+                       "or a bundle of them).") from exc
+    with archive:
+        bundle_text = _zip_text(archive, "AppxMetadata/AppxBundleManifest.xml")
+        if bundle_text is not None:
+            identity = re.search(r"<Identity\b[^>]*>", bundle_text, re.S)
+            attrs = _xml_attrs(identity.group(0)) if identity else {}
+            packages = [_xml_attrs(tag) for tag in
+                        re.findall(r"<Package\b[^>]*>", bundle_text, re.S)]
+            apps = [pkg for pkg in packages
+                    if pkg.get("Type", "application").lower() == "application"]
+            chosen = next((pkg for pkg in apps if pkg.get("Architecture", "")
+                           .lower() in ("x64", "neutral")), None)
+            arches = sorted({pkg.get("Architecture", "?") for pkg in apps})
+            found = {"name": attrs.get("Name"),
+                     "publisher": attrs.get("Publisher"),
+                     "version": (chosen or {}).get("Version")
+                     or attrs.get("Version"),
+                     "arch": (chosen or {}).get("Architecture")
+                     or "/".join(arches), "bundle": True}
+        else:
+            text = _zip_text(archive, "AppxManifest.xml")
+            identity = re.search(r"<Identity\b[^>]*>", text or "", re.S)
+            if identity is None:
+                raise UwpError(f"{path.name} has no app manifest: it is not "
+                               "an app package.")
+            attrs = _xml_attrs(identity.group(0))
+            found = {"name": attrs.get("Name"),
+                     "publisher": attrs.get("Publisher"),
+                     "version": attrs.get("Version"),
+                     "arch": attrs.get("ProcessorArchitecture", "neutral"),
+                     "bundle": False}
+        found["signed"] = any(item.filename == "AppxSignature.p7x"
+                              for item in archive.infolist())
+    if found["name"] != FAMILY.split("_")[0] \
+            or found["publisher"] != _PUBLISHER:
+        raise UwpError(f"{path.name} is not Minecraft for Windows (it is "
+                       f"{found['name'] or 'an unnamed package'}).")
+    if not _VERSION.fullmatch(found["version"] or ""):
+        raise UwpError(f"{path.name} does not say which build of Minecraft "
+                       "it is.")
+    found["build"] = build_of_package_version(found["version"])
+    if (found["arch"] or "").lower() not in ("x64", "neutral"):
+        raise UwpError(
+            f"{path.name} is Minecraft {found['build']} for "
+            f"{found['arch'] or 'another processor'} (32-bit builds are "
+            "x86). wine-uwp runs the x64 builds only: import the x64 package "
+            "of that version, or install it from the list of versions.")
+    found["path"] = path
+    return found
+
+
+def import_package(edition, package, dest, progress=None):
+    """Install a package file the player has (read_package's answer): a
+    build they downloaded or backed up themselves, patched or not.
+
+    It is played with the account's own copy as any UWP build is: the Store
+    is asked first, as it is before a download. The file is only read.
+    """
+    dest = Path(dest)
+    version = package["build"]
+    _require_host()
+    require_ownership(edition)
+    _require_room(dest, version)
+    prepare(progress)
+    ensure_store_engagement(progress)
+    return _install_package(edition, Path(package["path"]).resolve(), version,
+                            dest, progress)
 
 
 # ---------------------------------------------------------------- launch
@@ -755,4 +910,5 @@ def check_ready():
 
 __all__ = ["SOURCE", "UwpError", "is_uwp", "version_catalogue", "install",
            "prepare", "require_ownership", "launch_command", "before_launch",
-           "check_ready", "stop_prefix", "prefix_dir"]
+           "check_ready", "stop_prefix", "prefix_dir", "is_package_file",
+           "read_package", "import_package", "PACKAGE_SUFFIXES"]

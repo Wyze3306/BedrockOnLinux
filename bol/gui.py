@@ -4935,7 +4935,9 @@ class MainWindow(QMainWindow):
         if not files:
             pick_paths(self, "Import Minecraft content",
                        "Minecraft content (*.mcpack *.mcaddon *.mcworld "
-                       "*.mctemplate *.mcskin *.zip);;All files (*.*)",
+                       "*.mctemplate *.mcskin *.zip);;Minecraft for Windows "
+                       "UWP package (*.appx *.msix *.appxbundle "
+                       "*.msixbundle);;All files (*.*)",
                        self._do_import)
             return
         self.tools_status_label.setText("Importing…")
@@ -4953,6 +4955,8 @@ class MainWindow(QMainWindow):
             from .gui_content import import_summary  # noqa: PLC0415
             done, errs, running = result
             self.tools_status_label.setText("")
+            if any(item.startswith("Minecraft build:") for item in done):
+                self.refresh_versions()
             self.info_box("Import", import_summary(done, errs, running))
 
         def failed(message):
