@@ -7,11 +7,16 @@ dependency — no library to install, no account of ours, no network call. When
 Discord is not running the socket simply does not exist, which is the only
 failure this module ever expects to meet, and it stays silent about it.
 
-While Minecraft runs, friends see "Playing BedrockOnLinux" with the build
-being played, how long for, and buttons back to the project: the launcher is
-found by word of mouth, and this is the launcher saying its own name. Nothing
-about the account, the world or the server is sent — Discord is told the
-edition and version, and nothing else.
+While a game runs, friends see "Playing Bedrock on Linux" with the edition
+and build being played, how long for, and buttons back to the project: the
+launcher is found by word of mouth, and this is the launcher saying its own
+name. Nothing about the account, the world or the server is sent — Discord is
+told the edition and version, and nothing else.
+
+Discord also recognises Minecraft.Windows.exe on its own and would print
+"Playing Minecraft" beside, or instead of, this. The activity is therefore
+tied to the game's own process id once that process exists: Discord then
+knows the detected game and this presence are one session.
 
 Discord clears a presence by itself the moment the socket closes, so a
 launcher that is killed mid-game cannot leave anyone permanently "in game".
@@ -34,7 +39,7 @@ from .config import (
     DISCORD_LARGE_IMAGE,
     DISCORD_SMALL_IMAGE,
     PRETTY,
-    SITE_URL,
+    REPO_URL,
 )
 
 # Frame opcodes of Discord's local IPC.
@@ -61,13 +66,32 @@ _SOCKET_SUBDIRS = (
 )
 
 _CONNECT_TIMEOUT = 2.0   # a local socket answers at once or not at all
+_REPLY_TIMEOUT = 5.0     # Discord answers a SET_ACTIVITY within milliseconds
 _POLL_SECONDS = 1.0      # how often the session thread notices it must stop
-_RETRY_SECONDS = 30.0    # Discord is often started after the game
+# Discord is often started after the game, or restarted during it. Looking
+# for its socket is a handful of stat() calls, so this can be short enough
+# that the presence appears about when Discord's window does.
+_RETRY_SECONDS = 5.0
+# How long the game's own process is looked for after the session begins.
+# Wine takes a few seconds to get from the launcher's Popen to the game.
+_GAME_PID_SECONDS = 120.0
+_GAME_PID_POLL = 3.0
 
+# What each edition is called on the card. The launcher's own names ("Minecraft
+# for Windows") are the Store's; people say these.
 _EDITION_NAMES = {
     "release": "Minecraft Bedrock",
     "preview": "Minecraft Preview",
+    "uwp": "Minecraft Bedrock",
+    "education": "Minecraft Education",
+    "dungeons": "Minecraft Dungeons",
+    "legends": "Minecraft Legends",
 }
+
+# Discord truncates longer strings and rejects an activity outright when a
+# button label is over its limit.
+_TEXT_LIMIT = 128
+_LABEL_LIMIT = 32
 
 
 def _runtime_dirs(environ):
@@ -164,15 +188,61 @@ def _handshake(sock, app_id):
 
 
 def _set_activity(sock, activity, pid):
-    """Ask Discord to show (activity) or drop (None) the play session."""
+    """Ask Discord to show (activity) or drop (None) the play session.
+
+    Returns the nonce, which Discord's answer carries back.
+    """
     args = {"pid": int(pid)}
     if activity is not None:
         args["activity"] = activity
+    nonce = str(uuid.uuid4())
     _send(sock, _OP_FRAME, {
         "cmd": "SET_ACTIVITY",
-        "nonce": str(uuid.uuid4()),
+        "nonce": nonce,
         "args": args,
     })
+    return nonce
+
+
+def _await_reply(sock, nonce, timeout=None):
+    """Discord's answer to one command: True accepted, False refused.
+
+    None when no answer came in time (an older client that does not echo
+    nonces) or the socket closed. Pings met on the way are answered.
+    """
+    deadline = time.monotonic() + (_REPLY_TIMEOUT if timeout is None
+                                   else timeout)
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return None
+        readable, _, _ = select.select([sock], [], [], left)
+        if not readable:
+            return None
+        frame = _recv(sock)
+        if frame is None:
+            return None
+        opcode, payload = frame
+        if opcode == _OP_PING:
+            _send(sock, _OP_PONG, payload)
+            continue
+        if opcode == _OP_CLOSE:
+            return None
+        if opcode != _OP_FRAME or payload.get("nonce") != nonce:
+            continue
+        return payload.get("evt") != "ERROR"
+
+
+def _plain(activity):
+    """The activity with only the fields every Discord client has accepted.
+
+    Newer fields (``status_display_type``, ``details_url``) are refused as a
+    whole activity by a client that predates them, and a refused activity is
+    a session that shows nothing at all.
+    """
+    keep = ("details", "state", "timestamps", "assets", "buttons",
+            "instance")
+    return {key: activity[key] for key in keep if key in activity}
 
 
 def _artwork():
@@ -192,30 +262,123 @@ def _artwork():
     return {"assets": assets} if assets else {}
 
 
-def session_activity(settings=None, started_at=None):
+def game_name(edition=None, settings=None):
+    """What the card calls the game being played.
+
+    ``edition`` is the launcher's entry for the build (bol.config.MC_PRODUCTS);
+    without one, the edition recorded in the settings is used.
+    """
+    edition_id = ""
+    if isinstance(edition, dict):
+        edition_id = str(edition.get("id") or "").strip().lower()
+        if edition_id not in _EDITION_NAMES and edition.get("name"):
+            return str(edition["name"])
+    if not edition_id:
+        edition_id = str((settings or {}).get("mc_edition") or "release")
+        edition_id = edition_id.strip().lower()
+    return _EDITION_NAMES.get(edition_id, _EDITION_NAMES["release"])
+
+
+def session_activity(settings=None, started_at=None, edition=None,
+                     version=None):
     """What Discord is asked to display for one play session.
 
-    The heading is the application's own name — "BedrockOnLinux" — so these
-    two lines say what is being played inside it, and the timestamp turns
-    into the session clock Discord counts up on its own.
+    The heading is the application's own name — "Bedrock on Linux" — so the
+    two lines below say what is being played inside it, and the timestamp
+    turns into the session clock Discord counts up on its own.
+
+    ``version`` is the build as Mojang numbers it (1.26.50.25). The settings'
+    ``mc_version`` is only a fallback: it holds the catalogue's build tag,
+    which is not what anyone calls a version.
     """
     settings = settings or {}
-    edition = str(settings.get("mc_edition") or "release").strip().lower()
-    title = _EDITION_NAMES.get(edition, _EDITION_NAMES["release"])
-    version = str(settings.get("mc_version") or "").strip()
+    title = game_name(edition, settings)
+    version = str(version or settings.get("mc_version") or "").strip()
+    details = f"{title} {version}".strip()[:_TEXT_LIMIT]
     return {
-        "details": f"{title} {version}".strip(),
+        # 0 is the application's name: the member list then reads "Bedrock
+        # on Linux" rather than the edition.
+        "status_display_type": 0,
+        "details": details,
+        "details_url": REPO_URL,
         "state": "Playing on Linux",
         "timestamps": {"start": int(started_at or time.time())},
         **_artwork(),
         # The advertisement proper: whoever sees the session can get the
-        # launcher from it. Discord allows two, 32 characters each.
+        # launcher from it. Discord allows two, 32 characters each, and shows
+        # them to everyone but the player.
         "buttons": [
-            {"label": "Play it on Linux", "url": SITE_URL},
-            {"label": "Join the Discord", "url": DISCORD_INVITE},
+            {"label": "Get it on GitHub"[:_LABEL_LIMIT], "url": REPO_URL},
+            {"label": "Join the Discord"[:_LABEL_LIMIT],
+             "url": DISCORD_INVITE},
         ],
         "instance": False,
     }
+
+
+def _in_flatpak():
+    return Path("/.flatpak-info").exists()
+
+
+def _proc_parent(pid, proc_root):
+    try:
+        stat = (proc_root / str(pid) / "stat").read_text()
+    except OSError:
+        return None
+    # The command name is in parentheses and may itself hold spaces or ")".
+    fields = stat[stat.rfind(")") + 2:].split()
+    try:
+        return int(fields[1])
+    except (IndexError, ValueError):
+        return None
+
+
+def _runs_exe(pid, exe_name, proc_root):
+    """Whether a process is Wine running ``exe_name``."""
+    folder = proc_root / str(pid)
+    want = exe_name.lower()
+    try:
+        comm = (folder / "comm").read_text().strip().lower()
+    except OSError:
+        return False
+    # Wine names the Unix process after the Windows image; the kernel keeps
+    # 15 characters of it.
+    if comm and comm == want[:15]:
+        return True
+    try:
+        argv0 = (folder / "cmdline").read_bytes().split(b"\0", 1)[0]
+    except OSError:
+        return False
+    tail = argv0.decode("utf-8", "replace").replace("\\", "/")
+    return tail.rsplit("/", 1)[-1].lower() == want
+
+
+def find_game_pid(exe_name, ancestor=None, proc_root="/proc"):
+    """The process id of the running game, or None.
+
+    The process that runs ``exe_name`` under Wine — the one Discord itself
+    recognises — preferring one started by ``ancestor`` (the launcher's own
+    game process) when several profiles are playing at once.
+    """
+    if not exe_name:
+        return None
+    proc_root = Path(proc_root)
+    try:
+        pids = [int(entry.name) for entry in proc_root.iterdir()
+                if entry.name.isdigit()]
+    except OSError:
+        return None
+    found = [pid for pid in pids if _runs_exe(pid, exe_name, proc_root)]
+    if not found:
+        return None
+    if ancestor:
+        for pid in sorted(found, reverse=True):
+            seen, parent = 0, pid
+            while parent and parent > 1 and seen < 64:
+                if parent == ancestor:
+                    return pid
+                parent, seen = _proc_parent(parent, proc_root), seen + 1
+    return max(found)
 
 
 def presence_app_id(environ=None):
@@ -250,11 +413,20 @@ class Session:
     without Discord.
     """
 
-    def __init__(self, app_id="", activity=None, environ=None, pid=None):
+    def __init__(self, app_id="", activity=None, environ=None, pid=None,
+                 game_pid=None):
         self._app_id = str(app_id or "")
         self._activity = activity
         self._environ = os.environ if environ is None else environ
         self._pid = os.getpid() if pid is None else pid
+        # A callable returning the game's process id once it exists, or None.
+        # Discord is then told that pid instead of the launcher's.
+        self._game_pid = game_pid
+        self._game_pid_until = time.monotonic() + _GAME_PID_SECONDS
+        self._next_look = 0.0
+        # Set once Discord refused the full activity: what is sent from then
+        # on is the plain one.
+        self._plain = False
         self._stopped = threading.Event()
         self._thread = None
         # Set once Discord has accepted the presence; tests and `doctor` read
@@ -298,7 +470,7 @@ class Session:
                     if sock is None and self._stopped.wait(_RETRY_SECONDS):
                         break
                     continue
-                if not self._serve(sock):
+                if not self._serve(sock) or not self._follow_game(sock):
                     self._close(sock, clear=False)
                     sock = None
         except Exception:
@@ -324,9 +496,9 @@ class Session:
             try:
                 sock.connect(str(path))
                 if _handshake(sock, self._app_id):
-                    _set_activity(sock, self._activity, self._pid)
-                    self.announced.set()
-                    return sock
+                    self._look_for_game()
+                    if self._announce(sock):
+                        return sock
             except OSError:
                 pass
             try:
@@ -334,6 +506,52 @@ class Session:
             except OSError:
                 pass
         return None
+
+    def _activity_to_send(self):
+        return _plain(self._activity) if self._plain else self._activity
+
+    def _announce(self, sock):
+        """Set the activity; False when Discord would not take it at all."""
+        accepted = _await_reply(
+            sock, _set_activity(sock, self._activity_to_send(), self._pid))
+        if accepted is False and not self._plain:
+            # An older client refusing a newer field: what it has always
+            # accepted still shows the session.
+            self._plain = True
+            accepted = _await_reply(
+                sock, _set_activity(sock, self._activity_to_send(),
+                                    self._pid))
+        if accepted is False:
+            return False
+        self.announced.set()
+        return True
+
+    def _look_for_game(self):
+        """Switch to the game's pid if it has appeared. True if it changed."""
+        now = time.monotonic()
+        if self._game_pid is None or now > self._game_pid_until \
+                or now < self._next_look:
+            return False
+        # A walk over /proc: every few seconds is soon enough.
+        self._next_look = now + _GAME_PID_POLL
+        try:
+            pid = self._game_pid()
+        except Exception:
+            pid = None
+        if not pid or pid == self._pid:
+            return False
+        self._pid = pid
+        self._game_pid = None   # found: nothing left to look for
+        return True
+
+    def _follow_game(self, sock):
+        """Re-send the activity under the game's pid once it is known."""
+        if not self._look_for_game():
+            return True
+        try:
+            return self._announce(sock)
+        except OSError:
+            return False
 
     def _serve(self, sock):
         """Answer Discord for a moment. False once the connection is gone."""
@@ -371,12 +589,19 @@ class Session:
         self.announced.clear()
 
 
-def start_session(settings=None, environ=None, started_at=None):
+def start_session(settings=None, environ=None, started_at=None,
+                  edition=None, version=None, exe_name=None, game_proc=None):
     """Announce a play session on Discord for as long as it lasts.
 
     Always returns a :class:`Session` — an inert one when presence is off,
     when no Discord application is configured, or when Discord is not
     running — so a launch can stop it without asking whether it ever began.
+
+    ``exe_name`` is the Windows executable of the game and ``game_proc`` the
+    process the launcher started for it: together they find the process
+    Discord itself recognises as the game. Inside a Flatpak, process ids are
+    the sandbox's own and mean nothing to a Discord outside it, so the
+    launcher's own pid is kept there.
     """
     environ = os.environ if environ is None else environ
     try:
@@ -385,8 +610,14 @@ def start_session(settings=None, environ=None, started_at=None):
         app_id = presence_app_id(environ)
         if not app_id:
             return Session(environ=environ)
-        activity = session_activity(settings, started_at=started_at)
-        return Session(app_id, activity, environ=environ).start()
+        activity = session_activity(settings, started_at=started_at,
+                                    edition=edition, version=version)
+        finder = None
+        if exe_name and not _in_flatpak():
+            ancestor = getattr(game_proc, "pid", None)
+            finder = lambda: find_game_pid(exe_name, ancestor)  # noqa: E731
+        return Session(app_id, activity, environ=environ,
+                       game_pid=finder).start()
     except Exception:
         # A launch in progress is worth more than its decoration: a machine
         # that cannot even spare a thread still gets to play.

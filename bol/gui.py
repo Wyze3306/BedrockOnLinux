@@ -43,7 +43,7 @@ from .doctor import acknowledge_gpu_crash, gpu_crash_acknowledgement_status
 from .games import (installed_builds, installed_versions, list_editions,
                     list_versions, remove_build)
 from .gamesetup import setup_or_join
-from . import betterrtx, engine_arch, gpus
+from . import betterrtx, discord, engine_arch, gpus
 from .inject import run_injector
 from . import icons
 from .gui_profiles import ProfilesPage
@@ -3985,6 +3985,21 @@ class MainWindow(QMainWindow):
                                   "or invite you.")
         presence_row.toggled.connect(lambda on: self._save_setting("xbl_presence", on))
         accounts.addWidget(presence_row)
+
+        # Only once there is a Discord application to appear as: without one
+        # the switch would promise something nothing sends (bol.discord).
+        if discord.presence_app_id():
+            discord_row = self._switch(
+                "Show what you play on Discord",
+                self.settings.get("discord_presence", True),
+                "While a game runs, your Discord profile reads \"Playing "
+                "Bedrock on Linux\" with the edition and version, the time "
+                "played and a link to the project. Nothing about your "
+                "account, world or server is sent. Discord must be running "
+                "on this computer.")
+            discord_row.toggled.connect(
+                lambda on: self._save_setting("discord_presence", on))
+            accounts.addWidget(discord_row)
 
         v.addStretch(1)
         return w

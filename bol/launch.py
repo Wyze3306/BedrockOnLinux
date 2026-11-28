@@ -1158,6 +1158,7 @@ def _launch_uwp(lock_fds, edition_entry, gd, exe, on_started=None,
     gpu_marker_token = None
     game_returned = False
     instance = _InstanceSession()
+    presence = discord.Session()
     try:
         supervision.begin_session()
         gpu_marker_token = arm_gpu_launch()
@@ -1191,6 +1192,10 @@ def _launch_uwp(lock_fds, edition_entry, gd, exe, on_started=None,
                 warn("The launcher could not step aside for the game window "
                      "(%s)." % type(hook_error).__name__)
         started = time.time()
+        presence = discord.start_session(
+            s, started_at=started, edition=edition_entry,
+            version=mc_version_str(Path(gd)), exe_name=Path(exe).name,
+            game_proc=proc)
         announced = stop_announced = False
         while True:
             try:
@@ -1220,6 +1225,8 @@ def _launch_uwp(lock_fds, edition_entry, gd, exe, on_started=None,
                        "back here.")
     finally:
         instance.close()
+        presence.stop(timeout=0 if supervision.stop_requested_for()
+                      is not None else 3.0)
         if game_returned and gpu_marker_token:
             try:
                 mark_gpu_wrapper_returned(gpu_marker_token)
@@ -1690,8 +1697,13 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         # Say on Discord what is being played, for as long as it is played:
         # the launcher is found by word of mouth, and this is it saying its
         # own name. Settings turns it off, and it never affects the game.
-        presence = discord.start_session(s, started_at=started) \
-            if bedrock else discord.Session()
+        # Every title of the family gets it: Discord would otherwise print
+        # its own "Playing Minecraft Dungeons" without the launcher's name.
+        presence = discord.start_session(
+            s, started_at=started, edition=edition_entry,
+            version=(mc_version_str(Path(gd)) if bedrock else None)
+            or build_version(gd),
+            exe_name=Path(game_exe).name, game_proc=proc)
         # Xbox Live presence is the game's own once the pre-auth carries a
         # title token (#386). An account that signed in without one leaves
         # nothing in the game saying it plays, and its friends see it

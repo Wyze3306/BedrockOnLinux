@@ -4,6 +4,18 @@
 
 ### Added
 
+- **Discord shows "Playing Bedrock on Linux", with a button to GitHub.**
+  The Rich Presence never sent anything: no Discord application was
+  configured, so the "Playing Minecraft" friends saw was Discord recognising
+  `Minecraft.Windows.exe` on its own. The presence now names the edition
+  (Bedrock, Preview, UWP, Education, Dungeons, Legends) and the version as
+  Mojang numbers it, links the version line and a "Get it on GitHub" button
+  to the repository beside "Join the Discord", and is tied to the game's own
+  process so Discord treats the game it detected and this presence as one
+  session. A Discord client that refuses a newer field gets the plain
+  activity instead of nothing, Discord started after the game is picked up
+  within five seconds, and Settings has a switch for it again.
+
 - **One Microsoft sign-in, Xbox Rich Presence and joinable worlds (#386).**
   The Xbox Live account now signs in the way Minecraft for Windows does,
   through the same Microsoft window as the download, and the first sign-in

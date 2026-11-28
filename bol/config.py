@@ -241,13 +241,17 @@ SELF_REPO = WINEGDK_PREBUILT_REPO
 # Where the launcher points people who ask where it came from -- the two
 # links Discord shows under a play session, and the ones printed elsewhere.
 SITE_URL = "https://wyze3306.github.io/BedrockOnLinux/"
+REPO_URL = f"https://github.com/{SELF_REPO}"
 DISCORD_INVITE = "https://discord.gg/5YJq54Yhbu"
 
 # Discord Rich Presence. Discord names the *application* in "Playing ...", so
-# the application registered on discord.com/developers must be called exactly
-# like this launcher; the id below is the one it hands out. Empty means the
-# feature is off everywhere, which is what a fork with no application of its
-# own wants -- it must never advertise ours. BOL_DISCORD_APP_ID overrides it.
+# the application registered on discord.com/developers must be called like
+# this launcher ("Bedrock on Linux"); the id below is the one it hands out.
+# Empty means the feature is off everywhere, which is what a fork with no
+# application of its own wants -- it must never advertise ours. While it was
+# empty, the "Playing Minecraft" people saw was Discord recognising
+# Minecraft.Windows.exe on its own, not this launcher. BOL_DISCORD_APP_ID
+# overrides it.
 DISCORD_APP_ID = ""
 # Rich Presence artwork. Each of these is either an asset key uploaded to the
 # application (Rich Presence > Art Assets) or a full https:// URL, which

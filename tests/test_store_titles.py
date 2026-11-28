@@ -481,7 +481,13 @@ class StoreTitleLaunchTests(ReadyLaunchHarness, unittest.TestCase):
             levi.assert_not_called()
             inject.assert_not_called()
             self.assertEqual(self.options_calls, [])
-            self.assertEqual(self.presence_calls, [])
+            # Discord names every title of the family under the launcher's
+            # own name; otherwise it prints its own "Playing Minecraft
+            # Dungeons" with nothing about Bedrock on Linux.
+            self.assertEqual(len(self.presence_calls), 1)
+            presence = self.presence_calls[0][1]
+            self.assertEqual(presence["edition"]["id"], "dungeons")
+            self.assertEqual(presence["exe_name"], "Dungeons.exe")
             self.assertEqual(self.xbl_calls, [])
             # The account still goes into the prefix, for the engine's XUser.
             self.launch_mocks["wine_reg_set_refresh_token"].assert_called_once()

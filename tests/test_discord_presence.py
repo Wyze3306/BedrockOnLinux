@@ -53,8 +53,12 @@ def _write_frame(conn, opcode, payload):
 class FakeDiscord(threading.Thread):
     """A Unix socket that answers a handshake and records what it is told."""
 
-    def __init__(self, folder):
+    def __init__(self, folder, refuse=(), answer=True):
         super().__init__(daemon=True)
+        # Activity fields this "older client" refuses the whole activity for.
+        self._refuse = set(refuse)
+        self._answer = answer
+        self.sent = []          # every (activity, pid) in arrival order
         self.path = Path(folder) / "discord-ipc-0"
         self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server.bind(str(self.path))
@@ -89,11 +93,26 @@ class FakeDiscord(threading.Thread):
                 if payload.get("cmd") != "SET_ACTIVITY":
                     continue
                 args = payload.get("args") or {}
-                if "activity" in args and args["activity"] is not None:
-                    self.activity = args["activity"]
+                activity = args.get("activity")
+                if activity is not None and self._refuse & set(activity):
+                    _write_frame(conn, _FRAME, {
+                        "cmd": "SET_ACTIVITY", "evt": "ERROR",
+                        "nonce": payload.get("nonce"),
+                        "data": {"code": 4000, "message": "child fails"}})
+                    continue
+                if activity is not None:
+                    self.sent.append((activity, args.get("pid")))
+                    self.activity = activity
                     self.announced.set()
                 else:
                     self.cleared.set()
+                if self._answer:
+                    try:
+                        _write_frame(conn, _FRAME, {
+                            "cmd": "SET_ACTIVITY", "evt": None,
+                            "nonce": payload.get("nonce"), "data": activity})
+                    except OSError:
+                        break   # the clear was the last word: it hung up
         self.hung_up.set()
 
     def close(self):
@@ -148,6 +167,34 @@ class ActivityTests(unittest.TestCase):
         for button in buttons:
             self.assertTrue(button["url"].startswith("https://"))
             self.assertLessEqual(len(button["label"]), 32)
+
+    def test_one_button_leads_straight_to_the_github_repository(self):
+        from bol.config import REPO_URL
+        self.assertTrue(REPO_URL.startswith("https://github.com/"))
+        urls = [b["url"] for b in discord.session_activity({})["buttons"]]
+        self.assertIn(REPO_URL, urls)
+
+    def test_the_member_list_reads_the_launchers_name(self):
+        # 0 = the application's name ("Bedrock on Linux"), not the edition.
+        self.assertEqual(
+            discord.session_activity({})["status_display_type"], 0)
+
+    def test_the_version_the_launcher_reads_wins_over_the_build_tag(self):
+        # settings["mc_version"] is the catalogue's tag ("26.44"), which is
+        # not a version anyone recognises.
+        activity = discord.session_activity(
+            {"mc_version": "26.44"}, version="1.26.44.3")
+        self.assertEqual(activity["details"], "Minecraft Bedrock 1.26.44.3")
+
+    def test_every_title_of_the_family_is_named(self):
+        for edition, name in (({"id": "dungeons"}, "Minecraft Dungeons"),
+                              ({"id": "legends"}, "Minecraft Legends"),
+                              ({"id": "education"}, "Minecraft Education"),
+                              ({"id": "uwp"}, "Minecraft Bedrock"),
+                              ({"id": "preview"}, "Minecraft Preview")):
+            self.assertEqual(discord.game_name(edition), name)
+        self.assertEqual(discord.game_name({"id": "new", "name": "Spin-off"}),
+                         "Spin-off")
 
 
 class EnablementTests(unittest.TestCase):
@@ -235,6 +282,117 @@ class SessionTests(unittest.TestCase):
         self.assertFalse(session.active)
         self.assertFalse(fake.announced.wait(1))
         self.assertIsNone(fake.handshake)
+
+
+class FallbackAndGamePidTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="bol-ipc-", dir="/tmp")
+        self.addCleanup(self._tmp.cleanup)
+        self.folder = self._tmp.name
+        self.env = {"XDG_RUNTIME_DIR": self.folder,
+                    "BOL_DISCORD_APP_ID": "424242"}
+
+    def test_an_older_client_still_shows_the_session(self):
+        # A Discord that predates a field refuses the whole activity; the
+        # session must not end up showing nothing.
+        fake = FakeDiscord(self.folder, refuse={"details_url"})
+        self.addCleanup(fake.close)
+        fake.start()
+        session = discord.start_session(
+            {}, environ=self.env, version="1.26.50.25")
+        self.addCleanup(session.stop)
+        self.assertTrue(fake.announced.wait(_TIMEOUT))
+        self.assertNotIn("details_url", fake.activity)
+        self.assertEqual(fake.activity["details"],
+                         "Minecraft Bedrock 1.26.50.25")
+        self.assertEqual(len(fake.activity["buttons"]), 2)
+
+    def test_a_client_that_never_answers_is_not_waited_on_forever(self):
+        fake = FakeDiscord(self.folder, answer=False)
+        self.addCleanup(fake.close)
+        fake.start()
+        with mock.patch.object(discord, "_REPLY_TIMEOUT", 0.2):
+            session = discord.start_session({}, environ=self.env)
+            self.addCleanup(session.stop)
+            self.assertTrue(session.announced.wait(_TIMEOUT))
+        self.assertIn("details_url", fake.activity)
+
+    def test_the_activity_moves_to_the_games_pid_once_it_runs(self):
+        # Discord recognises Minecraft.Windows.exe itself; naming that
+        # process ties its "Minecraft" to this presence.
+        fake = FakeDiscord(self.folder)
+        self.addCleanup(fake.close)
+        fake.start()
+        game = {"pid": None}
+        with mock.patch.object(discord, "_GAME_PID_POLL", 0.05), \
+                mock.patch.object(discord, "_POLL_SECONDS", 0.05), \
+                mock.patch.object(discord, "_in_flatpak", return_value=False), \
+                mock.patch.object(discord, "find_game_pid",
+                                  side_effect=lambda *a: game["pid"]):
+            session = discord.start_session(
+                {}, environ=self.env, exe_name="Minecraft.Windows.exe")
+            self.addCleanup(session.stop)
+            self.assertTrue(fake.announced.wait(_TIMEOUT))
+            self.assertEqual(fake.sent[0][1], session._pid)
+            game["pid"] = 999_999
+            deadline = time.monotonic() + _TIMEOUT
+            while time.monotonic() < deadline and fake.sent[-1][1] != 999_999:
+                time.sleep(0.05)
+        self.assertEqual(fake.sent[-1][1], 999_999)
+        self.assertEqual(fake.sent[-1][0], fake.sent[0][0])
+
+    def test_inside_a_flatpak_the_launchers_pid_is_kept(self):
+        with mock.patch.object(discord, "_in_flatpak", return_value=True):
+            session = discord.start_session(
+                {}, environ=self.env, exe_name="Minecraft.Windows.exe")
+        self.addCleanup(session.stop)
+        self.assertIsNone(session._game_pid)
+
+
+class FindGamePidTests(unittest.TestCase):
+    """A fake /proc: what Wine leaves for a running Windows game."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        (self.root / "self").mkdir()       # not a pid: must be skipped
+
+    def _proc(self, pid, ppid, comm, argv0):
+        folder = self.root / str(pid)
+        folder.mkdir()
+        (folder / "comm").write_text(comm + "\n")
+        (folder / "cmdline").write_bytes(argv0.encode() + b"\0--arg\0")
+        (folder / "stat").write_text(
+            f"{pid} ({comm}) S {ppid} {pid} {pid} 0 -1\n")
+
+    def test_wines_process_name_is_recognised(self):
+        self._proc(10, 1, "python3", "/usr/bin/python3")
+        self._proc(20, 10, "Minecraft.Windo",
+                   "Z:\\games\\Minecraft.Windows.exe")
+        self.assertEqual(
+            discord.find_game_pid("Minecraft.Windows.exe",
+                                  proc_root=self.root), 20)
+
+    def test_the_command_line_is_enough_when_the_name_is_not(self):
+        self._proc(30, 1, "wine64-preload", "C:\\x\\Dungeons.exe")
+        self.assertEqual(
+            discord.find_game_pid("Dungeons.exe", proc_root=self.root), 30)
+
+    def test_this_launchers_own_game_wins_over_another_profiles(self):
+        self._proc(100, 1, "umu-run", "/bin/umu-run")
+        self._proc(110, 100, "Minecraft.Windo", "Minecraft.Windows.exe")
+        self._proc(200, 1, "umu-run", "/bin/umu-run")
+        self._proc(210, 200, "Minecraft.Windo", "Minecraft.Windows.exe")
+        self.assertEqual(
+            discord.find_game_pid("Minecraft.Windows.exe", ancestor=100,
+                                  proc_root=self.root), 110)
+
+    def test_nothing_running_is_none(self):
+        self._proc(10, 1, "bash", "/bin/bash")
+        self.assertIsNone(discord.find_game_pid("Minecraft.Windows.exe",
+                                                proc_root=self.root))
+        self.assertIsNone(discord.find_game_pid("", proc_root=self.root))
 
 
 class ArtworkTests(unittest.TestCase):
