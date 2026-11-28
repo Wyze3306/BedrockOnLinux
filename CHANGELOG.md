@@ -45,10 +45,21 @@
   checked against a pin, and builds a Wine prefix of the profile's own.
   wine-uwp tells every app it holds a full licence, so the launcher asks
   the Store instead: the signed-in Microsoft account must own Minecraft for
-  Windows, before a build is installed and again at each start. Needs
+  Windows, before a build is installed and again at each start, asked while
+  the prefix is checked (the Store's licence lapses within a minute, so
+  there is nothing to keep from one start to the next). Needs
   glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39); the Flatpak
-  brings its own. 1.21.51 plays; how far back the others go is up to
-  wine-uwp, and 1.20.81 still crashes a few seconds after its title screen.
+  brings its own. 1.21.51 plays; the older builds tried (1.16.221, 1.18.12,
+  1.19.83, 1.20.81) close while they load or soon after their title screen,
+  on Windows pieces wine-uwp does not have yet: the narrator's audio
+  (Media Foundation's MFCreateTelemetrySession, and AudioEncodingProperties
+  in 1.20) and two Store calls (GetCustomerPurchaseIdAsync and
+  GetCustomerCollectionsIdAsync).
+  A package of a UWP build you kept yourself (.appx, .msix or a bundle of
+  them, patched or not) installs with Import, or by dropping it on the
+  window, beside the builds downloaded here: it must be Minecraft for
+  Windows for x64 (wine-uwp runs no 32-bit build), and the same Store check
+  applies.
 
 - **ARM engine, experimental (#250).** On an ARM computer with 4 KiB pages
   (Apple silicon counts, inside muvm), Settings ▸ Advanced ▸ Engine can switch

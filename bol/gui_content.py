@@ -518,6 +518,7 @@ _WHERE = {
     "resource pack": "Resource packs: Settings ▸ Global Resources, or a "
                      "world's Edit ▸ Resource Packs.",
     "skin pack": "Skins: Dressing Room ▸ Classic Skins ▸ Owned.",
+    "Minecraft build": "Minecraft builds: the version list beside PLAY.",
 }
 
 
@@ -1008,7 +1009,9 @@ class ContentPage(QFrame):
             from .gui import pick_paths  # noqa: PLC0415 - avoids a cycle
             pick_paths(self.win, "Import Minecraft content",
                        "Minecraft content (*.mcpack *.mcaddon *.mcworld "
-                       "*.mctemplate *.mcskin *.zip);;All files (*.*)",
+                       "*.mctemplate *.mcskin *.zip);;Minecraft for Windows "
+                       "UWP package (*.appx *.msix *.appxbundle "
+                       "*.msixbundle);;All files (*.*)",
                        self.import_files)
             return
         if self.busy:
@@ -1031,6 +1034,8 @@ class ContentPage(QFrame):
         def finished(result):
             done, errors, running = result
             self._set_busy(False)
+            if any(item.startswith("Minecraft build:") for item in done):
+                self.win.refresh_versions()
             self._set_op(f"Imported {len(done)} item(s)." if done
                          else "Nothing imported.")
             QMessageBox.information(self.win, "Import",

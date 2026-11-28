@@ -1247,9 +1247,19 @@ def _launch_uwp(lock_fds, edition_entry, gd, exe, on_started=None,
         die("Bedrock Editor is part of the GDK builds of Minecraft for "
             "Windows, not of the UWP ones.")
     # wine-uwp grants every app a full licence: this is the one check that
-    # the copy is the player's own, and it is asked at every start.
-    uwp.require_ownership(edition_entry)
+    # the copy is the player's own, and it is asked at every start. What the
+    # Store answers is a licence that lapses within the minute it is given
+    # (#308), so there is nothing to keep from one start to the next; it is
+    # asked while the prefix is readied, and the game starts only on a yes.
+    pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="uwp-licence")
+    try:
+        owned = pool.submit(uwp.require_ownership, edition_entry)
+    finally:
+        pool.shutdown(wait=False)
     if uwp.check_ready():
+        # Nothing is downloaded for a copy the account does not own.
+        owned.result()
         uwp.prepare()
     retire_idle_current_boot_marker()
     require_safe_graphics_session()
@@ -1263,6 +1273,7 @@ def _launch_uwp(lock_fds, edition_entry, gd, exe, on_started=None,
     info(f"Starting {title} {mc_version_str(Path(gd)) or ''} on wine-uwp …"
          .replace("  ", " "))
     uwp.before_launch(env)
+    owned.result()
     if hasattr(lock_fds, "share"):
         lock_fds.share()
     prefix = uwp.prefix_dir()

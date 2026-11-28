@@ -412,6 +412,35 @@ def install_game(edition, version=None, progress=None, force=False):
     return root
 
 
+def import_uwp_build(path, progress=None, replace=False):
+    """Install a UWP package file of the player's own (#387) as the build it
+    is, in games/uwp/<version>/ beside the ones downloaded here.
+
+    A build already installed at that version is replaced only when asked:
+    a patched package and Microsoft's own carry the same number.
+    """
+    edition = xodus.edition("uwp")
+    package = uwp.read_package(path)
+    version = package["build"]
+    dest = version_dir(edition["id"], version)
+    if _game_root(dest, edition_exe(edition)) and not replace:
+        raise BolError(
+            f"{_build_name(edition, version)} is already installed. Remove it "
+            "first (Settings ▸ Versions, or 'versions --remove "
+            f"{version} --mc {edition['id']}'), then import "
+            f"{package['path'].name} again.")
+    info(f"Installing {_build_name(edition, version)} from "
+         f"{package['path'].name} …")
+    uwp.import_package(edition, package, dest, progress)
+    _write_install_record(dest, edition, version,
+                          "file:" + package["path"].name)
+    if not package["signed"]:
+        info(f"{package['path'].name} carries no signature: it is played as "
+             "it is.")
+    ok(f"{_build_name(edition, version)} installed")
+    return dest
+
+
 def _human_size(size):
     value = float(size or 0)
     for unit in ("B", "KiB", "MiB"):
