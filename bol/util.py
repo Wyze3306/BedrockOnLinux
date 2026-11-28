@@ -1,6 +1,7 @@
 """bol.util — small shared helpers: run, settings, HTTP, downloads, GitHub, screen/proc."""
 # SPDX-License-Identifier: MIT
 
+import copy
 import http.client
 import fcntl
 import hashlib
@@ -67,17 +68,56 @@ def mkdirs():
         pass
 
 
+class LoadedSettings(dict):
+    """The settings as load_settings read them, remembering what the file
+    held at that moment.
+
+    Twenty-odd places save the settings, each by writing back the whole dict
+    it loaded. One that kept its copy for a while (the engine check, a
+    download, the window) put back every value another writer had changed
+    meanwhile, and so did a launch racing another one on the same BOL_HOME.
+    save_settings writes back only what changed since this was read.
+    """
+
+    def copy(self):
+        twin = LoadedSettings(self)
+        twin._loaded = getattr(self, "_loaded", None)
+        return twin
+
+
+def _read_settings_file():
+    """The settings file's dict: {} when there is none, None when it cannot
+    be read as one."""
+    if not SETTINGS.exists():
+        return {}
+    try:
+        data = json.loads(SETTINGS.read_text())
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def load_settings():
     _ensure_xdg_storage()
-    s = {}
-    if SETTINGS.exists():
-        try:
-            s = json.loads(SETTINGS.read_text())
-        except Exception:
-            s = {}
+    s = _read_settings_file() or {}
+    loaded = copy.deepcopy(s)
     if not s.get("proton_dir") and not s.get("proton_url"):
         s.setdefault("proton_source", "winegdk")
+    s = LoadedSettings(s)
+    s._loaded = loaded
     return s
+
+
+def _changes_onto(current, s, loaded):
+    """``current`` plus what ``s`` changed since it read ``loaded``."""
+    merged = dict(current)
+    for key, value in s.items():
+        if key not in loaded or loaded[key] != value:
+            merged[key] = value
+    for key in loaded:
+        if key not in s:
+            merged.pop(key, None)
+    return merged
 
 
 def save_settings(s):
@@ -93,17 +133,28 @@ def save_settings(s):
     try:
         os.chmod(lock_path, 0o600)
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        payload = s
+        loaded = getattr(s, "_loaded", None)
+        if loaded is not None:
+            current = _read_settings_file()
+            # A file that cannot be read is replaced whole, as before.
+            if current is not None:
+                payload = _changes_onto(current, s, loaded)
         fd, name = tempfile.mkstemp(prefix=".settings-", suffix=".tmp",
                                     dir=DATA)
         staged = Path(name)
         with os.fdopen(fd, "w") as stream:
-            json.dump(s, stream, indent=2)
+            json.dump(payload, stream, indent=2)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.chmod(staged, 0o600)
         os.replace(staged, SETTINGS)
         staged = None
+        if loaded is not None:
+            # The next save of the same dict writes only what changes after
+            # this one.
+            s._loaded = copy.deepcopy(dict(s))
     finally:
         if staged is not None:
             staged.unlink(missing_ok=True)

@@ -162,5 +162,58 @@ class OfflineRegistryTests(unittest.TestCase):
             self.assertEqual((prefix / "system.reg").read_bytes(), before)
 
 
+class ReadUserStringTests(unittest.TestCase):
+    def prefix(self, root, user=USER):
+        prefix = Path(root) / "pfx"
+        prefix.mkdir()
+        (prefix / "user.reg").write_bytes(user)
+        return prefix
+
+    def test_reads_a_string_with_its_escapes_undone(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self.prefix(td)
+            self.assertEqual(wine_registry.read_user_string(
+                prefix, "Environment", "TEMP"), "C:\\Temp")
+
+    def test_reads_back_what_an_offline_write_stored(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self.prefix(td)
+            (prefix / "system.reg").write_bytes(SYSTEM)
+            value = 'a "quoted" \\ value'
+            with mock.patch("bol.prefix.require_prefix_idle"):
+                wine_registry.update_prefix_registry(prefix, user=[
+                    wine_registry.reg_sz(r"Software\Wine\Explorer",
+                                         "Desktop", value)])
+            self.assertEqual(wine_registry.read_user_string(
+                prefix, r"Software\Wine\Explorer", "Desktop"), value)
+
+    def test_missing_file_key_or_value_reads_none(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self.prefix(td)
+            read = wine_registry.read_user_string
+            self.assertIsNone(read(prefix, "Environment", "PATH"))
+            self.assertIsNone(read(prefix, r"Software\Wine\Explorer",
+                                   "Desktop"))
+            self.assertIsNone(read(Path(td) / "none", "Environment", "TEMP"))
+
+    def test_a_value_that_is_not_a_string_reads_none(self):
+        user = USER + b'[Software\\\\Wine] 1\n"Count"=dword:00000001\n\n'
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self.prefix(td, user)
+            self.assertIsNone(wine_registry.read_user_string(
+                prefix, r"Software\Wine", "Count"))
+
+    def test_a_subkey_is_not_its_parent(self):
+        user = (USER + b'[Software\\\\Wine\\\\Explorer\\\\Desktops] 1\n'
+                b'"Default"="1600x900"\n\n')
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self.prefix(td, user)
+            read = wine_registry.read_user_string
+            self.assertIsNone(read(prefix, r"Software\Wine\Explorer",
+                                   "Default"))
+            self.assertEqual(read(prefix, r"Software\Wine\Explorer\Desktops",
+                                  "Default"), "1600x900")
+
+
 if __name__ == "__main__":
     unittest.main()

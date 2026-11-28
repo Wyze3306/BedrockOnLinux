@@ -74,6 +74,127 @@ class WineGdkPrerequisiteTests(unittest.TestCase):
             self.assertEqual((prefix / "user.reg").read_bytes(), user_once)
 
 
+_HAND_SET_DESKTOP = (b'[Software\\\\Wine\\\\Explorer] 1\n#time=1\n'
+                     b'"Desktop"="Default"\n\n'
+                     b'[Software\\\\Wine\\\\Explorer\\\\Desktops] 1\n#time=1\n'
+                     b'"Default"="1280x720"\n\n')
+
+
+class VirtualDesktopMarkTests(unittest.TestCase):
+    """"Keep the mouse inside the window" owns the virtual desktop it sets,
+    by a mark in the registry next to it (#324)."""
+
+    EXPLORER = r"Software\Wine\Explorer"
+    DESKTOPS = r"Software\Wine\Explorer\Desktops"
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.prefix = Path(self._td.name) / "pfx"
+        self.prefix.mkdir()
+        (self.prefix / "system.reg").write_bytes(_UPGRADED_SYSTEM_REG)
+        (self.prefix / "user.reg").write_bytes(_UPGRADED_USER_REG)
+        self.settings = {}
+
+    def hand_set_desktop(self):
+        with open(self.prefix / "user.reg", "ab") as user:
+            user.write(_HAND_SET_DESKTOP)
+
+    def launch(self, confine):
+        def save(s):
+            self.settings = dict(s)
+
+        with mock.patch.object(auth, "active_prefix",
+                               return_value=self.prefix), \
+                mock.patch.object(auth, "load_settings",
+                                  side_effect=lambda: dict(self.settings)), \
+                mock.patch.object(auth, "save_settings", side_effect=save), \
+                mock.patch.object(auth, "ok") as ok, \
+                mock.patch("bol.prefix.require_prefix_idle"), \
+                mock.patch("bol.virtual_desktop.requested",
+                           return_value=confine), \
+                mock.patch("bol.util._screen_wh",
+                           return_value=("1600", "900")):
+            auth.wine_apply_winegdk_prereqs()
+        return " | ".join(call.args[0] for call in ok.call_args_list)
+
+    def value(self, key, name):
+        from bol.wine_registry import read_user_string
+        return read_user_string(self.prefix, key, name)
+
+    def desktop(self):
+        return (self.value(self.EXPLORER, "Desktop"),
+                self.value(self.DESKTOPS, "Default"),
+                self.value(self.EXPLORER, "BedrockOnLinux"))
+
+    def test_turning_it_on_sets_the_desktop_with_the_mark(self):
+        said = self.launch(confine=True)
+        self.assertEqual(self.desktop(),
+                         ("Default", "1600x900", "confine_cursor"))
+        self.assertIn("Cursor confinement ON (virtual desktop 1600x900)", said)
+        self.assertNotIn("_confine_applied", self.settings)
+
+    def test_turning_it_off_removes_the_marked_desktop(self):
+        self.launch(confine=True)
+        said = self.launch(confine=False)
+        self.assertEqual(self.desktop(), (None, None, None))
+        self.assertIn("Cursor confinement OFF", said)
+        # Nothing left to remove: the next launch says nothing about it.
+        self.assertNotIn("Cursor confinement", self.launch(confine=False))
+
+    def test_the_mark_survives_any_rewrite_of_the_settings(self):
+        # A stale settings write could reset the old "_confine_applied" and
+        # leave the desktop for good; the registry mark does not depend on
+        # settings.json at all.
+        self.launch(confine=True)
+        self.settings = {"_confine_applied": False}
+        self.launch(confine=False)
+        self.assertEqual(self.desktop(), (None, None, None))
+
+    def test_a_desktop_set_up_by_hand_is_left_alone_when_off(self):
+        self.hand_set_desktop()
+        said = self.launch(confine=False)
+        self.assertEqual(self.desktop(), ("Default", "1280x720", None))
+        self.assertNotIn("Cursor confinement", said)
+
+    def test_a_desktop_set_up_by_hand_is_used_as_it_is_when_on(self):
+        self.hand_set_desktop()
+        said = self.launch(confine=True)
+        self.assertEqual(self.desktop(), ("Default", "1280x720", None))
+        self.assertIn("already set up", said)
+        self.launch(confine=False)
+        self.assertEqual(self.desktop(), ("Default", "1280x720", None))
+
+    def test_an_older_launcher_s_desktop_is_still_removed(self):
+        # Launchers before 3.0.0 set the same values without the mark and
+        # remembered them in settings.json.
+        self.hand_set_desktop()
+        self.settings = {"_confine_applied": True, "theme": "dark"}
+        self.launch(confine=False)
+        self.assertEqual(self.desktop(), (None, None, None))
+        self.assertEqual(self.settings, {"theme": "dark"})
+
+    def test_an_older_launcher_s_desktop_takes_the_mark_when_on(self):
+        self.hand_set_desktop()
+        self.settings = {"_confine_applied": True}
+        self.launch(confine=True)
+        self.assertEqual(self.desktop(),
+                         ("Default", "1600x900", "confine_cursor"))
+        self.assertEqual(self.settings, {})
+        self.launch(confine=False)
+        self.assertEqual(self.desktop(), (None, None, None))
+
+    def test_an_unmarked_desktop_whose_old_flag_was_lost_is_not_guessed(self):
+        # The #324 prefix: values without a mark and "_confine_applied"
+        # False. Nothing tells them from a desktop set up by hand, so they
+        # stay; the stale flag goes.
+        self.hand_set_desktop()
+        self.settings = {"_confine_applied": False}
+        self.launch(confine=False)
+        self.assertEqual(self.desktop(), ("Default", "1280x720", None))
+        self.assertEqual(self.settings, {})
+
+
 
 
 class OnlinePreauthPayloadTests(unittest.TestCase):

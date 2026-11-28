@@ -194,6 +194,42 @@ def _render(original: bytes, changes: Iterable[RegistryChange]) -> bytes:
     return "".join(hive.lines()).encode("utf-8", errors="surrogateescape")
 
 
+_UNESCAPES = {"\\": "\\", '"': '"', "r": "\r", "n": "\n"}
+
+
+def _unescape(text: str) -> str:
+    out, chars = [], iter(text)
+    for char in chars:
+        if char == "\\":
+            nxt = next(chars, "")
+            out.append(_UNESCAPES.get(nxt, "\\" + nxt))
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def read_user_string(prefix: Path, key: str, name: str) -> Optional[str]:
+    """A REG_SZ value of the prefix's user hive, read offline; None when the
+    file, key or value is missing or the value is not a string."""
+
+    try:
+        text = (Path(prefix) / "user.reg").read_bytes().decode(
+            "utf-8", errors="surrogateescape")
+    except OSError:
+        return None
+    section = _Hive(text.splitlines(keepends=True)).by_key.get(_escape(key))
+    if section is None:
+        return None
+    start = _value_prefix(name)
+    for line in section[1:]:
+        if line.startswith(start):
+            raw = line[len(start):].rstrip("\r\n")
+            if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
+                return _unescape(raw[1:-1])
+            return None
+    return None
+
+
 def _current_control_set(original: bytes) -> int:
     r"""Return ``HKLM\System\Select\Current`` from a Wine system hive.
 
