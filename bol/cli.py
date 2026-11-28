@@ -667,6 +667,8 @@ def main():
         metavar="NAME",
         help="launch an isolated profile instead of the default installation",
     )
+    from . import shortcuts as _shortcuts
+    shortcuts_parser = _shortcuts.add_arguments(sub)
     up = sub.add_parser(
         "update", help="check for and install launcher updates and data "
                        "fixes")
@@ -713,6 +715,10 @@ def main():
                            ".rtpack file")
 
     a = p.parse_args()
+    # A game is started, by PLAY or a shortcut's menu entry: a failure is
+    # also shown on screen, where there is no terminal to read it in.
+    playing = a.cmd == "play" or (
+        a.cmd == "shortcuts" and a.shortcuts_cmd == "run")
     try:
         # Before anything is read or written: as root, it would be root's.
         from .util import refuse_sudo
@@ -725,7 +731,14 @@ def main():
             # starts, so its predecessor is no longer needed (bol.rollback).
             from . import rollback
             rollback.confirm()
-        if a.cmd in ("setup", "play"):
+        # The shortcuts' menu and desktop files follow the launcher to
+        # wherever it was started from (#392); one small read when it has
+        # not moved.
+        try:
+            _shortcuts.refresh()
+        except Exception as exc:  # noqa: BLE001 - never stops a command
+            warn(f"The shortcuts could not be updated: {exc}")
+        if a.cmd in ("setup", "play") or playing:
             _before_network_command(a.cmd)
         if a.cmd == "setup":
             mc = None
@@ -837,6 +850,8 @@ def main():
                 pp.print_help()
         elif a.cmd == "instances":
             _cmd_instances(a, ins)
+        elif a.cmd == "shortcuts":
+            _shortcuts.cli(a, shortcuts_parser)
         elif a.cmd == "update":
             _cmd_update(a)
         elif a.cmd == "network":
@@ -886,7 +901,7 @@ def main():
             # button. Name the command that does it rather than leaving the
             # terminal with a sign-in it cannot start.
             info(f"Sign in with:  {APP} store-login")
-        if a.cmd == "play":
+        if playing:
             info(f"Report it, logs included, with:  {APP} report")
             _report_launch_failure(str(exc))
         sys.exit(1)

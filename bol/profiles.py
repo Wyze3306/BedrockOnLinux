@@ -271,6 +271,12 @@ def delete_profile(name, base_data=None, applications_dir=None):
     apps = Path(applications_dir or (XDG_DATA_HOME / "applications"))
     for pattern in (f"{APP}-profile-{slug}.desktop", f"{APP}-play-{slug}.desktop"):
         (apps / pattern).unlink(missing_ok=True)
+    # The shortcuts that played in it would start nothing any more (#392).
+    try:
+        from .shortcuts import profile_deleted
+        profile_deleted(slug, base)
+    except Exception:  # noqa: BLE001 - the profile itself is gone
+        pass
     return True
 
 
@@ -319,6 +325,14 @@ def rename_profile(old_name, new_name, base_data=None, applications_dir=None):
         os.replace(staged, _metadata_path(target_dir))
     finally:
         staged.unlink(missing_ok=True)
+
+    if new_slug != old_slug:
+        # Shortcuts name the profile they play in by its folder (#392).
+        try:
+            from .shortcuts import profile_renamed
+            profile_renamed(old_slug, new_slug, base)
+        except Exception:  # noqa: BLE001 - the rename itself is done
+            pass
 
     apps = Path(applications_dir or (XDG_DATA_HOME / "applications"))
     old_prof_desktop = apps / f"{APP}-profile-{old_slug}.desktop"
