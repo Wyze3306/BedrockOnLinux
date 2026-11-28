@@ -84,6 +84,15 @@
 
 ### Fixed
 
+- **Minecraft Education keeps signing in after its next update.** The
+  switch that keeps a school account out of Windows' account broker was
+  only found in the one build the launcher had been measured on
+  (1.26.33.0); any other build would stop again on "Something went wrong
+  [4nsvw]" after the e-mail address. For a build it does not know, the
+  launcher now reads where that switch lives out of the game's executable,
+  next to two messages Microsoft's sign-in library logs from the same code,
+  and still checks the running game before it changes anything. The answer
+  is kept per build in `cache/msal-flights.json` (#351).
 - **Minecraft Education no longer warns that the mouse will not work.** A
   first install said GameInputRedist.msi was missing and that the in-game
   mouse and controller would not work. Education does not use GameInput

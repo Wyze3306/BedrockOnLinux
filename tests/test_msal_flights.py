@@ -140,6 +140,129 @@ class Build(unittest.TestCase):
         self.assertIsNone(mf.match_build(mem, BASE))
 
 
+TEXT, RDATA, DATA = 0x1000, 0x3000, 0x5000
+GETTER, FLIGHT_CHECK, LOG = 0x1100, 0x1200, 0x1000
+LOCATED_GLOBAL = 0x6800  # past .data's bytes on disk: MSVC's .bss
+
+
+def rel32(at, length, target):
+    return struct.pack("<i", target - (at + length))
+
+
+def fake_exe(path, log_calls=1, flights=0x100, strings=True, getter_ret=True):
+    """A PE laid out like Education's around IsFlightActive, RVA == offset."""
+    image = bytearray(0x7000)
+    image[0:2] = b"MZ"
+    image[0x3C:0x40] = struct.pack("<I", 0x80)
+    image[0x80:0x84] = b"PE\0\0"
+    image[0x84:0x98] = struct.pack("<HHIIIHH", 0x8664, 3, 0, 0, 0, 0xF0, 0x22)
+    table = 0x98 + 0xF0
+    for i, (name, rva, vsize, raw) in enumerate((
+            (b".text", TEXT, 0x2000, 0x2000), (b".rdata", RDATA, 0x2000, 0x2000),
+            (b".data", DATA, 0x2000, 0x1000))):
+        image[table + 40 * i:table + 40 * i + 24] = (
+            name.ljust(8, b"\0") + struct.pack("<IIII", vsize, rva, raw, rva))
+    image[LOG] = 0xC3
+    # The getter: a static guard, then lea rax, [rip + global]; ret.
+    lea = GETTER + 12
+    image[GETTER:GETTER + 12] = (b"\xb8\x28\x00\x00\x00\x48\x2b\xe0"
+                                 b"\x39\x05\x00\x00")
+    image[lea:lea + 7] = b"\x48\x8d\x05" + rel32(lea, 7, LOCATED_GLOBAL)
+    image[lea + 7:lea + 12] = (b"\x48\x83\xc4\x28\xc3" if getter_ret
+                               else b"\x48\x83\xc4\x28\x90")
+    message = RDATA + 0x40
+    name = RDATA + 0x10
+    if strings:
+        image[name - 1:name + 15] = b"\0IsFlightActive\0"
+        image[message:message + len(mf.NOT_STARTED_MESSAGE)] = \
+            mf.NOT_STARTED_MESSAGE
+    at = FLIGHT_CHECK
+    for _ in range(log_calls):
+        code = bytearray(b"\xe8" + rel32(at, 5, GETTER))
+        code += b"\x48\x83\x38\x00\x75\x20"
+        pair = at + len(code)
+        code += b"\x4c\x8d\x0d" + rel32(pair, 7, message)
+        code += b"\x4c\x8d\x05" + rel32(pair + 7, 7, name)
+        code += b"\xba\x00\x02\x00\x00\xb9\x04\x00\x00\x00"
+        code += b"\xe8" + rel32(at + len(code), 5, LOG)
+        code += b"\xe8" + rel32(at + len(code), 5, GETTER)
+        code += b"\x48\x8b\x08\x4c\x8b\xa9" + struct.pack("<i", flights)
+        image[at:at + len(code)] = code
+        at += 0x100
+    with open(path, "wb") as f:
+        f.write(image)
+    return {"getter": lea, "global": LOCATED_GLOBAL, "flights": flights}
+
+
+class Locate(unittest.TestCase):
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.exe = os.path.join(self.dir.name, "Minecraft.Windows.exe")
+
+    def test_a_new_build_is_read_off_its_executable(self):
+        expected = fake_exe(self.exe, flights=0x118)
+        build = mf.locate_build(self.exe)
+        self.assertEqual({k: build[k] for k in expected}, expected)
+
+    def test_without_msal_strings_nothing_is_found(self):
+        fake_exe(self.exe, strings=False)
+        self.assertIsNone(mf.locate_build(self.exe))
+
+    def test_two_flight_checks_are_not_guessed_between(self):
+        fake_exe(self.exe, log_calls=2)
+        self.assertIsNone(mf.locate_build(self.exe))
+
+    def test_a_getter_that_does_not_return_the_global_is_refused(self):
+        fake_exe(self.exe, getter_ret=False)
+        self.assertIsNone(mf.locate_build(self.exe))
+
+    def test_an_odd_flight_map_offset_is_refused(self):
+        fake_exe(self.exe, flights=0x101)
+        self.assertIsNone(mf.locate_build(self.exe))
+
+    def test_not_an_executable(self):
+        with open(self.exe, "wb") as f:
+            f.write(b"\0" * 4096)
+        self.assertIsNone(mf.locate_build(self.exe))
+        self.assertIsNone(mf.locate_build(self.exe + ".missing"))
+
+    def test_the_answer_is_kept_per_build(self):
+        fake_exe(self.exe)
+        cache = os.path.join(self.dir.name, "cache", "flights.json")
+        first = mf.located_build(self.exe, cache=cache)
+        self.assertIsNotNone(first)
+        with mock.patch.object(mf, "locate_build") as again:
+            self.assertEqual(mf.located_build(self.exe, cache=cache), first)
+        again.assert_not_called()
+        # Another build (here: rewritten) is searched again.
+        os.utime(self.exe, ns=(1, 1))
+        with mock.patch.object(mf, "locate_build", return_value=None) as new:
+            self.assertIsNone(mf.located_build(self.exe, cache=cache))
+        new.assert_called_once()
+
+    def test_a_located_build_is_checked_against_the_running_image(self):
+        expected = fake_exe(self.exe)
+        located = mf.locate_build(self.exe)
+        mem = FakeMemory()
+        pe_headers(mem)
+        lea = BASE + expected["getter"]
+        mem.put(lea, b"\x48\x8d\x05"
+                + rel32(expected["getter"], 7, LOCATED_GLOBAL))
+        self.assertIs(mf.match_build(mem, BASE, (located,)), located)
+        mem.put(lea + 3, struct.pack("<i", 0x1234))
+        self.assertIsNone(mf.match_build(mem, BASE, (located,)))
+
+    @unittest.skipUnless(os.environ.get("BOL_EDUCATION_EXE"),
+                         "set BOL_EDUCATION_EXE to Education 1.26.33.0's exe")
+    def test_the_real_known_build_is_found_where_it_was_measured(self):
+        build = mf.locate_build(os.environ["BOL_EDUCATION_EXE"])
+        self.assertEqual(build["getter"], BUILD["getter"])
+        self.assertEqual(build["global"], BUILD["global"])
+        self.assertEqual(build["flights"], mf.FLIGHTS_OFFSET)
+
+
 class TurnOff(unittest.TestCase):
 
     def test_waits_for_msal_to_start(self):
@@ -228,9 +351,36 @@ class Watch(unittest.TestCase):
     def test_unknown_build_is_reported_and_untouched(self):
         mem = FakeMemory()
         game_image(mem, defaults=b"\1" * 16)
-        outcome, warn, _info = self.run_watch(mem)
+        with mock.patch.object(mf, "located_build", return_value=None):
+            outcome, warn, _info = self.run_watch(mem)
         self.assertEqual(outcome, "unknown-build")
         self.assertIn("4nsvw", warn.call_args[0][0])
+
+    def test_a_new_build_found_in_its_executable_is_handled(self):
+        """The next Education update: not in KNOWN_BUILDS, same MSAL."""
+        located = {"name": "located", "getter": 0x200, "global": 0x9000,
+                   "flights": 0x118}
+        mem = FakeMemory()
+        game_image(mem, defaults=b"\1" * 16)  # not the known build
+        mem.put(BASE + 0x200, b"\x48\x8d\x05" + rel32(0x200, 7, 0x9000))
+        mem.put(BASE + 0x9000, struct.pack("<Q", 0))
+
+        def msal_up(n):
+            if n == 3:
+                start_msal(mem, DEFAULTS)
+                # This build keeps its flights elsewhere in the state.
+                mem.put(BASE + 0x9000, struct.pack("<Q", STATE))
+                mem.put(STATE + 0x118, struct.pack("<Q", FLIGHTS))
+
+        with mock.patch.object(mf, "located_build",
+                               return_value=located) as search:
+            outcome, warn, info = self.run_watch(mem, on_poll=msal_up)
+        self.assertEqual(outcome, "off")
+        search.assert_called_once()
+        warn.assert_not_called()
+        self.assertEqual(mf.read_flights(mem, BASE, located)[0x66][1],
+                         mf.FLIGHT_OFF)
+        self.assertEqual(info.call_count, 2)
 
     def test_game_not_found_is_reported(self):
         outcome, warn, _info = self.run_watch(FakeMemory(), found=None)
