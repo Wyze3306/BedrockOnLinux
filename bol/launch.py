@@ -1525,9 +1525,10 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     # are handled after Xodus decrypts it into anonymous memory, below.
     encrypted_exe = xodus.exe_is_encrypted(Path(exe))
     # The 16 MB stack reserve (#27) is for Minecraft's own executable, which
-    # Education's plaintext one is too; another title keeps its own.
-    if not build_in_use and not encrypted_exe and (
-            bedrock or edition_title(edition_entry) == "education"):
+    # Education's plaintext one is too; another title keeps its own, and one
+    # that checks itself refuses to start with an edited header (#383).
+    minecraft_exe = bedrock or edition_title(edition_entry) == "education"
+    if not build_in_use and not encrypted_exe and minecraft_exe:
         bump_stack_reserve(Path(exe))
     if bedrock and not build_in_use:
         # Bedrock's own title screen; Education's sign-in button is the only
@@ -1675,7 +1676,8 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         # Must wrap before gamescope: gamescope has to stay outermost so it
         # owns the compositor the game renders into.
         cmd = xodus.wrap_encrypted_launch(cmd, Path(gd), DATA / "run", env=env,
-                                          game_args=game_args)
+                                          game_args=game_args,
+                                          raise_stack_reserve=minecraft_exe)
     else:
         cmd = cmd + game_args
     gs_argv = []

@@ -178,7 +178,8 @@ class ReadyLaunchHarness:
                              "hide_signin_button", "apply_branding",
                              "msa_refresh", "seed_default_servers",
                              "_prefix_stably_idle_after_wrapper",
-                             "install_gameinput", "proton_umu_cmd")
+                             "install_gameinput", "proton_umu_cmd",
+                             "bump_stack_reserve")
             }
             self.launch_mocks["msal_flights.start"] = launch.msal_flights.start
             return launch._launch_once(lock_fds=lock_fds,
@@ -1442,6 +1443,31 @@ class RefusedLicenceLaunchTests(ReadyLaunchHarness, unittest.TestCase):
     def test_any_other_diagnosis_leaves_the_launch_to_return(self):
         self.assertEqual(self._play(["Out of memory (RAM/VRAM)."]), 0)
         self.assertEqual(self._play([]), 0)
+
+
+class EncryptedMinecraftStackReserveTests(ReadyLaunchHarness,
+                                         unittest.TestCase):
+    """#27 stays Minecraft's: its encrypted image still gets the reserve."""
+
+    def test_the_decrypted_minecraft_image_gets_the_raised_reserve(self):
+        def popen(*_a, **_kw):
+            proc = mock.Mock()
+            proc.wait.return_value = 0
+            return proc
+
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(launch.xodus, "exe_is_encrypted",
+                                  return_value=True), \
+                mock.patch.object(launch.xodus, "wrap_encrypted_launch",
+                                  side_effect=lambda cmd, *a, **k:
+                                  ["xodus-cli", "run"] + list(cmd)) as wrap:
+            self._exercise_ready_launch(Path(td), popen,
+                                        arm=lambda: "token",
+                                        disarm=lambda _token: True)
+        # Nothing on disk to edit: the staged copy is where it lands (#383
+        # takes it away from every other title, not from Minecraft).
+        self.launch_mocks["bump_stack_reserve"].assert_not_called()
+        self.assertTrue(wrap.call_args.kwargs["raise_stack_reserve"])
 
 
 class LaunchStartedHookTests(ReadyLaunchHarness, unittest.TestCase):

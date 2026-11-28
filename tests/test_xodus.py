@@ -1267,7 +1267,8 @@ class WrapEncryptedLaunchTests(unittest.TestCase):
     EXE = "/games/release/1.26.44.3/Minecraft.Windows.exe"
     NT = "\\??\\Z:\\games\\release\\1.26.44.3\\Minecraft.Windows.exe"
 
-    def _wrap(self, tmp, argv, stage_dir=None, env=None, game_args=()):
+    def _wrap(self, tmp, argv, stage_dir=None, env=None, game_args=(),
+              **kwargs):
         # xodus-cli decrypts the executable out of the package it keeps beside
         # it, so an encrypted build that can start always has one.
         game = Path(tmp) / "game"
@@ -1287,7 +1288,7 @@ class WrapEncryptedLaunchTests(unittest.TestCase):
                     xodus, "staging_dir", return_value=Path(stage_dir)))
             return xodus.wrap_encrypted_launch(argv, Path(tmp) / "game",
                                                Path(tmp) / "run", env=env,
-                                               game_args=game_args)
+                                               game_args=game_args, **kwargs)
 
     def test_running_an_encrypted_build_needs_the_store_account(self):
         # It used to get as far as xodus-cli, which died on a missing keyring
@@ -1554,6 +1555,23 @@ class WrapEncryptedLaunchTests(unittest.TestCase):
         self.assertEqual(_stack_reserve(Path(path).read_bytes()), 0x1000000)
         # The descriptor xodus handed over is left as it was.
         self.assertEqual(_stack_reserve(os.pread(fd, 0x400, 0)), 0x100000)
+
+    def test_another_title_s_staged_image_is_left_as_the_store_made_it(self):
+        # #383: Minecraft Dungeons checks its own file, and an edited header
+        # read as a tampered executable: "File corrupted!". The reserve is
+        # Minecraft's own fix (#27), so another title's image stays byte for
+        # byte what xodus decrypted.
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder, argv = self._recorder(
+                tmp, 'os.environ["WINE_DLL_FILE_MAP"]')
+            cmd = self._wrap(tmp, argv, raise_stack_reserve=False)
+            fd = self._memfd()
+
+            self._run(cmd[3], self.NT, f"{fd}:{self.NT}", (fd,), check=True)
+            path = recorder.read_text().partition(":")[0]
+
+        self.addCleanup(lambda: Path(path).unlink(missing_ok=True))
+        self.assertEqual(Path(path).read_bytes(), _pe32plus_header())
 
     def test_a_broken_map_entry_still_launches_the_game(self):
         with tempfile.TemporaryDirectory() as tmp:
