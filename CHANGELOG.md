@@ -84,6 +84,11 @@
 
 ### Fixed
 
+- **Minecraft Education no longer warns that the mouse will not work.** A
+  first install said GameInputRedist.msi was missing and that the in-game
+  mouse and controller would not work. Education does not use GameInput
+  and ships none, so there is nothing to install for it; its mouse works
+  without it (#351).
 - **"Report a problem" is offered only for what the launcher may have got
   wrong.** When PLAY stops on something the player fixes from the message
   itself (a Microsoft account that does not own the game, the ten-device

@@ -202,6 +202,17 @@ def uses_xbox_live(game_dir):
     return edition is None or edition.get("xbox_live", True)
 
 
+def uses_gameinput(game_dir):
+    """Whether the game in ``game_dir`` reads its input through GameInput.
+
+    Every GDK build of Bedrock does, from the redist it ships in Installers/;
+    Minecraft Education neither uses GameInput nor ships it, so there is
+    nothing to install for it and no mouse that goes missing without it.
+    """
+    edition = edition_for_dir(game_dir)
+    return edition is None or edition.get("gameinput", True)
+
+
 def _installed_versions(edition_id):
     """The builds of an edition that are complete on disk, by version."""
     try:

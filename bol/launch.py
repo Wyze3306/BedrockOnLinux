@@ -54,7 +54,8 @@ from .fixups import (
 )
 from .gameinput import builtin_gameinput_override, install_gameinput
 from .games import (build_version, edition_title, game_executable, is_bedrock,
-                    mc_version_str, selected_edition, uses_xbox_live)
+                    mc_version_str, selected_edition, uses_gameinput,
+                    uses_xbox_live)
 from .gamesetup import (LICENCE_REFUSED, LICENCE_SERVICE_REFUSED,
                         LICENCE_UNREACHABLE, STORE_SESSION_REFUSED, diagnose)
 from .gpu_safety import (
@@ -1310,7 +1311,8 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         wine_apply_winegdk_prereqs()
         _install_cryptbase_in_prefix()
         try:
-            install_gameinput(active_prefix(), Path(gd))
+            if uses_gameinput(gd):
+                install_gameinput(active_prefix(), Path(gd))
         except Exception as e:
             warn(f"GameInput check failed ({e}) — continuing.")
         try:
