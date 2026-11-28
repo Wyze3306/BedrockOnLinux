@@ -1,11 +1,21 @@
 """bol.gpus — which graphics card Minecraft renders on.
 
-A laptop with an integrated GPU and a discrete one starts every program on
-the integrated one unless it is told otherwise: that is what keeps the
-battery alive, and it is also why Minecraft could run on an Intel iGPU beside
-an idle RTX 3050 (#275). Windows asks the player once per game; Linux leaves
-it to whoever starts the program, through environment variables that differ
-by driver.
+A laptop with an integrated GPU and a discrete one runs its desktop on the
+integrated one: that is what keeps the battery alive. Windows asks the player
+once per game which card to use; Linux leaves it to whoever starts the
+program, through environment variables that differ by driver.
+
+What Minecraft gets on *Automatic* depends on the renderer. Its default path,
+D3D12 through vkd3d-proton behind DXVK's DXGI, renders on DXGI's first
+adapter, and DXVK ranks a discrete card ahead of an integrated one: on a
+laptop the game is on the GeForce or the Radeon as long as that card's Vulkan
+driver is there (measured with tools/dxr-probe.c, and in DXVK's
+``DxvkInstance::enumAdapters``). The legacy WineD3D renderer draws through
+OpenGL instead, which starts on the card the display runs on, so there the
+integrated GPU is what *Automatic* means. Seeing both cards busy while the
+game runs is normal either way on a laptop whose screen is wired to the
+integrated chip: it copies every frame the discrete card draws to the
+screen (#333).
 
 The inventory comes from sysfs, like bol.dgc: no Vulkan or OpenGL call is
 made to find out which cards exist, so reading it can never be what hangs a
@@ -25,7 +35,21 @@ them a host has is a property of the host:
 
 These are the variables GNOME and KDE set for "Launch using Discrete
 Graphics Card", so a card chosen here behaves the way the desktop's own
-choice does.
+choice does. All of them reach the game: pressure-vessel keeps them, and
+imports the host's Mesa and NVIDIA layers with its drivers.
+
+What it does not keep is a driver list naming files it cannot see.
+``VK_DRIVER_FILES`` (or ``VK_ICD_FILENAMES``) restricts the Vulkan loader to
+the files listed, and pressure-vessel imports exactly those; one that is not
+there — ``/usr/share/vulkan/icd.d/nvidia_icd.json`` inside the Flatpak,
+whose drivers live in its GL extensions — leaves the game with no Vulkan
+driver at all, and it closes at start (#333). ``drop_missing_driver_files``
+takes such entries out.
+
+Which card the game really rendered on is written down by the engine
+itself: its winevulkan names the device of every ``vkCreateDevice`` on a
+debug channel of its own, ``vkdevice``, which the launcher turns on at every
+launch, and ``rendered_on`` reads that line back for Doctor.
 """
 # SPDX-License-Identifier: MIT
 
@@ -198,15 +222,21 @@ def apply_gpu_choice(env, settings, gpus=None):
     return gpu
 
 
-def hybrid_gpu_problem(settings, environ=None, gpus=None):
+def hybrid_gpu_problem(settings, environ=None, gpus=None, renderer=None):
     """Advice for a laptop about to start the game on its integrated GPU.
 
-    Only for the unambiguous cases, with nothing chosen in Settings and
-    nothing asked for by the desktop either: the display runs on a card that
-    is not NVIDIA's and an NVIDIA card with its own driver sits beside it
-    (Intel or AMD laptops with a GeForce), or the display runs on an Intel
-    iGPU beside an AMD or Intel Arc card.
+    Only where that is what happens: on the legacy WineD3D renderer
+    (``renderer`` "wined3d"), which draws through OpenGL on the card the
+    display runs on. The default D3D12 path already takes a discrete card
+    over an integrated one, so there is nothing to say there. Then only for
+    the unambiguous cases, with nothing chosen in Settings and nothing asked
+    for by the desktop either: the display runs on a card that is not
+    NVIDIA's and an NVIDIA card with its own driver sits beside it (Intel or
+    AMD laptops with a GeForce), or the display runs on an Intel iGPU beside
+    an AMD or Intel Arc card.
     """
+    if renderer != "wined3d":
+        return None
     source = os.environ if environ is None else environ
     gpus = list_gpus() if gpus is None else gpus
     if chosen_gpu(settings, gpus) is not None or len(gpus) < 2:
@@ -225,7 +255,125 @@ def hybrid_gpu_problem(settings, environ=None, gpus=None):
                          and g.driver in ("amdgpu", "xe", "i915")), None)
     if discrete is None:
         return None
-    return (f"This computer has two graphics cards, and Minecraft starts on "
-            f"the one your desktop runs on: the {boot.name}. Settings ▸ "
-            f"Advanced ▸ Graphics card puts it on the {discrete.name} "
-            f"instead.")
+    return (f"This computer has two graphics cards, and the Legacy renderer "
+            f"starts Minecraft on the one your desktop runs on: the "
+            f"{boot.name}. Settings ▸ Advanced ▸ Graphics card puts it on the "
+            f"{discrete.name} instead.")
+
+
+# The Vulkan loader's driver lists: VK_DRIVER_FILES and its older name
+# replace the drivers it would find, VK_ADD_DRIVER_FILES adds to them. Each
+# is a list of JSON manifests or folders of them, ":"-separated.
+DRIVER_FILE_KEYS = ("VK_DRIVER_FILES", "VK_ICD_FILENAMES",
+                    "VK_ADD_DRIVER_FILES")
+
+
+def drop_missing_driver_files(env, exists=os.path.exists):
+    """Take the Vulkan driver files that are not there out of ``env``.
+
+    pressure-vessel imports the drivers these variables name, from where
+    the launcher runs, and nothing else: an entry it cannot open is a
+    driver the game does not get, and a list with none left gives it no
+    Vulkan at all. Returns the entries taken out, by variable; a variable
+    left with nothing is removed.
+    """
+    dropped = {}
+    for key in DRIVER_FILE_KEYS:
+        value = env.get(key)
+        if value is None:
+            continue
+        entries = [entry for entry in str(value).split(":") if entry.strip()]
+        missing = [entry for entry in entries if not exists(entry)]
+        if not missing:
+            continue
+        dropped[key] = missing
+        kept = [entry for entry in entries if entry not in missing]
+        if kept:
+            env[key] = ":".join(kept)
+        else:
+            env.pop(key, None)
+    return dropped
+
+
+def missing_driver_files_problem(dropped, flatpak=False):
+    """What to tell the player about ``drop_missing_driver_files``."""
+    if not dropped:
+        return None
+    names = "; ".join(f"{key}: {', '.join(entries)}"
+                      for key, entries in dropped.items())
+    where = (" Inside the Flatpak the system's graphics drivers are not at "
+             "their usual place: they come from its GL extensions."
+             if flatpak else "")
+    return (f"Left out Vulkan driver files that do not exist here ({names})."
+            f"{where} With them, Minecraft would start with no graphics "
+            "driver and close. To choose the graphics card, use Settings ▸ "
+            "Advanced ▸ Graphics card.")
+
+
+# ---------------------------------------------------------------- after a launch
+
+# The engine's winevulkan, at every vkCreateDevice, on its own debug channel:
+#   0118:011c:trace:vkdevice:vkCreateDevice "NVIDIA GeForce RTX 4060",
+#   vendor 0x10de, device 0x2882, driver 0x89b28100.
+_RENDERED_ON = re.compile(
+    rb'trace:vkdevice:[^ ]* "((?:[^"\\]|\\.)*)", vendor (0x[0-9a-f]+|0), '
+    rb'device (0x[0-9a-f]+|0)', re.I)
+_LOG_NAMES = ("minecraft.log", "proton.log")
+# Device creation happens in a launch's first seconds.
+_MAX_READ = 1 << 20
+
+
+def rendered_on(logs_dir=None):
+    """The graphics cards the last logged launch created a device on.
+
+    A list of ``(name, "vendor:device")`` in order of first use, empty when
+    no launch log says: none yet, or an engine that does not log it.
+    """
+    if logs_dir is None:
+        from .config import LOGS
+        logs_dir = LOGS
+    directory = Path(logs_dir)
+    candidates = []
+    for name in _LOG_NAMES:
+        path = directory / name
+        try:
+            candidates.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    for _, path in sorted(candidates, reverse=True):
+        try:
+            with path.open("rb") as handle:
+                head = handle.read(_MAX_READ)
+        except OSError:
+            continue
+        found = []
+        for match in _RENDERED_ON.finditer(head):
+            name = match.group(1).decode("utf-8", "replace")
+            name = name.replace('\\"', '"').replace("\\\\", "\\")
+            ids = "%04x:%04x" % (int(match.group(2), 16),
+                                 int(match.group(3), 16))
+            if (name, ids) not in found:
+                found.append((name, ids))
+        if found:
+            return found
+    return []
+
+
+def rendered_on_summary(logs_dir=None, gpus=None):
+    """Doctor's "rendered on" line: the card the game last drew with."""
+    devices = rendered_on(logs_dir)
+    if not devices:
+        return ("unknown (play once with an engine that reports it, then "
+                "run this again)")
+    gpus = list_gpus() if gpus is None else gpus
+    names = []
+    for name, ids in devices:
+        card = next((g for g in gpus if f"{g.vendor}:{g.device}" == ids),
+                    None)
+        role = ""
+        if card is not None and len(gpus) > 1:
+            role = (" — the integrated GPU" if card.integrated
+                    else " — the card the display runs on" if card.boot_vga
+                    else " — the discrete GPU")
+        names.append(f"{name} [{ids}]{role}")
+    return "; ".join(names)

@@ -510,6 +510,11 @@ def _collect_graphics(settings, logs_dir=None):
         rows.append(("gpu", "none found in sysfs"))
     if chosen is None:
         rows.append(("gpu choice", "left to the system"))
+    rendered = _safely(gpus.rendered_on, logs_dir)
+    if isinstance(rendered, list):
+        rows.append(("rendered on", "; ".join(
+            f"{name} [{ids}]" for name, ids in rendered)
+            or "not in the last launch log"))
     rows.append(("nvidia driver", _safely(nvidia_driver_version)))
     rows.append(("mesa version", _safely(mesa_version)))
     caps = _safely(raytracing.graphics_capabilities, logs_dir)

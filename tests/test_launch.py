@@ -536,7 +536,8 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         )
         self.assertNotIn("PROTON_LOG", env)
         self.assertNotIn("PROTON_LOG_DIR", env)
-        self.assertEqual(env["WINEDEBUG"], "-all")
+        # Everything off but the one line naming the graphics card (#333).
+        self.assertEqual(env["WINEDEBUG"], "-all,+vkdevice")
 
     def test_diagnostics_keep_errors_without_hot_gdk_traces(self):
         env = {"WINEDEBUG": "trace+all"}
@@ -555,6 +556,7 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.assertNotIn("trace+gdkc", env["WINEDEBUG"])
         self.assertNotIn("trace+xgameruntime", env["WINEDEBUG"])
         self.assertNotIn("trace+all", env["WINEDEBUG"])
+        self.assertTrue(env["WINEDEBUG"].endswith(",+vkdevice"))
 
     def test_managed_graphics_cache_is_persistent_and_private(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1970,7 +1972,45 @@ class GraphicsCardLaunchTests(unittest.TestCase):
             self.assertIsNone(launch._configure_gpu(
                 {}, {}, environ={"DRI_PRIME": "1"}))
         self.assertEqual(advice.call_args.args[1], {"DRI_PRIME": "1"})
+        self.assertEqual(advice.call_args.kwargs["renderer"], "d3d12")
         warned.assert_called_once_with("two cards")
+
+    def test_the_legacy_renderer_is_named_to_the_advice(self):
+        # Only OpenGL starts on the card the display runs on (#333).
+        with mock.patch.object(launch, "apply_gpu_choice", return_value=None), \
+                mock.patch.object(launch, "hybrid_gpu_problem",
+                                  return_value=None) as advice:
+            launch._configure_gpu({}, {"renderer": "legacy"})
+        self.assertEqual(advice.call_args.kwargs["renderer"], "wined3d")
+
+    def test_driver_files_that_are_not_here_are_left_out(self):
+        # VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json inside the
+        # Flatpak: pressure-vessel finds no driver, the game closes (#333).
+        with tempfile.TemporaryDirectory() as td:
+            here = Path(td) / "intel_icd.json"
+            here.write_text("{}")
+            env = {"VK_DRIVER_FILES": "/nonexistent/nvidia_icd.json",
+                   "VK_ADD_DRIVER_FILES": f"{here}:/nonexistent/x.json"}
+            with mock.patch.object(launch, "warn") as warned, \
+                    mock.patch("bol.xdg_migration.is_flatpak",
+                               return_value=True):
+                launch._drop_missing_driver_files(env)
+        self.assertNotIn("VK_DRIVER_FILES", env)
+        self.assertEqual(env["VK_ADD_DRIVER_FILES"], str(here))
+        message = warned.call_args.args[0]
+        self.assertIn("/nonexistent/nvidia_icd.json", message)
+        self.assertIn("Flatpak", message)
+        self.assertIn("Settings ▸ Advanced ▸ Graphics card", message)
+
+    def test_driver_files_that_are_here_are_kept_without_a_word(self):
+        with tempfile.TemporaryDirectory() as td:
+            here = Path(td) / "nvidia_icd.json"
+            here.write_text("{}")
+            env = {"VK_DRIVER_FILES": str(here)}
+            with mock.patch.object(launch, "warn") as warned:
+                launch._drop_missing_driver_files(env)
+        self.assertEqual(env, {"VK_DRIVER_FILES": str(here)})
+        warned.assert_not_called()
 
     def test_a_broken_inventory_never_fails_a_launch(self):
         with mock.patch.object(launch, "apply_gpu_choice",

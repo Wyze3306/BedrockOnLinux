@@ -708,6 +708,14 @@ class ModsPage(QFrame):
         self.folder_btn = self._small("Open mods folder", "Ghost",
                                       self._open_mods)
         bar.addWidget(self.folder_btn)
+        # Injected DLLs are not LeviLamina mods, and the folder above is not
+        # where they keep their settings: players looking for
+        # ForceCloseOreUI's config.json came here first (#399).
+        from .gui import DLL_SETTINGS_TIP  # noqa: PLC0415 - avoids a cycle
+        self.dll_settings_btn = self._small(
+            "DLL settings", "Ghost", lambda: self.win.open_dll_settings())
+        self.dll_settings_btn.setToolTip(DLL_SETTINGS_TIP)
+        bar.addWidget(self.dll_settings_btn)
         self.log_btn = self._small("Loader log", "Ghost", self._show_log)
         self.log_btn.setToolTip("What the loader wrote the last time the "
                                 "game started")

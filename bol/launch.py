@@ -48,7 +48,8 @@ from .branding import apply_branding
 from .config import CONTENT, DATA, HOME, LOGS, VERSION, WINEGDK_BUILD_REV
 from .deps import ensure_login_deps
 from .dgc import dgc_warning_message, intel_dgpus_on_legacy_driver
-from .gpus import apply_gpu_choice, hybrid_gpu_problem
+from .gpus import (apply_gpu_choice, drop_missing_driver_files,
+                   hybrid_gpu_problem, missing_driver_files_problem)
 from .fixups import (
     _install_cryptbase_in_prefix,
     bump_stack_reserve,
@@ -880,6 +881,12 @@ def _resolve_input_backend(backend, host_wayland, engine_root):
     return "x11"
 
 
+# One line per Vulkan device the game creates, naming its graphics card:
+# "which card did it really use" (#333) is answered from the log, by
+# bol.gpus.rendered_on. An engine without the channel ignores it.
+_RENDERED_ON_CHANNEL = "+vkdevice"
+
+
 def _configure_runtime_compat(env, settings, backend, host_wayland,
                               diagnostics=False, host_env=None,
                               steam_deck=None):
@@ -929,11 +936,11 @@ def _configure_runtime_compat(env, settings, backend, host_wayland,
         # output; keep their warnings and errors without enabling trace.
         env["WINEDEBUG"] = (
             "+gdkc,trace-gdkc,+xgameruntime,"
-            "trace-xgameruntime,fixme-all"
+            "trace-xgameruntime,fixme-all," + _RENDERED_ON_CHANNEL
         )
     else:
         # Avoid Proton's heavyweight debug log during normal play.
-        env["WINEDEBUG"] = "-all"
+        env["WINEDEBUG"] = "-all," + _RENDERED_ON_CHANNEL
 
     # vkd3d-proton is silent by default, so "the game does not detect my ray
     # tracing hardware" (#153) arrives with no way to tell whether the game
@@ -951,8 +958,9 @@ def _configure_gpu(env, settings, environ=None):
     With no choice, a laptop about to start the game on its integrated GPU
     beside a discrete one is told where the choice is: nothing else would
     tell the player why the game runs at a fraction of what the machine can
-    do. ``environ`` carries the custom-environment field, whose variables are
-    an answer already.
+    do. That only happens on the Legacy renderer: the default D3D12 path
+    already takes the discrete card (bol.gpus). ``environ`` carries the
+    custom-environment field, whose variables are an answer already.
     """
     try:
         gpu = apply_gpu_choice(env, settings)
@@ -965,12 +973,26 @@ def _configure_gpu(env, settings, environ=None):
              "(Settings ▸ Advanced ▸ Graphics card).")
         return gpu
     try:
-        advice = hybrid_gpu_problem(settings, environ)
+        advice = hybrid_gpu_problem(
+            settings, environ,
+            renderer="wined3d" if _renders_through_wined3d(settings)
+            else "d3d12")
     except Exception:
         advice = None
     if advice:
         warn(advice)
     return None
+
+
+def _drop_missing_driver_files(env):
+    """Leave out Vulkan driver files the game could not load (#333)."""
+    try:
+        dropped = drop_missing_driver_files(env)
+    except Exception:
+        return
+    if dropped:
+        from .xdg_migration import is_flatpak
+        warn(missing_driver_files_problem(dropped, flatpak=is_flatpak()))
 
 
 def _configure_graphics_cache(env, managed_engine):
@@ -1267,6 +1289,9 @@ def _launch_uwp(lock_fds, edition_entry, gd, exe, on_started=None,
     apply_custom_env(env, s.get("custom_env") or "")
     _warn_custom_env_overrides(s.get("custom_env") or "")
     mangohud.hide_unreadable_power(env, s)
+    # After the custom environment, where a driver list is usually typed: one
+    # naming files that are not here gives the game no Vulkan driver (#333).
+    _drop_missing_driver_files(env)
     info(f"Starting {title} {mc_version_str(Path(gd)) or ''} on wine-uwp …"
          .replace("  ", " "))
     uwp.before_launch(env)
@@ -1706,6 +1731,9 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     _warn_custom_env_overrides(s.get("custom_env") or "")
     # After the custom environment, where MANGOHUD=1 is usually set (#395).
     mangohud.hide_unreadable_power(env, s, gamescope=gs_argv)
+    # After the custom environment, where a driver list is usually typed: one
+    # naming files that are not here gives the game no Vulkan driver (#333).
+    _drop_missing_driver_files(env)
     # After the custom environment, which can change LANG or keep
     # pressure-vessel's own locale generation: a host without en_US.UTF-8 or
     # without the player's locale gets the copy built at the first launch,

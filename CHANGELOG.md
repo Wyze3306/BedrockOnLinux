@@ -34,6 +34,16 @@
   DLLs, such as ForceCloseOreUI, change what the game builds while it loads
   and do nothing once the menu is up. Off by default: clients such as
   Flarial expect the menu.
+- **Where an injected DLL keeps its settings (#399).** Client DLLs such as
+  ForceCloseOreUI keep their settings in `%APPDATA%\Minecraft Bedrock\mods`,
+  which is in the game's Wine prefix
+  (`drive_c/users/steamuser/AppData/Roaming/Minecraft Bedrock/mods`), not in
+  the folder the Mods page opens. **Open the DLL's settings folder** under
+  Settings ▸ Tools ▸ Injector Settings, and **DLL settings** on the Mods
+  page, open it, made if needed, or the DLL's own folder in it once there is
+  one. ForceCloseOreUI writes `ForceCloseOreUI\config.json` there when it
+  runs, with every OreUI screen it knows set to `false` (the old screen);
+  `true` brings a screen's new look back at the next start.
 - **The UWP releases of Minecraft for Windows, on wine-uwp (#387).** A new
   edition, "Minecraft for Windows (UWP)", lists every release Windows Update
   still serves from before the move to the GDK, 0.13 to 1.21.51, and
@@ -189,6 +199,20 @@
   sleeps (60 → 59.88 FPS), so that the game's own limiter, the one that
   spins, should have nothing left to wait for. A value an interrupted
   session of an earlier version left aside goes back at the next launch.
+- **Laptops with two graphics cards: doctor says which card the game used
+  (#333).** On Automatic the game already renders on the discrete card: DXVK
+  and vkd3d-proton rank it before the integrated one. Both cards look busy
+  while it plays because the integrated card shows on the laptop screen what
+  the other one draws. The launcher's warning and the Graphics card tooltip
+  said the opposite; the warning now only comes with the Legacy renderer,
+  which does start on the card the screen runs on. `doctor` and the problem
+  report gain a "rendered on" line, read from the last launch log, once the
+  engine names the device it creates (patch `0031`). A `VK_DRIVER_FILES`,
+  `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES` in the custom environment that
+  names a file which does not exist, such as `/usr/share/vulkan/icd.d/
+  nvidia_icd.json` inside the Flatpak, left the game with no Vulkan driver
+  and it closed; such entries are now left out with a warning that points
+  to Settings ▸ Advanced ▸ Graphics card.
 - **"Report a problem" is offered only for what the launcher may have got
   wrong.** When PLAY stops on something the player fixes from the message
   itself (a Microsoft account that does not own the game, the ten-device

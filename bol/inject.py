@@ -355,6 +355,37 @@ def perform_auto_inject(settings):
     desktop_notify(f"Injected {name} into Minecraft. ✓", "DLL Injector")
 
 
+# Where client DLLs keep their own settings: %APPDATA%\Minecraft Bedrock\mods,
+# which here is in the game's Wine prefix, not in the folder the Mods page
+# opens. ForceCloseOreUI writes mods\ForceCloseOreUI\config.json there the
+# first time its hook runs, for Minecraft and Minecraft Preview alike: every
+# OreUI screen it knows, false for "keep the old screen" (#399).
+DLL_SETTINGS_REL = Path("drive_c/users/steamuser/AppData/Roaming/"
+                        "Minecraft Bedrock/mods")
+
+
+def dll_settings_dir(dll=None, prefix=None, create=False):
+    """The folder client DLLs keep their settings in, or None.
+
+    With ``dll``, the folder of that DLL's own name in it once the DLL has
+    made one (``mods/ForceCloseOreUI`` for ForceCloseOreUI.dll), and the
+    ``mods`` folder until then. ``create`` makes the ``mods`` folder, never
+    the prefix: None means the game has not been started yet, so there is
+    no %APPDATA% to put it in.
+    """
+    prefix = Path(prefix) if prefix is not None else Path(active_prefix())
+    if not (prefix / "drive_c" / "users").is_dir():
+        return None
+    folder = prefix / DLL_SETTINGS_REL
+    if dll:
+        own = folder / Path(str(dll).replace("\\", "/")).stem
+        if own.is_dir():
+            return own
+    if create:
+        folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 def start_auto_inject(settings):
     """Start this launch's auto-injection watcher, if the player asked for one.
 
