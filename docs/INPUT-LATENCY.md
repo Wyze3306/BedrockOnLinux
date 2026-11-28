@@ -96,7 +96,7 @@ and vkd3d-proton isolates the swap chain from the game:
   and vkd3d-proton's limiter at 60 FPS measured 89, then 80 ms. The game's
   own Max Framerate at 60 does as well as the pace (70, then 69 ms), but it
   waits by spinning a whole core in Wine's message loop, which is why the
-  launcher swaps it for vkd3d-proton's.
+  launcher paces the game just under it with vkd3d-proton's (#202).
 - **winewayland halves it.** With true presentation feedback from the
   compositor the present-wait means *shown*, and the frame reaches the
   screen one refresh after the game presents it: 73 ms against 154 for the

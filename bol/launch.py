@@ -92,7 +92,6 @@ from .prefix import (
     restore_game_frame_limits,
     restore_truncated_game_options,
     seed_default_servers,
-    set_aside_game_frame_limit,
     snapshot_game_options,
 )
 from .profiles import current_profile_info
@@ -316,7 +315,10 @@ _PACE_UNDER_REFRESH = 0.002
 
 def _rate_under_refresh(refresh):
     """The frame rate, to the hundredth, that keeps just under ``refresh``."""
-    return math.floor(refresh * (1.0 - _PACE_UNDER_REFRESH) * 100.0) / 100.0
+    # Rounded to a millionth first: 75 * 0.998 * 100 is 7484.999... in
+    # binary floating point, and 74.85 is the rate meant.
+    return math.floor(round(refresh * (1.0 - _PACE_UNDER_REFRESH) * 100.0, 6)
+                      ) / 100.0
 
 
 def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
@@ -330,20 +332,24 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
     the kernel: 99% of a core in the menu (#173), and 99% again in a loaded
     world at 60 FPS with vsync on, about 70 points of it kernel time, since
     with the cap below the display's refresh rate the present call never has
-    to wait. vkd3d-proton's limiter sleeps
-    until the deadline instead, so when the player has set a limit the
-    launcher holds that same rate through it, and the game's own limiter is
-    set aside for the session (see _set_aside_game_frame_limit). Nothing the
-    player chose changes: the frame rate is theirs, only the wait is cheaper.
+    to wait. It only spins while it is what holds the game back: with vsync
+    holding the game below that limit, the main thread stays near 20%. So
+    when the player has set a limit, the launcher paces the game just under
+    it with vkd3d-proton's limiter, which sleeps until the deadline instead:
+    each frame then takes a little longer than the game's own limiter asks,
+    so that limiter should find its deadline already passed. That follows
+    from the two deadlines; the main thread's CPU at this pace was not
+    measured in game yet. The setting itself is left as the player chose it, and the
+    game's menu shows it. Up to 3.0.0 the launcher switched it off in
+    options.txt for each session instead and put it back afterwards; the
+    menu then read Unlimited, and a player who chose Unlimited there could
+    never keep it, since that choice looked like the launcher's own write
+    and the old value came back after the game (#202).
 
-    That limiter is not free either: it ends every wait spinning, for a
-    millisecond plus a sixth of the time left, so its thread holds a fifth of
-    a core at 60 FPS — measured at 22% in the menu, against 6% for the game's
-    own main thread (#202). When vsync is on and the player's limit is no
-    lower than the fastest display's refresh rate, vsync already holds the
-    game to that limit, so only the game's own limiter is set aside and no
-    other takes its place: the same 60.0 FPS on a 60 Hz display, and that
-    thread back under 2%.
+    That limiter is not free either: it ends every wait spinning, a
+    twentieth of a core at 60 FPS since engine native23, a fifth before
+    (#202). When vsync holds the game clearly below the player's limit,
+    that limit never binds, and no limiter is added.
 
     Not under Xwayland, though: on a Wayland desktop, or in gamescope. There
     the swap chain's present-wait completes as soon as Xwayland passes the
@@ -357,7 +363,8 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
     still 74 ms a minute and a half later. So under Xwayland, with vsync on
     and no limit of the player's below the refresh rate, the launcher holds
     the game at the display's rate less _PACE_UNDER_REFRESH, and pays the
-    limiter's spin for it; the *Limit frame rate to the display* switch in
+    limiter's spin for it (also under the player's own limit when that is
+    the display's rate); the *Limit frame rate to the display* switch in
     Settings turns that off. On a plain X11 server, where that queue was not
     measured, vsync keeps the game alone as before (docs/INPUT-LATENCY.md).
 
@@ -372,25 +379,26 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
 
     ``BOL_FRAME_RATE`` outranks both, since it is the only one that can name
     a rate: 0 never caps and leaves the game to pace itself, a number always
-    caps at it, whatever the game and the switch say. Callers pass
+    caps at it, whatever the switch says. The player's own Max Framerate
+    still applies when it is lower, paced just under as above. Callers pass
     ``environ`` with the Advanced custom-environment field overlaid, since
     that field is where it is documented and it is applied too late in the
     launch to be visible here. A ``VKD3D_FRAME_RATE`` set by hand, in either
     place, is an answer already and is left alone.
 
-    The caps above are whole frames per second, rounded up. That is not
-    cosmetic: Proton turns VKD3D_FRAME_RATE into DXVK's dxgi.maxFrameRate,
+    The cap at the display's rate and BOL_FRAME_RATE are whole frames per
+    second, rounded up. That is not cosmetic: Proton turns VKD3D_FRAME_RATE into DXVK's dxgi.maxFrameRate,
     which takes whole numbers only and reads one carrying a decimal point as
     no limit at all, so a 143.85 Hz display has to be asked for as 144 — and
     rounding up rather than down is what keeps the cap from landing just
-    under the rate the display is actually driving. The pace under the
-    refresh rate has to land just under it, so it keeps its decimals, and
-    _deliver_frame_rate_limit hands it to vkd3d-proton by another way.
+    under the rate the display is actually driving. The paces under the
+    refresh rate and under the player's own limit have to land just under
+    them, so they keep their decimals, and _deliver_frame_rate_limit hands
+    them to vkd3d-proton by another way.
 
     None of this applies to the Legacy compatibility renderer: Proton leaves
-    vkd3d-proton out of the prefix for it, so nothing would read the limit,
-    and setting the game's own limiter aside would leave the session with no
-    limit at all (#314). The game paces itself there, as it always did.
+    vkd3d-proton out of the prefix for it, so nothing would read the limit
+    (#314). The game paces itself there, as it always did.
     """
     source = os.environ if environ is None else environ
     requested = _requested_frame_rate(source)
@@ -407,35 +415,30 @@ def _configure_frame_rate_limit(env, settings=None, prefix=None, environ=None,
         # An inherited limit is already an explicit answer to this question.
         return None
 
+    options_path = find_options_file(prefix)
+    own = game_frame_limit(options_path)
     if requested is not None:
         limit = math.ceil(requested)
-        info("BOL_FRAME_RATE limits Minecraft to %d FPS." % limit)
-        env["VKD3D_FRAME_RATE"] = str(limit)
-        return limit
+        if not own or own > limit:
+            info("BOL_FRAME_RATE limits Minecraft to %d FPS." % limit)
+            env["VKD3D_FRAME_RATE"] = str(limit)
+            return limit
+        info("BOL_FRAME_RATE asks for %d FPS, but Minecraft's own Max "
+             "Framerate of %d FPS is lower and still applies." % (limit, own))
+        return _pace_under_own_limit(env, own)
 
-    options_path = find_options_file(prefix)
     options = read_game_options(options_path)
-    own = game_frame_limit(options_path)
     pace = xwayland and (settings or {}).get("limit_frame_rate", True)
     if own:
         refresh = _vsync_holds_limit(own, options, refresh_probe)
         if refresh and pace:
-            return _pace_under_refresh(env, refresh, own)
-        if refresh:
-            info("Minecraft's Max Framerate is %d FPS and vsync already holds "
-                 "it to this display's %.2f Hz, so the launcher only turns "
-                 "the game's own limiter off for the session (under Wine it "
-                 "holds a whole CPU core) and puts it back when the game "
-                 "closes. In game it reads Unlimited meanwhile."
-                 % (own, refresh))
-            return own
-        info("Minecraft's Max Framerate is %d FPS. The game waits for each "
-             "frame by polling for window messages, which under Wine holds "
-             "a whole CPU core, so the launcher holds the same %d FPS "
-             "instead and puts the setting back when the game closes — in "
-             "game it reads Unlimited meanwhile." % (own, own))
-        env["VKD3D_FRAME_RATE"] = str(own)
-        return own
+            return _pace_under_refresh(env, min(refresh, own), own)
+        if refresh and refresh < _rate_under_refresh(own):
+            info("Minecraft's Max Framerate is %d FPS and vsync holds it to "
+                 "this display's %.2f Hz, below that, so the game's own "
+                 "limiter never has to wait." % (own, refresh))
+            return None
+        return _pace_under_own_limit(env, own)
 
     if pace and vsync_is_on(options):
         probe = _screen_refresh_hz if refresh_probe is None else refresh_probe
@@ -498,8 +501,8 @@ def _pace_under_refresh(env, refresh, own=None):
     rate = _rate_under_refresh(refresh)
     aside = ""
     if own:
-        aside = (" Its own Max Framerate of %d FPS is turned off for the "
-                 "session and put back when the game closes." % own)
+        aside = (" That is also just under its own Max Framerate of %d FPS, "
+                 "which stays as you chose it." % own)
     info("Vsync holds Minecraft to this display's %.2f Hz, but under "
          "Xwayland each frame then waits several refreshes before it is "
          "shown. The launcher paces the game at %.2f FPS instead, just under "
@@ -508,7 +511,19 @@ def _pace_under_refresh(env, refresh, own=None):
          "off 'Limit frame rate to the display' in Settings ▸ Advanced to "
          "leave it to vsync." % (refresh, rate, aside))
     env["VKD3D_FRAME_RATE"] = "%.2f" % rate
-    return own or rate
+    return rate
+
+
+def _pace_under_own_limit(env, own):
+    """Pace the game just under its own Max Framerate (see the caller)."""
+    rate = _rate_under_refresh(own)
+    info("Minecraft's Max Framerate is %d FPS. The game waits for each frame "
+         "by polling for window messages, which under Wine holds a whole CPU "
+         "core, so the launcher paces it at %.2f FPS, just under, with a "
+         "limiter that sleeps instead. The setting stays as you chose it."
+         % (own, rate))
+    env["VKD3D_FRAME_RATE"] = "%.2f" % rate
+    return rate
 
 
 def _deliver_frame_rate_limit(env, prefix=None):
@@ -546,21 +561,6 @@ def _deliver_frame_rate_limit(env, prefix=None):
         return None
     env.pop("VKD3D_FRAME_RATE", None)
     return rate
-
-
-def _set_aside_game_frame_limit(prefix=None):
-    """Switch Minecraft's own limiter off once the launcher paces the frames.
-
-    Two limiters at the same rate are not one too many but one too slow: the
-    game spins on its own deadline before it ever presents, so vkd3d-proton's
-    sleep would never be reached. Called only once nothing can still be
-    writing options.txt and before its copy is taken, so the copy is of the
-    file the game will really start from. Failing is harmless: the game then
-    paces itself, exactly as it always has.
-    """
-    return set_aside_game_frame_limit(
-        find_options_file(active_prefix() if prefix is None else prefix),
-        prefix_idle=True)
 
 
 def _keep_game_out_of_swap(cmd, env):
@@ -998,7 +998,7 @@ def _selected_game(settings):
     return edition, gd, exe
 
 
-def _prepare_bedrock_session(settings, frame_limit):
+def _prepare_bedrock_session(settings):
     """Minecraft's own files, put right before it starts; its saves edition.
 
     Every step here reads or writes something of Bedrock's -- options.txt,
@@ -1006,10 +1006,9 @@ def _prepare_bedrock_session(settings, frame_limit):
     runs for another title.
     """
     # Repair a settings file a previous crash cut off before the game reads
-    # it, hand its frame limit to the launcher's limiter when that one paces
-    # the session — or put back one an interrupted session set aside when
-    # nothing does — then keep a copy of what the game is about to start
-    # rewriting (#175). Safe to declare idle: _prepare_launch_engine()
+    # it, put back a Max Framerate an earlier version of the launcher set
+    # aside, then keep a copy of what the game is about to start rewriting
+    # (#175). Safe to declare idle: _prepare_launch_engine()
     # refused to get this far with a live prefix and the game has not been
     # started yet, so nothing that writes options.txt can be running,
     # whatever wineboot left behind.
@@ -1035,13 +1034,11 @@ def _prepare_bedrock_session(settings, frame_limit):
     except Exception as exc:
         warn(f"The game's resource pack cache could not be tidied "
              f"({type(exc).__name__}: {exc}).")
-    if frame_limit:
-        _set_aside_game_frame_limit()
-    else:
-        # A Max Framerate an interrupted session set aside goes back now:
-        # nothing holds it this session, and the game would otherwise start
-        # with no limit at all (#314).
-        restore_game_frame_limits(prefix_idle=True)
+    # Up to 3.0.0 the launcher switched the game's own Max Framerate off for
+    # each session and put it back afterwards. One that never came back --
+    # the launcher was killed, the machine went down -- goes back now, so
+    # the game starts with the player's limit and shows it (#314, #202).
+    restore_game_frame_limits(prefix_idle=True)
     snapshot_game_options()
     # The Servers tab is read from disk at startup, so the servers this
     # launcher ships with have to be in the list before the game opens it.
@@ -1490,12 +1487,12 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     # where BOL_FRAME_RATE is documented, and the supported way to set it.
     # The limiter takes over Minecraft's own Max Framerate, read from its
     # options.txt; another title has no such file, and its own setting.
-    frame_limit = _configure_frame_rate_limit(
-        env, s, active_prefix(),
-        environ={**os.environ,
-                 **custom_env_map(s.get("custom_env") or "")},
-        xwayland=_draws_through_xwayland(backend, wl, use_gamescope)) \
-        if bedrock else None
+    if bedrock:
+        _configure_frame_rate_limit(
+            env, s, active_prefix(),
+            environ={**os.environ,
+                     **custom_env_map(s.get("custom_env") or "")},
+            xwayland=_draws_through_xwayland(backend, wl, use_gamescope))
     _configure_graphics_cache(env, managed_engine=not custom_proton())
     _configure_gpu(env, s, environ={**os.environ,
                                     **custom_env_map(s.get("custom_env") or "")})
@@ -1579,7 +1576,7 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     _deliver_frame_rate_limit(env)
     edition = None
     if bedrock:
-        edition = _prepare_bedrock_session(s, frame_limit)
+        edition = _prepare_bedrock_session(s)
     else:
         info(f"Starting {title} …")
     # Everything this session writes to the shared game and engine files is

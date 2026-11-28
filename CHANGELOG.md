@@ -84,6 +84,18 @@
 
 ### Fixed
 
+- **Max Framerate shows what you chose, and Unlimited sticks (#202).** Since
+  2.2.8 the launcher switched Minecraft's own Max Framerate off in
+  `options.txt` for each session, since under Wine its wait spins a whole
+  CPU core (#173), and put the value back once the game had closed. In game
+  the setting meanwhile read *Unlimited*, and choosing Unlimited there could
+  never stick: it looked exactly like the launcher's own change, so the old
+  limit came back after the game. A player who had once set 60 stayed at
+  60 FPS whatever the menu said. The launcher now leaves the setting alone
+  and paces the game just under it with vkd3d-proton's limiter, which
+  sleeps (60 → 59.88 FPS), so that the game's own limiter, the one that
+  spins, should have nothing left to wait for. A value an interrupted
+  session of an earlier version left aside goes back at the next launch.
 - **"Report a problem" is offered only for what the launcher may have got
   wrong.** When PLAY stops on something the player fixes from the message
   itself (a Microsoft account that does not own the game, the ten-device
