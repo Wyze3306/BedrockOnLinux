@@ -119,6 +119,12 @@ class ReadyLaunchHarness:
             # Nor the machine's own graphics cards.
             mock.patch.object(launch, "apply_gpu_choice", return_value=None),
             mock.patch.object(launch, "hybrid_gpu_problem", return_value=None),
+            # Nor the machine's own NVIDIA driver, asked whether MangoHud has
+            # a power reading to show (#395).
+            mock.patch.object(launch.mangohud, "power_readable",
+                              side_effect=self._power_readable),
+            mock.patch.object(launch.mangohud.gpus, "list_gpus",
+                              return_value=[]),
             # Nor a watcher reading the machine's own game settings, nor one
             # bridging the machine's own virtual desktop setting.
             mock.patch.object(launch.fullscreen_fix, "start"),
@@ -183,6 +189,10 @@ class ReadyLaunchHarness:
         self.instance_calls = getattr(self, "instance_calls", [])
         self.instance_calls.append((args, kwargs))
         return launch._InstanceSession()
+
+    def _power_readable(self, slot):
+        self.nvml_asked = getattr(self, "nvml_asked", []) + [slot]
+        return getattr(self, "nvml_power", None)
 
     def _configure_locales(self, env):
         self.locales_env = dict(env)
@@ -731,6 +741,51 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.assertNotIn("GNUTLS_SYSTEM_PRIORITY_FILE", observed["env"])
         self.assertNotIn("GNUTLS_SYSTEM_PRIORITY_FAIL_ON_INVALID",
                          observed["env"])
+
+    def _launch_env(self, **kwargs):
+        observed = {}
+
+        class Process:
+            @staticmethod
+            def wait(timeout):
+                return 0
+
+        def popen(*_args, **popen_kwargs):
+            observed.update(popen_kwargs)
+            return Process()
+
+        with tempfile.TemporaryDirectory() as td:
+            self._exercise_ready_launch(Path(td), popen,
+                                        lambda: "owned-token",
+                                        lambda _token: True, **kwargs)
+        return observed["env"]
+
+    def test_mangohud_power_field_is_off_where_the_driver_has_none(self):
+        # #395: MANGOHUD=1 from the custom environment, an NVIDIA driver
+        # with no power reading: MangoHud gets its power field turned off.
+        self.nvml_power = False
+        env = self._launch_env(extra_settings={"custom_env": "MANGOHUD=1"})
+        self.assertEqual(env["MANGOHUD_CONFIG"], "read_cfg,gpu_power=0")
+        self.assertEqual(self.nvml_asked, [None])
+
+    def test_mangohud_inherited_from_the_launcher_counts_too(self):
+        # A Flatpak player sets it with `flatpak override --env=MANGOHUD=1`;
+        # the game's environment starts from the launcher's (proton_umu_cmd).
+        self.nvml_power = False
+        env = self._launch_env(
+            umu_env={"MANGOHUD": "1", "MANGOHUD_CONFIG": "fps,vram"})
+        self.assertEqual(env["MANGOHUD_CONFIG"], "fps,vram,gpu_power=0")
+
+    def test_mangohud_config_untouched_where_power_is_read(self):
+        self.nvml_power = True
+        env = self._launch_env(extra_settings={"custom_env": "MANGOHUD=1"})
+        self.assertNotIn("MANGOHUD_CONFIG", env)
+
+    def test_no_driver_question_without_mangohud(self):
+        self.nvml_power = False
+        env = self._launch_env()
+        self.assertNotIn("MANGOHUD_CONFIG", env)
+        self.assertEqual(getattr(self, "nvml_asked", []), [])
 
     def test_gpu_safety_failure_allows_engine_update_but_blocks_wine(self):
         with tempfile.TemporaryDirectory() as td:
