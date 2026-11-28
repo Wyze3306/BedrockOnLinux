@@ -131,6 +131,15 @@
 - **"Report a problem" describes the game when none is selected yet.** The
   Minecraft section of such a report read "unavailable: AttributeError"
   instead of the builds on disk.
+- **Steam Game Mode: the launcher fills the screen, and the Flatpak's text
+  fits in it.** Gamescope shows one window at a time and scales it to the
+  screen, and nothing there resizes it: on a Steam Deck the 1120×700 window
+  was stretched to 1280×800 and its text came out soft. It now opens at the
+  screen's own size. The Flatpak also drew the launcher in DejaVu Sans, its
+  runtime's default and a wider face than the system fonts the other builds
+  get, so the launcher's name and the home tiles ran past their frames. Noto
+  Sans, which the Flatpak finds among the system's fonts, now comes before
+  that default.
 
 ## 3.0.0 — 2026-11-14 (pre-release)
 
