@@ -22,6 +22,16 @@
   DLLs, such as ForceCloseOreUI, change what the game builds while it loads
   and do nothing once the menu is up. Off by default: clients such as
   Flarial expect the menu.
+- **Where an injected DLL keeps its settings (#399).** Client DLLs such as
+  ForceCloseOreUI keep their settings in `%APPDATA%\Minecraft Bedrock\mods`,
+  which is in the game's Wine prefix
+  (`drive_c/users/steamuser/AppData/Roaming/Minecraft Bedrock/mods`), not in
+  the folder the Mods page opens. **Open the DLL's settings folder** under
+  Settings ▸ Tools ▸ Injector Settings, and **DLL settings** on the Mods
+  page, open it, made if needed, or the DLL's own folder in it once there is
+  one. ForceCloseOreUI writes `ForceCloseOreUI\config.json` there when it
+  runs, with every OreUI screen it knows set to `false` (the old screen);
+  `true` brings a screen's new look back at the next start.
 - **The UWP releases of Minecraft for Windows, on wine-uwp (#387).** A new
   edition, "Minecraft for Windows (UWP)", lists every release Windows Update
   still serves from before the move to the GDK, 0.13 to 1.21.51, and

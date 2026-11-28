@@ -501,3 +501,50 @@ def test_an_early_injection_stops_when_the_game_exits(tmp_path):
                               side_effect=[True, False, False]):
         inject.perform_auto_inject(settings)
     env.run_injector.assert_not_called()
+
+
+# ---------------------------------------------------------------- #399
+
+def _prefix(tmp_path):
+    prefix = tmp_path / "pfx"
+    (prefix / "drive_c" / "users" / "steamuser").mkdir(parents=True)
+    return prefix
+
+
+def test_dll_settings_live_in_the_prefix_appdata_not_the_mods_page(tmp_path):
+    # Where ForceCloseOreUI looks first: %APPDATA%\Minecraft Bedrock\mods,
+    # for Minecraft and Minecraft Preview alike.
+    prefix = _prefix(tmp_path)
+    folder = inject.dll_settings_dir(prefix=prefix, create=True)
+    assert folder == (prefix / "drive_c/users/steamuser/AppData/Roaming"
+                      / "Minecraft Bedrock/mods")
+    assert folder.is_dir()
+
+
+def test_dll_settings_name_the_dll_own_folder_once_it_made_one(tmp_path):
+    prefix = _prefix(tmp_path)
+    mods = inject.dll_settings_dir(prefix=prefix, create=True)
+    for dll in ("/home/me/ForceCloseOreUI.dll",
+                r"C:\mods\ForceCloseOreUI.dll",
+                "https://example.com/dl/ForceCloseOreUI.dll"):
+        assert inject.dll_settings_dir(dll, prefix=prefix) == mods
+    (mods / "ForceCloseOreUI").mkdir()
+    for dll in ("/home/me/ForceCloseOreUI.dll",
+                r"C:\mods\ForceCloseOreUI.dll",
+                "https://example.com/dl/ForceCloseOreUI.dll"):
+        assert (inject.dll_settings_dir(dll, prefix=prefix)
+                == mods / "ForceCloseOreUI")
+    # Another DLL still opens the folder they all share.
+    assert inject.dll_settings_dir("/x/Flarial.dll", prefix=prefix) == mods
+
+
+def test_dll_settings_never_make_a_prefix_the_game_has_not(tmp_path):
+    prefix = tmp_path / "pfx"
+    assert inject.dll_settings_dir(prefix=prefix, create=True) is None
+    assert not prefix.exists()
+
+
+def test_dll_settings_default_to_the_active_prefix(tmp_path):
+    prefix = _prefix(tmp_path)
+    with mock.patch.object(inject, "active_prefix", return_value=prefix):
+        assert inject.dll_settings_dir() == prefix / inject.DLL_SETTINGS_REL

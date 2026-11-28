@@ -90,8 +90,15 @@ Good to know:
   it is fine.
 - **Tools ▸ Create direct launch shortcut** adds a *Minecraft Bedrock* entry
   to your app menu or to Steam. That is the one to use on a Steam Deck.
-- On a laptop with two graphics cards, **Settings ▸ Advanced ▸ Graphics card**
-  chooses the one Minecraft plays on.
+- On a laptop with two graphics cards, Minecraft plays on the more powerful
+  one by itself, unless the Legacy renderer is on. Both look busy while it
+  runs: the built-in one puts the picture on the screen. **Settings ▸ Advanced ▸ Graphics card** chooses
+  another, and the `rendered on` line of `bedrock-on-linux doctor` says
+  which one the game used last time.
+- A client DLL injected from **Settings ▸ Tools ▸ Injector Settings**, such
+  as ForceCloseOreUI, keeps its settings in the game's Wine prefix, under
+  `%APPDATA%\Minecraft Bedrock\mods`. **Open the DLL's settings folder** in
+  the same place opens it.
 - The launcher works with a controller: d-pad or left stick to move, **A** to
   select, **B** to go back, **Start** to play.
 

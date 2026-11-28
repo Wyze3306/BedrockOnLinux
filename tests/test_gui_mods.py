@@ -74,6 +74,44 @@ class ModsPageTests(unittest.TestCase):
         self.assertTrue(_wait(lambda: page.catalogue and page.state))
         return page
 
+    def test_dll_settings_opens_the_prefix_folder_injected_dlls_write(self):
+        # #399: ForceCloseOreUI's config.json is not under the build's mods
+        # folder but in %APPDATA% of the game's prefix; the page says where.
+        import tempfile  # noqa: PLC0415
+        from bol import inject  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            (prefix / "drive_c/users/steamuser").mkdir(parents=True)
+            with headless_window(injector_dll_path="/x/ForceCloseOreUI.dll") \
+                    as window, \
+                    mock.patch.object(inject, "active_prefix",
+                                      return_value=prefix), \
+                    mock.patch.object(window, "_open_folder") as opened:
+                page = self._page(window, _state())
+                self.assertIn("config.json", page.dll_settings_btn.toolTip())
+                page.dll_settings_btn.click()
+                folder = prefix / inject.DLL_SETTINGS_REL
+                opened.assert_called_once_with(folder)
+                self.assertTrue(folder.is_dir())
+                (folder / "ForceCloseOreUI").mkdir()
+                page.dll_settings_btn.click()
+                opened.assert_called_with(folder / "ForceCloseOreUI")
+
+    def test_dll_settings_before_the_first_launch_says_to_play_first(self):
+        import tempfile  # noqa: PLC0415
+        from bol import inject  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp, \
+                headless_window() as window, \
+                mock.patch.object(inject, "active_prefix",
+                                  return_value=Path(tmp) / "none"), \
+                mock.patch.object(window, "_open_folder") as opened, \
+                mock.patch.object(window, "info_box") as told:
+            page = self._page(window, _state())
+            page.dll_settings_btn.click()
+            opened.assert_not_called()
+            self.assertIn("Play once first", told.call_args.args[1])
+            self.assertFalse((Path(tmp) / "none").exists())
+
     def test_the_top_bar_opens_the_page_and_back_closes_it(self):
         with headless_window() as window:
             page = self._page(window, _state())

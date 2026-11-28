@@ -44,7 +44,7 @@ from .games import (installed_builds, installed_versions, list_editions,
                     list_versions, remove_build)
 from .gamesetup import setup_or_join
 from . import betterrtx, engine_arch, gpus
-from .inject import run_injector
+from .inject import dll_settings_dir, run_injector
 from . import icons
 from .gui_profiles import ProfilesPage
 from .launch import direct_launch_readiness, launch, single_window_session
@@ -1118,6 +1118,15 @@ def pick_paths(parent, title, name_filter, on_chosen, multiple=True,
     dialog.raise_()
     dialog.activateWindow()
     return dialog
+
+
+# Where ForceCloseOreUI and other client DLLs keep their settings (#399).
+DLL_SETTINGS_TIP = (
+    "Open the folder client DLLs keep their settings in, made if needed: "
+    "%APPDATA%\\Minecraft Bedrock\\mods in the game's Wine prefix. "
+    "ForceCloseOreUI writes ForceCloseOreUI\\config.json there the first "
+    "time it runs; set a screen to true to keep its new look, then restart "
+    "the game.")
 
 
 def tool_row(text, cmd, tip=None, danger=False) -> QPushButton:
@@ -4781,6 +4790,9 @@ class MainWindow(QMainWindow):
         self.early_switch.toggled.connect(
             lambda on: self._save_setting("injector_early", on))
         injector_sec.addWidget(self.early_switch)
+        injector_sec.addWidget(tool_row(
+            "Open the DLL's settings folder", self.open_dll_settings,
+            tip=DLL_SETTINGS_TIP))
 
         self._update_injector_settings_ui()
 
@@ -5020,6 +5032,26 @@ class MainWindow(QMainWindow):
         if dll:
             self.dll_input.setText(dll)
             self._save_setting("injector_dll_path", dll)
+
+    def open_dll_settings(self):
+        """Open where client DLLs keep their own settings (#399)."""
+        key = ("injector_dll_url"
+               if self.settings.get("injector_dll_type") == "url"
+               else "injector_dll_path")
+        dll = (self.settings.get(key) or "").strip()
+        try:
+            folder = dll_settings_dir(dll or None, create=True)
+        except OSError as error:
+            self.error_box("DLL settings",
+                           f"Could not make the settings folder:\n{error}")
+            return
+        if folder is None:
+            self.info_box(
+                "DLL settings",
+                "Play once first: client DLLs keep their settings in the "
+                "game's Wine prefix, which the first launch creates.")
+            return
+        self._open_folder(folder)
 
     def _update_injector_settings_ui(self):
         is_url = self.dll_mode_combo.currentData() == "url"
