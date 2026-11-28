@@ -2,14 +2,16 @@
 # WineGDK prefix + universal vkd3d payload + GDK-Proton base, assert it
 # reproduces the SHA-256 pinned in bol/config.py, and publish + attest it.
 #
-# By default it REUSES the published, attested WineGDK and vkd3d releases (built
-# by build-winegdk.yml / build-vkd3d.yml), verifying each one's provenance
-# attestation and SHA-256 before use. Set rebuild_from_source to compile both
+# By default it REUSES the published, attested WineGDK prefix and vkd3d payload
+# (built by build-winegdk.yml / build-vkd3d.yml), verifying each one's
+# provenance attestation and SHA-256 before use. They are taken from the
+# launcher's file store (scripts/release-files.sh), or from the release of
+# their own they had before it. Set rebuild_from_source to compile both
 # from source in the same run instead, for a fully-from-source traceable build.
 #
 # Bootstrap: on a fresh fork, first run "Build WineGDK" and "Build vkd3d-proton"
-# (publish: true) once to create their attested releases, or run this workflow
-# with rebuild_from_source: true.
+# (publish: true) once to publish them, or run this workflow with
+# rebuild_from_source: true.
 #
 # Public verification of any published artifact:
 #   gh attestation verify <file> --repo <owner>/BedrockOnLinux
@@ -120,8 +122,7 @@ jobs:
           mkdir -p "${{ runner.temp }}/wg-dl"
           tag="$(scripts/winegdk-release-tag.sh)"
           prefix_archive="winegdk-prefix-${tag#winegdk-}.tar.gz"
-          gh release download "$tag" -R "${{ github.repository }}" \
-            -p 'winegdk-prefix-*.tar.gz*' -D "${{ runner.temp }}/wg-dl"
+          scripts/release-files.sh fetch "$prefix_archive" "${{ runner.temp }}/wg-dl" "$tag"
           gh attestation verify "${{ runner.temp }}/wg-dl/${prefix_archive}" \
             -R "${{ github.repository }}"
           (cd "${{ runner.temp }}/wg-dl" && sha256sum -c "${prefix_archive}.sha256")
@@ -148,11 +149,12 @@ jobs:
         run: |
           mkdir -p "${{ runner.temp }}/vk-dl"
           tag="$(scripts/vkd3d-release-tag.sh)"
-          gh release download "$tag" -R "${{ github.repository }}" \
-            -p 'vkd3d-universal-*.tar.gz*' -D "${{ runner.temp }}/vk-dl"
-          gh attestation verify "${{ runner.temp }}/vk-dl/vkd3d-universal-3.0.1-nv-dgc.tar.gz" \
+          asset="$(scripts/vkd3d-release-tag.sh --asset)"
+          scripts/release-files.sh fetch "$asset" "${{ runner.temp }}/vk-dl" \
+            "$tag" vkd3d-universal-3.0.1-nv-dgc.tar.gz
+          gh attestation verify "${{ runner.temp }}/vk-dl/$asset" \
             -R "${{ github.repository }}"
-          (cd "${{ runner.temp }}/vk-dl" && sha256sum -c "vkd3d-universal-3.0.1-nv-dgc.tar.gz.sha256")
+          (cd "${{ runner.temp }}/vk-dl" && sha256sum -c "$asset.sha256")
 
       - name: Unpack + verify vkd3d against the committed DLL hashes
         run: |
@@ -235,23 +237,14 @@ jobs:
         with:
           subject-path: dist/GDK-Proton-xuser-${{ env.REV }}.tar.gz
 
-      - name: Publish the engine to a release on this fork
+      # Reproducible engine build of GDK-Proton-xuser, verified above to match
+      # the SHA-256 pinned in bol/config.py. Published before the file store
+      # existed, an engine had a release of its own, engine-<rev>; the store
+      # refuses other bytes under a name it holds, and the pin assert above
+      # refuses other bytes than that release's.
+      - name: Publish the engine to the launcher's file store
         if: ${{ github.event_name == 'push' || inputs.publish }}
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: engine-${{ env.REV }}
-          target_commitish: ${{ github.sha }}
-          name: Managed engine ${{ env.REV }}
-          make_latest: false
-          prerelease: true
-          body: >
-            Reproducible engine build of GDK-Proton-xuser (${{ env.REV }}),
-            verified to match the SHA-256 pinned in bol/config.py.
-            Verify provenance with: gh attestation verify <file> --repo ${{ github.repository }}
-          files: |
-            dist/GDK-Proton-xuser-${{ env.REV }}.tar.gz
-            dist/GDK-Proton-xuser-${{ env.REV }}.tar.gz.sha256
-          fail_on_unmatched_files: true
+        run: scripts/release-files.sh publish "dist/GDK-Proton-xuser-$REV.tar.gz"
 
   package-arm64:
     if: ${{ inputs.arch == 'aarch64' }}
@@ -280,7 +273,7 @@ jobs:
           tag="$(scripts/winegdk-release-tag.sh)-aarch64"
           asset="winegdk-prefix-${tag#winegdk-}.tar.gz"
           mkdir -p /mnt/arm/wg-dl /mnt/arm/wg
-          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p "$asset*" -D /mnt/arm/wg-dl
+          scripts/release-files.sh fetch "$asset" /mnt/arm/wg-dl "$tag"
           gh attestation verify "/mnt/arm/wg-dl/$asset" -R "$GITHUB_REPOSITORY"
           pin="$(grep -m1 '^WINEGDK_ARM64_PREFIX_SHA256 = ' bol/config.py | cut -d'"' -f2)"
           echo "${pin}  /mnt/arm/wg-dl/$asset" | sha256sum -c -
@@ -291,13 +284,15 @@ jobs:
         run: |
           mkdir -p /mnt/arm/vk-dl /mnt/arm/vk-arm /mnt/arm/vk-x86
           tag="$(scripts/vkd3d-release-tag.sh aarch64)"
-          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p 'vkd3d-arm64x-*.tar.gz*' -D /mnt/arm/vk-dl
-          gh attestation verify /mnt/arm/vk-dl/vkd3d-arm64x-3.0.1-nv-dgc.tar.gz -R "$GITHUB_REPOSITORY"
-          tar -C /mnt/arm/vk-arm -xzf /mnt/arm/vk-dl/vkd3d-arm64x-3.0.1-nv-dgc.tar.gz
+          asset="$(scripts/vkd3d-release-tag.sh --asset aarch64)"
+          scripts/release-files.sh fetch "$asset" /mnt/arm/vk-dl "$tag" vkd3d-arm64x-3.0.1-nv-dgc.tar.gz
+          gh attestation verify "/mnt/arm/vk-dl/$asset" -R "$GITHUB_REPOSITORY"
+          tar -C /mnt/arm/vk-arm -xzf "/mnt/arm/vk-dl/$asset"
           tag="$(scripts/vkd3d-release-tag.sh)"
-          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p 'vkd3d-universal-*.tar.gz*' -D /mnt/arm/vk-dl
-          gh attestation verify /mnt/arm/vk-dl/vkd3d-universal-3.0.1-nv-dgc.tar.gz -R "$GITHUB_REPOSITORY"
-          tar -C /mnt/arm/vk-x86 -xzf /mnt/arm/vk-dl/vkd3d-universal-3.0.1-nv-dgc.tar.gz
+          asset="$(scripts/vkd3d-release-tag.sh --asset)"
+          scripts/release-files.sh fetch "$asset" /mnt/arm/vk-dl "$tag" vkd3d-universal-3.0.1-nv-dgc.tar.gz
+          gh attestation verify "/mnt/arm/vk-dl/$asset" -R "$GITHUB_REPOSITORY"
+          tar -C /mnt/arm/vk-x86 -xzf "/mnt/arm/vk-dl/$asset"
           rm -rf /mnt/arm/vk-dl
 
       - name: Fetch the GE-Proton11-14-aarch64 and GDK-Proton10-32 bases
@@ -358,27 +353,15 @@ jobs:
       - name: Refuse to replace a published ARM64EC engine
         if: ${{ inputs.publish && steps.pin.outputs.publishable == 'true' }}
         run: |
+          # Published before the file store existed, an engine had a release
+          # of its own; the store refuses other bytes under a name it holds.
           if gh release view "engine-$REV" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::error::engine-$REV is already published; name a new WINEGDK_ARM64_BUILD_REV." >&2
             exit 1
           fi
 
-      - name: Publish the ARM64EC engine as a pre-release
+      # Experimental engine for aarch64 hosts (#250): WineGDK built as ARM64EC
+      # on GE-Proton11-14-aarch64, with FEX translating only the x64 game.
+      - name: Publish the ARM64EC engine to the launcher's file store
         if: ${{ inputs.publish && steps.pin.outputs.publishable == 'true' }}
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: engine-${{ env.REV }}
-          target_commitish: ${{ github.sha }}
-          name: Experimental ARM64EC engine ${{ env.REV }}
-          make_latest: false
-          prerelease: true
-          body: >
-            Experimental engine for aarch64 hosts (#250): WineGDK built as
-            ARM64EC on GE-Proton11-14-aarch64, with FEX translating only the
-            x64 game. Reproducible; verified to match the SHA-256 pinned in
-            bol/config.py. Verify provenance with:
-            gh attestation verify <file> --repo ${{ github.repository }}
-          files: |
-            dist/GDK-Proton-xuser-${{ env.REV }}.tar.gz
-            dist/GDK-Proton-xuser-${{ env.REV }}.tar.gz.sha256
-          fail_on_unmatched_files: true
+        run: scripts/release-files.sh publish "dist/GDK-Proton-xuser-$REV.tar.gz"

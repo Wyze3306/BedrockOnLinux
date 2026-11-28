@@ -1,17 +1,38 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# Print the GitHub release tag that holds the universal vkd3d-proton payload
-# described by third_party/vkd3d-proton-universal.
+# Print the GitHub release tag that held the universal vkd3d-proton payload
+# described by third_party/vkd3d-proton-universal, before the launcher's file
+# store existed.
 #
-# The tag is named after the output hash lock, the way the WineGDK prefix
-# release is named after its source commit and manifest: a rebuilt payload gets
-# a release of its own instead of replacing the bytes that earlier engine
-# revisions were assembled from, and reusing a release by name can never pick
-# up a payload the committed OUTPUT-SHA256SUMS does not describe.
+# The tag is named after the output hash lock, the way the WineGDK prefix is
+# named after its source commit and manifest: a rebuilt payload gets a name of
+# its own instead of replacing the bytes that earlier engine revisions were
+# assembled from, and reusing a payload by name can never pick up one the
+# committed OUTPUT-SHA256SUMS does not describe.
 #
 # "vkd3d-release-tag.sh aarch64" names the experimental ARM64EC engine's ARM64X
 # payload instead (third_party/vkd3d-proton-arm64x), after its own output lock.
+#
+# With --asset first it prints the payload's file name in the launcher's file
+# store instead (scripts/release-files.sh), which carries the same lock: the
+# releases of their own used one file name for every payload.
 set -euo pipefail
+
+asset=false
+if [[ "${1:-}" == --asset ]]; then
+  asset=true
+  shift
+fi
+
+name() {
+  if ! $asset; then
+    echo "$1"
+  elif [[ "$1" == vkd3d-arm64x-* ]]; then
+    echo "$1.tar.gz"
+  else
+    echo "vkd3d-universal-${1#vkd3d-}.tar.gz"
+  fi
+}
 
 if [[ "${1:-}" == aarch64 ]]; then
   ARM_HASHES="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/third_party/vkd3d-proton-arm64x/OUTPUT-SHA256SUMS"
@@ -20,7 +41,7 @@ if [[ "${1:-}" == aarch64 ]]; then
     exit 1
   }
   read -r arm_lock _ < <(sha256sum "$ARM_HASHES")
-  echo "vkd3d-arm64x-3.0.1-nv-dgc-${arm_lock:0:12}"
+  name "vkd3d-arm64x-3.0.1-nv-dgc-${arm_lock:0:12}"
   exit 0
 fi
 
@@ -42,4 +63,4 @@ read -r actual _ < <(sha256sum "$EXPECTED_HASHES")
   exit 1
 }
 
-echo "vkd3d-3.0.1-nv-dgc-${VKD3D_OUTPUT_HASHES_SHA256:0:12}"
+name "vkd3d-3.0.1-nv-dgc-${VKD3D_OUTPUT_HASHES_SHA256:0:12}"

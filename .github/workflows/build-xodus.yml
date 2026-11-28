@@ -286,32 +286,25 @@ jobs:
             ${{ env.TARBALL }}
             ${{ env.WEBVIEW_TARBALL }}
 
-      - name: Publish the xodus-cli release
+      # xodus-cli, built from xodus-gaming/xodus at REV with
+      # --features xodus/key-chain-file, goes to the launcher's file store.
+      # Xodus is GPL-3.0: the complete corresponding source goes beside it as
+      # xodus-src-<rev>.tar.gz. xodus-webview-<rev>.tar.xz is the WebKitGTK
+      # stack that binary links, for hosts that ship none: Debian packages,
+      # unmodified apart from the RUNPATH that makes them relocatable, listed
+      # in the PACKAGES file it carries. Every xodus build carries the same
+      # runtime, so a later build finds it published and skips it.
+      - name: Publish xodus-cli to the launcher's file store
         if: ${{ inputs.publish && env.PUBLISHABLE == 'true' }}
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: xodus-${{ env.REV }}${{ env.SUFFIX }}
-          target_commitish: ${{ github.sha }}
-          name: xodus-cli ${{ env.REV }}${{ env.SUFFIX }} (from source)
-          make_latest: false
-          prerelease: ${{ env.SUFFIX != '' }}
-          body: >
-            xodus-cli built from xodus-gaming/xodus commit ${{ env.REV }} with
-            --features xodus/key-chain-file. SHA-256
-            ${{ steps.build.outputs.sha256 }}.
-            Verify with: gh attestation verify <file> --repo ${{ github.repository }}.
-            Xodus is GPL-3.0; the complete corresponding source is published as
-            xodus-src-${{ env.REV }}.tar.gz in this same release.
-            xodus-webview-${{ env.WEBVIEW_REV }}.tar.xz beside it is the
-            WebKitGTK stack that binary links, for hosts that ship none
-            (SHA-256 ${{ steps.webview.outputs.sha256 }}); it is Debian
-            packages, unmodified apart from the RUNPATH that makes them
-            relocatable, listed in the PACKAGES file it carries.
-          files: |
-            ${{ env.TARBALL }}
-            ${{ env.TARBALL }}.sha256
-            ${{ env.SRC_TARBALL }}
-            ${{ env.SRC_TARBALL }}.sha256
-            ${{ env.WEBVIEW_TARBALL }}
-            ${{ env.WEBVIEW_TARBALL }}.sha256
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          src="$SRC_TARBALL"
+          if [ -n "$SUFFIX" ]; then
+            # The aarch64 build packs the same source into other bytes, and
+            # the store holds one set of bytes per name.
+            src="${SRC_TARBALL%.tar.gz}${SUFFIX}.tar.gz"
+            cp "$SRC_TARBALL" "$src"
+            (cd "$(dirname "$src")" && sha256sum "$(basename "$src")") > "$src.sha256"
+          fi
+          scripts/release-files.sh publish "$TARBALL" "$src" "$WEBVIEW_TARBALL"

@@ -212,6 +212,20 @@
   controller as well, on which nothing remapped in Steam Input exists and a
   Steam Deck's back buttons mean nothing to it. Steam's list now counts too.
 
+### Changed
+
+- **The Releases page lists the launcher's versions again.** Every file the
+  launcher downloads by itself (the game engines, xodus-cli and its
+  WebKitGTK runtime, the online sign-in set, and the WineGDK prefixes and
+  vkd3d-proton payloads the engines are built from) is now published to one
+  release, "Launcher files (not a launcher version)", which GitHub lists
+  last, instead of a pre-release of its own each. The launcher downloads
+  from it first and from the old releases after, so earlier versions and
+  other projects that download from those keep working. The launcher's
+  release notes list its own versions only, and the daily test build is
+  named "Daily test build, not for playing". How it works:
+  `docs/release-files.md`.
+
 ## 3.0.0 — 2026-11-14 (pre-release)
 
 A pre-release of the next major version. Add-ons, maps and texture packs

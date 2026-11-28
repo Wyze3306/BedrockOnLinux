@@ -19,7 +19,6 @@ from .config import (
     WINEGDK_ARM64_OUT,
     WINEGDK_BUILD_REV,
     WINEGDK_OUT,
-    WINEGDK_PREBUILT_REPO,
 )
 from .engine_arch import Engine
 from .engine_lock import managed_engine_lock
@@ -27,7 +26,10 @@ from .log import die, info, ok, warn
 from .proton import patch_proton
 from .util import (
     download,
+    download_first,
+    files_url,
     load_settings,
+    release_asset_url,
     remove_path,
     save_settings,
     sha256_file,
@@ -356,13 +358,12 @@ def _install_prebuilt_winegdk_locked(progress=None, force=False, eng=None):
             return False
         info(f"Using local game engine archive: {archive}")
     else:
-        # Engine releases have a stable tag/asset contract.  Addressing that
-        # contract directly avoids the generic release-list cache hiding an
-        # engine published shortly after the launcher metadata was cached.
-        url = (
-            f"https://github.com/{WINEGDK_PREBUILT_REPO}/releases/download/"
-            f"engine-{eng.build_rev}/{asset}"
-        )
+        # An engine is addressed by its file name, in the launcher's file
+        # store and else in the release of its own it was published under
+        # before the store (engine-<rev>): no release list to page through,
+        # and none whose cache could hide an engine published since.
+        urls = (files_url(asset),
+                release_asset_url(f"engine-{eng.build_rev}", asset))
         archive = CACHE / asset
         if force:
             # A release asset may have been corrected under the same filename;
@@ -375,7 +376,8 @@ def _install_prebuilt_winegdk_locked(progress=None, force=False, eng=None):
                  ("ARM game engine" if eng.arch == engine_arch.ARM64EC
                   else "game engine"))
             try:
-                download(url, archive, "Game engine", progress)
+                download_first(urls, archive, "Game engine",
+                               progress=progress, fetch=download)
             except Exception as e:
                 warn(f"Game engine download failed ({e}).")
                 return False

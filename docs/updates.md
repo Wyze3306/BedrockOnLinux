@@ -158,7 +158,7 @@ launcher ignores the variable.
         {"rev": "64d39eb87a56-p15",
          "sha256": "<sha256 of xodus-cli-64d39eb87a56-p15.tar.gz>",
          "replaces": ["64d39eb87a56-p14"],
-         "url": "https://github.com/Wyze3306/BedrockOnLinux/releases/download/xodus-64d39eb87a56-p15/xodus-cli-64d39eb87a56-p15.tar.gz",
+         "url": "https://github.com/Wyze3306/BedrockOnLinux/releases/download/files/xodus-cli-64d39eb87a56-p15.tar.gz",
          "min_launcher": "3.0.0"}
       ]
     },

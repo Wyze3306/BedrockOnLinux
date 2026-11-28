@@ -52,7 +52,6 @@ from .archive import safe_extract_tar
 from .config import (
     CACHE,
     WEBKIT_DRAWS_WITHOUT_EGL,
-    WINEGDK_PREBUILT_REPO,
     XODUS_REV,
     XODUS_WEBVIEW_ARM64_EXEC_DIR,
     XODUS_WEBVIEW_ARM64_SHA256,
@@ -62,16 +61,24 @@ from .config import (
     XODUS_WEBVIEW_SHA256,
 )
 from .log import BolError, info, ok, warn
-from .util import asset_url, download, env_flag, gh_releases
+from .util import (
+    AssetMissing,
+    download,
+    download_first,
+    env_flag,
+    files_url,
+    release_asset_url,
+)
 
 # The GUI and the game launch both ask several times per run whether the host
 # can load the binary; the answer cannot change while the launcher lives.
 _HOST_PROBE = {}
 
 ASSET = f"xodus-webview-{XODUS_WEBVIEW_REV}.tar.xz"
-# The aarch64 runtime for the aarch64 xodus-cli (#250), released beside it
-# under xodus-<XODUS_REV>-aarch64. Its marker carries the suffix, so the
-# x86-64 runtime an earlier launcher unpacked here is replaced.
+# The aarch64 runtime for the aarch64 xodus-cli (#250), published beside it
+# (before the launcher's file store, under xodus-<XODUS_REV>-aarch64). Its
+# marker carries the suffix, so the x86-64 runtime an earlier launcher
+# unpacked here is replaced.
 ARM64_SUFFIX = "-aarch64"
 ARM64_ASSET = f"xodus-webview-{XODUS_WEBVIEW_REV}{ARM64_SUFFIX}.tar.xz"
 
@@ -721,19 +728,24 @@ def installed():
 _FEED_PIN_FAILED = set()
 
 
-def _pin(embedded=False):
-    """(rev, sha256, url, asset) of the runtime to install.
+def _release_urls(asset, tag):
+    """Where ``asset`` is published: the launcher's file store first, then
+    the release ``tag`` it was published under before the store existed."""
+    return files_url(asset), release_asset_url(tag, asset)
 
-    The signed data feed (bol.feed) may replace the pinned revision; the
-    archive is still only accepted by its SHA-256. The feed names x86-64
-    runtimes only, so an aarch64 one is always the pinned one, fetched from
-    its release tag directly.
+
+def _pin(embedded=False):
+    """(rev, sha256, urls, asset) of the runtime to install.
+
+    ``urls`` are tried in order until one has the archive. The signed data
+    feed (bol.feed) may replace the pinned revision, with an address of its
+    own; the archive is still only accepted by its SHA-256. The feed names
+    x86-64 runtimes only, so an aarch64 one is always the pinned one.
     """
     if _arm64():
-        url = (f"https://github.com/{WINEGDK_PREBUILT_REPO}/releases/download/"
-               f"xodus-{XODUS_REV}{ARM64_SUFFIX}/{ARM64_ASSET}")
         return (XODUS_WEBVIEW_REV + ARM64_SUFFIX, XODUS_WEBVIEW_ARM64_SHA256,
-                url, ARM64_ASSET)
+                _release_urls(ARM64_ASSET, f"xodus-{XODUS_REV}{ARM64_SUFFIX}"),
+                ARM64_ASSET)
     rev, sha256, url = XODUS_WEBVIEW_REV, XODUS_WEBVIEW_SHA256, None
     if not embedded:
         from . import feed
@@ -743,7 +755,8 @@ def _pin(embedded=False):
             rev, sha256, url = XODUS_WEBVIEW_REV, XODUS_WEBVIEW_SHA256, None
     asset = ASSET if rev == XODUS_WEBVIEW_REV \
         else f"xodus-webview-{rev}.tar.xz"
-    return rev, sha256, url, asset
+    urls = (url,) if url else _release_urls(asset, f"xodus-{XODUS_REV}")
+    return rev, sha256, urls, asset
 
 
 def _installed_rev():
@@ -771,7 +784,7 @@ def _local_asset(asset=None):
 
 def _fetch(pin=None):
     """The verified archive, downloaded if it is not already beside us."""
-    _rev, pinned_sha256, direct_url, ASSET = pin or _pin(embedded=True)
+    _rev, pinned_sha256, urls, ASSET = pin or _pin(embedded=True)
     expected = pinned_sha256.strip().lower()
     if not expected:
         raise BolError(
@@ -779,33 +792,19 @@ def _fetch(pin=None):
             "yet, so it cannot be verified or installed.")
     archive = _local_asset(ASSET)
     local = archive is not None
-    if not local and direct_url:
+    if not local:
         archive = CACHE / ASSET
         if not archive.is_file():
             info("Downloading WebKitGTK for the Microsoft sign-in "
                  "(one-time, ~80 MB) …")
-            download(direct_url, archive, "WebKitGTK runtime", attempts=2)
-    elif not local:
-        try:
-            # Every release, as for the OpenSSL XCurl set (bol.fixups).
-            releases = gh_releases(WINEGDK_PREBUILT_REPO, fetch_all=True)
-        except Exception as exc:
-            raise BolError(
-                f"Could not look up the WebKitGTK runtime ({exc}). Check the "
-                "network connection and try again.") from exc
-        url = None
-        for release in releases or []:
-            url, _name, _ = asset_url(release, lambda name: name == ASSET)
-            if url:
-                break
-        if not url:
-            raise BolError(
-                f"The WebKitGTK runtime '{ASSET}' has not been published yet.")
-        archive = CACHE / ASSET
-        if not archive.is_file():
-            info("Downloading WebKitGTK for the Microsoft sign-in "
-                 "(one-time, ~80 MB) …")
-            download(url, archive, "WebKitGTK runtime")
+            try:
+                download_first(urls, archive, "WebKitGTK runtime",
+                               fetch=download, missing_ok=True,
+                               attempts=2 if len(urls) == 1 else 5)
+            except AssetMissing as exc:
+                raise BolError(
+                    f"The WebKitGTK runtime '{ASSET}' has not been published "
+                    "yet.") from exc
 
     actual = hashlib.sha256(archive.read_bytes()).hexdigest()
     if actual != expected:

@@ -215,8 +215,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILT_SHA256: ${{ steps.pack.outputs.sha256 }}
         run: |
-          # A tag names one set of bytes. Re-running a pinned build is fine; a
-          # different archive under an existing tag never is.
+          # A name holds one set of bytes. Re-running a pinned build is fine; a
+          # different archive under an existing name never is. The file store
+          # refuses that itself; a prefix published before it existed has a
+          # release of its own.
           if gh release view "$PREFIX_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             mkdir -p "$RUNNER_TEMP/published"
             gh release download "$PREFIX_TAG" -R "$GITHUB_REPOSITORY" \
@@ -234,22 +236,11 @@ jobs:
         with:
           subject-path: ${{ env.TARBALL }}
 
-      - name: Publish the WineGDK prefix release
+      # The prefix goes to the launcher's file store under the name its
+      # release used to have (winegdk-prefix-<the tag without winegdk->), which
+      # already names the source commit, the patch manifest and the recipe.
+      - name: Publish the WineGDK prefix to the launcher's file store
         if: ${{ inputs.publish && steps.pack.outputs.publishable == 'true' }}
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: ${{ env.PREFIX_TAG }}
-          target_commitish: ${{ github.sha }}
-          name: WineGDK prefix ${{ env.PREFIX_TAG }}
-          make_latest: false
-          prerelease: true
-          body: >
-            Reproducible WineGDK build (${{ env.ARCH == 'aarch64' && 'experimental
-            ARM64EC engine, steamrt4 arm64 SDK container' || 'debian:bullseye container' }})
-            from source commit ${{ steps.pack.outputs.commit }}. SHA-256
-            ${{ steps.pack.outputs.sha256 }}. Verify provenance with:
-            gh attestation verify <file> --repo ${{ github.repository }}
-          files: |
-            ${{ env.TARBALL }}
-            ${{ env.TARBALL }}.sha256
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release-files.sh publish "$TARBALL"

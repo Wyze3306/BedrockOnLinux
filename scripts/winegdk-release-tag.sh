@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# Print the GitHub release tag that holds the WineGDK prefix bol/config.py
-# describes. The prefix archive in it is "winegdk-prefix-<the tag without its
-# winegdk- prefix>.tar.gz".
+# Print the name of the WineGDK prefix bol/config.py describes. The archive is
+# "winegdk-prefix-<the name without its winegdk- prefix>.tar.gz", in the
+# launcher's file store (scripts/release-files.sh); a prefix published before
+# the store existed is in the release tagged with this name.
 #
 # The tag names what the bytes are made from: the source commit, the manifest
 # of the vendored patches, and the build recipe once that changed too. The
 # first recipe had no name, so the tags it produced keep theirs; "stripped"
 # installs the modules without their debugging sections. A prefix built
-# another way is another set of bytes and gets a release of its own, instead
-# of replacing the one earlier engine revisions were assembled from.
+# another way is another set of bytes and gets a name of its own, instead of
+# replacing the one earlier engine revisions were assembled from.
 set -euo pipefail
 
 CONFIG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bol/config.py"

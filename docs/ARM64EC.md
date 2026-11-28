@@ -7,11 +7,12 @@ section "What was built" says where the build differs from it.
 ## What was built
 
 Every piece is built in CI on GitHub's `ubuntu-24.04-arm` runners, pinned by
-SHA-256 in `bol/config.py` with the usual two-pass loop, and published as a
-pre-release under a tag of its own. The x86 engine, vkd3d payload and xodus
-archives are untouched, byte for byte.
+SHA-256 in `bol/config.py` with the usual two-pass loop, and published to
+the launcher's file store (`docs/release-files.md`); the last column is the
+pre-release each first went out under, which the launcher falls back to. The
+x86 engine, vkd3d payload and xodus archives are untouched, byte for byte.
 
-| Piece | Recipe | Release |
+| Piece | Recipe | First released under |
 |---|---|---|
 | WineGDK, `--enable-archs=arm64ec,aarch64,i386,x86_64` | `build-winegdk.yml arch=aarch64`, `scripts/build-winegdk-container.sh` with `BOL_WINEGDK_TARGET=aarch64` | `winegdk-75637b674e1f-1ca76fabc4d8-stripped-aarch64` |
 | vkd3d-proton 3.0.1 + NV-DGC + our two fixes, as ARM64X | `build-vkd3d.yml arch=aarch64`, `scripts/build-vkd3d-arm64x.sh` | `vkd3d-arm64x-3.0.1-nv-dgc-3bd519b4cb37` |
@@ -231,7 +232,7 @@ Smoke test: `wine --version` inside the arm64 runtime, then the tests under
 "Testing" below.
 
 The output is a second archive,
-`GDK-Proton-xuser-<rev>-aarch64.tar.gz`, with its own release asset,
+`GDK-Proton-xuser-<rev>-aarch64.tar.gz`, with its own asset,
 attestation and pin. A fat archive holding both architectures would work
 with the proton script, but it doubles every x86 download.
 

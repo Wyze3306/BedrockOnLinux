@@ -10,6 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 from bol import fixups, prefix
+from bol.log import BolError
+from bol.util import AssetMissing
 from bol.archive import safe_extract_tar
 
 
@@ -281,11 +283,6 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
                     fixups, "OPENSSL_XCURL_SET", openssl_set), \
                 mock.patch.object(
                     fixups, "OPENSSL_XCURL_ARCHIVE_SHA256", package_sha), \
-                mock.patch.object(fixups, "gh_releases", return_value=[{}]), \
-                mock.patch.object(
-                    fixups, "asset_url",
-                    return_value=("https://invalid/xcurl.tar.gz",
-                                  archive_name, None)), \
                 mock.patch.object(fixups, "download") as download:
             self.assertTrue(fixups.ensure_openssl_xcurl_set())
 
@@ -314,10 +311,10 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
                     fixups, "OPENSSL_XCURL_SET", openssl_set), \
                 mock.patch.object(
                     fixups, "OPENSSL_XCURL_ARCHIVE_SHA256", package_sha), \
-                mock.patch.object(fixups, "gh_releases") as releases:
+                mock.patch.object(fixups, "download") as download:
             self.assertTrue(fixups.ensure_openssl_xcurl_set())
 
-        releases.assert_not_called()
+        download.assert_not_called()
         self.assertEqual((openssl_set / "libcurl-4.dll").read_bytes(), b"curl")
         self.assertEqual((openssl_set / "xcurl-cashim.dll").read_bytes(), b"shim")
         self.assertEqual((openssl_set / ".rev").read_text(),
@@ -335,7 +332,7 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
         package_sha = hashlib.sha256(reviewed.read_bytes()).hexdigest()
         openssl_set = self.base / "installed/openssl-set"
 
-        def download_reviewed(_url, destination, _label):
+        def download_reviewed(_url, destination, _label, **_kwargs):
             destination.write_bytes(reviewed.read_bytes())
 
         with mock.patch.object(fixups, "CACHE", cache), \
@@ -343,11 +340,6 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
                     fixups, "OPENSSL_XCURL_SET", openssl_set), \
                 mock.patch.object(
                     fixups, "OPENSSL_XCURL_ARCHIVE_SHA256", package_sha), \
-                mock.patch.object(fixups, "gh_releases", return_value=[{}]), \
-                mock.patch.object(
-                    fixups, "asset_url",
-                    return_value=("https://invalid/xcurl.tar.gz",
-                                  archive_name, None)), \
                 mock.patch.object(
                     fixups, "download", side_effect=download_reviewed) as download:
             self.assertTrue(fixups.ensure_openssl_xcurl_set())
@@ -358,10 +350,10 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
         self.assertEqual((openssl_set / "libcurl-4.dll").read_bytes(), b"curl")
         self.assertEqual((openssl_set / "xcurl-cashim.dll").read_bytes(), b"shim")
 
-    def test_xcurl_set_is_found_past_the_newest_thirty_releases(self):
-        # Uploaded once, the set stays in its own release while newer ones
-        # pile up above it; it was the 38th when fresh installs stopped
-        # finding it ("not published yet").
+    def test_xcurl_set_comes_from_the_store_then_its_own_release(self):
+        # Before the launcher's file store (docs/release-files.md), the set
+        # was published under xcurl-<rev>; it is read from there when the
+        # store does not have it.
         cache = self.base / "cache"
         archive_name = (
             "openssl-xcurl-set-" + fixups.OPENSSL_XCURL_REV + ".tar.gz")
@@ -369,16 +361,13 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
         self._write_xcurl_archive(reviewed)
         package_sha = hashlib.sha256(reviewed.read_bytes()).hexdigest()
         openssl_set = self.base / "installed/openssl-set"
-        releases = [{"assets": []} for _ in range(37)] + [{"assets": [{
-            "name": archive_name,
-            "browser_download_url": "https://invalid/xcurl.tar.gz"}]}]
+        urls = []
 
-        def gh_releases(_repo, per_page=100, fetch_all=False,
-                        ignore_cache=False):
-            return releases if fetch_all else releases[:per_page]
-
-        def download_reviewed(url, destination, _label):
-            self.assertEqual(url, "https://invalid/xcurl.tar.gz")
+        def store_is_empty(url, destination, _label, missing_ok=False,
+                           **_kwargs):
+            urls.append(url)
+            if "/files/" in url and missing_ok:
+                raise AssetMissing(url)
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(reviewed.read_bytes())
 
@@ -387,12 +376,37 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
                     fixups, "OPENSSL_XCURL_SET", openssl_set), \
                 mock.patch.object(
                     fixups, "OPENSSL_XCURL_ARCHIVE_SHA256", package_sha), \
-                mock.patch.object(fixups, "gh_releases", gh_releases), \
                 mock.patch.object(
-                    fixups, "download", side_effect=download_reviewed):
+                    fixups, "download", side_effect=store_is_empty):
             self.assertTrue(fixups.ensure_openssl_xcurl_set())
 
+        base = ("https://github.com/Wyze3306/BedrockOnLinux/releases/"
+                "download")
+        self.assertEqual(urls, [
+            f"{base}/files/{archive_name}",
+            f"{base}/xcurl-{fixups.OPENSSL_XCURL_REV}/{archive_name}"])
         self.assertEqual((openssl_set / "libcurl-4.dll").read_bytes(), b"curl")
+
+    def test_an_unpublished_xcurl_set_keeps_the_installed_one(self):
+        openssl_set = self.base / "xodus-xcurl/openssl-set"
+        openssl_set.mkdir(parents=True)
+        (openssl_set / "libcurl-4.dll").write_bytes(b"known-good curl")
+        (openssl_set / "xcurl-cashim.dll").write_bytes(b"known-good shim")
+
+        def nowhere(url, _destination, _label, missing_ok=False, **_kwargs):
+            raise AssetMissing(url) if missing_ok else BolError(url)
+
+        with mock.patch.object(fixups, "CACHE", self.base / "cache"), \
+                mock.patch.object(
+                    fixups, "OPENSSL_XCURL_SET", openssl_set), \
+                mock.patch.object(fixups, "download", side_effect=nowhere), \
+                mock.patch.object(fixups, "warn") as warned:
+            self.assertTrue(fixups.ensure_openssl_xcurl_set())
+
+        self.assertTrue(any("not published yet" in str(call)
+                            for call in warned.call_args_list))
+        self.assertEqual((openssl_set / "libcurl-4.dll").read_bytes(),
+                         b"known-good curl")
 
     def test_xcurl_retries_once_after_remote_tar_read_failure(self):
         cache = self.base / "cache"
@@ -413,7 +427,7 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
                 raise tarfile.ReadError("simulated truncated cached TAR")
             return real_extract(archive, destination)
 
-        def download_reviewed(_url, destination, _label):
+        def download_reviewed(_url, destination, _label, **_kwargs):
             destination.write_bytes(package_bytes)
 
         with mock.patch.object(fixups, "CACHE", cache), \
@@ -421,11 +435,6 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
                     fixups, "OPENSSL_XCURL_SET", openssl_set), \
                 mock.patch.object(
                     fixups, "OPENSSL_XCURL_ARCHIVE_SHA256", package_sha), \
-                mock.patch.object(fixups, "gh_releases", return_value=[{}]), \
-                mock.patch.object(
-                    fixups, "asset_url",
-                    return_value=("https://invalid/xcurl.tar.gz",
-                                  archive_name, None)), \
                 mock.patch.object(
                     fixups, "safe_extract_tar", side_effect=flaky_extract), \
                 mock.patch.object(
@@ -453,12 +462,10 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
                     fixups, "OPENSSL_XCURL_SET", openssl_set), \
                 mock.patch.object(
                     fixups, "OPENSSL_XCURL_ARCHIVE_SHA256", "0" * 64), \
-                mock.patch.object(fixups, "gh_releases") as releases, \
                 mock.patch.object(fixups, "download") as download:
             self.assertFalse(fixups.ensure_openssl_xcurl_set())
 
         self.assertEqual(package.read_bytes(), original)
-        releases.assert_not_called()
         download.assert_not_called()
 
     def test_xcurl_never_deletes_local_sibling_with_invalid_tar(self):
@@ -479,7 +486,6 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
                     fixups, "OPENSSL_XCURL_SET", openssl_set), \
                 mock.patch.object(
                     fixups, "OPENSSL_XCURL_ARCHIVE_SHA256", package_sha), \
-                mock.patch.object(fixups, "gh_releases") as releases, \
                 mock.patch.object(fixups, "download") as download:
             self.assertFalse(fixups.ensure_openssl_xcurl_set())
 
@@ -487,7 +493,6 @@ class NetworkArchiveIntegrationTests(unittest.TestCase):
         self.assertFalse((self.base / "outside.txt").exists())
         self.assertEqual(
             list(openssl_set.parent.glob(".set-dl-*")), [])
-        releases.assert_not_called()
         download.assert_not_called()
 
 

@@ -641,8 +641,10 @@ class WineGdkSourceDeltaTests(unittest.TestCase):
             '${recipe:+-$recipe}"', tag_script)
         self.assertIn('tag="$(scripts/winegdk-release-tag.sh)"', build)
         self.assertIn('out="winegdk-prefix-${tag#winegdk-}.tar.gz"', build)
-        self.assertIn("tag_name: ${{ env.PREFIX_TAG }}", build)
-        self.assertIn('gh release download "$tag"', engine)
+        self.assertIn('scripts/release-files.sh publish "$TARBALL"', build)
+        # The store first, then the release the prefix had of its own.
+        self.assertIn('scripts/release-files.sh fetch "$prefix_archive"', engine)
+        self.assertIn('"$tag"', engine)
         self.assertIn(
             'needs_build "$wtag" "winegdk-prefix-${wtag#winegdk-}.tar.gz"',
             release,

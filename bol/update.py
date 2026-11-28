@@ -82,8 +82,10 @@ def _from_github(rel):
 def _github_release(channel):
     """The newest release GitHub lists for `channel`, or None."""
     if channel == "prerelease":
-        # Versioned pre-releases only: the rolling "nightly" tag is not one.
-        releases = [r for r in gh_releases(SELF_REPO, 30) or []
+        # Versioned pre-releases only: the rolling "nightly" tag is not one,
+        # nor are the releases that hold the launcher's files, which once
+        # made up most of the newest thirty (docs/release-files.md).
+        releases = [r for r in gh_releases(SELF_REPO, 100) or []
                     if not r.get("draft")
                     and re.fullmatch(r"v\d+(\.\d+)+", r.get("tag_name") or "")]
         if not releases:
