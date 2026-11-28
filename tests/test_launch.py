@@ -458,6 +458,32 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.assertEqual(env["PROTON_PREFER_SDL"], "1")
         self.assertNotIn("PROTON_DISABLE_HIDRAW", env)
 
+    def test_steam_ignore_list_alone_keeps_steam_input(self):
+        # PROTON_PREFER_SDL turns on the engine's sdlinput setting, which
+        # deletes this list: the game would read the Deck's own controller,
+        # without the Steam Input remaps of its back buttons (#389).
+        env = {}
+        launch._configure_runtime_compat(
+            env, {}, "x11", False,
+            host_env={
+                "SteamAppId": "2716672805",
+                "SDL_GAMECONTROLLER_IGNORE_DEVICES": "0x28de/0x1205",
+                "SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD": "1",
+            },
+            steam_deck=True,
+        )
+        self.assertNotIn("PROTON_PREFER_SDL", env)
+        self.assertIn("0x054C/0x0DF2", env["PROTON_DISABLE_HIDRAW"])
+
+    def test_empty_steam_ignore_list_keeps_the_sdl_fallback(self):
+        env = {}
+        launch._configure_runtime_compat(
+            env, {}, "x11", False,
+            host_env={"SDL_GAMECONTROLLER_IGNORE_DEVICES": " "},
+            steam_deck=False,
+        )
+        self.assertEqual(env["PROTON_PREFER_SDL"], "1")
+
     def test_winewayland_uses_sdl_even_with_virtual_steam_gamepad(self):
         env = {
             "SteamVirtualGamepadInfo_Proton":

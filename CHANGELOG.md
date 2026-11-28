@@ -194,6 +194,23 @@
 - **"Report a problem" describes the game when none is selected yet.** The
   Minecraft section of such a report read "unavailable: AttributeError"
   instead of the builds on disk.
+- **Steam Game Mode: the launcher fills the screen, and the Flatpak's text
+  fits in it.** Gamescope shows one window at a time and scales it to the
+  screen, and nothing there resizes it: on a Steam Deck the 1120×700 window
+  was stretched to 1280×800 and its text came out soft. It now opens at the
+  screen's own size. The Flatpak also drew the launcher in DejaVu Sans, its
+  runtime's default and a wider face than the system fonts the other builds
+  get, so the launcher's name and the home tiles ran past their frames. Noto
+  Sans, which the Flatpak finds among the system's fonts, now comes before
+  that default.
+- **A controller Steam Input has taken over is no longer handed to the game
+  beside Steam's virtual pad (#389).** Steam names the controllers it drives
+  in `SDL_GAMECONTROLLER_IGNORE_DEVICES`, so that games keep its virtual pad
+  alone. The launcher only counted `SteamVirtualGamepadInfo` as a sign of
+  Steam Input; without it, it set `PROTON_PREFER_SDL`, and the engine's
+  Proton script then deleted Steam's list. The game got the physical
+  controller as well, on which nothing remapped in Steam Input exists and a
+  Steam Deck's back buttons mean nothing to it. Steam's list now counts too.
 
 ## 3.0.0 — 2026-11-14 (pre-release)
 

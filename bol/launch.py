@@ -680,11 +680,21 @@ def _keep_game_out_of_swap(cmd, env):
 
 
 def _steam_input_available(environ=None):
-    """Whether Steam handed an actual virtual controller to this launch."""
+    """Whether Steam drives the controllers of this launch.
+
+    Steam names the controllers it has taken over in
+    ``SDL_GAMECONTROLLER_IGNORE_DEVICES``, so that programs keep its virtual
+    pad alone (#288), and points ``SteamVirtualGamepadInfo`` at its virtual
+    pads. Either one is enough: ``PROTON_PREFER_SDL``, which the caller sets
+    otherwise, turns on the engine's ``sdlinput`` compatibility setting, and
+    that deletes the ignore list. The game then reads the physical controller
+    beside Steam's pad, without anything Steam Input remaps (#389).
+    """
     source = os.environ if environ is None else environ
     # Steam app IDs do not prove that Steam Input is enabled for the shortcut.
     for name in ("SteamVirtualGamepadInfo_Proton",
-                 "SteamVirtualGamepadInfo"):
+                 "SteamVirtualGamepadInfo",
+                 "SDL_GAMECONTROLLER_IGNORE_DEVICES"):
         if str(source.get(name, "")).strip():
             return True
     return False

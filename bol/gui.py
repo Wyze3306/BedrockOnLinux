@@ -356,7 +356,7 @@ class Theme:
         QWidget {{
             background: transparent;
             color: {self.fg};
-            font-family: -apple-system, "Segoe UI", "Inter", sans-serif;
+            font-family: -apple-system, "Segoe UI", "Inter", "Noto Sans", sans-serif;
             font-size: 13px;
         }}
         QMainWindow, #Root {{ background: {self.bg}; }}
@@ -1833,6 +1833,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(PRETTY)
         self.resize(1120, 700)
         self.setMinimumSize(1000, 640)
+        self._fill_single_window_screen()
 
         self._load_icon()
 
@@ -1953,6 +1954,26 @@ class MainWindow(QMainWindow):
             if worker is not None and worker.isRunning():
                 _park_worker(worker)
         self._workers.clear()
+
+    def _fill_single_window_screen(self):
+        """Open at the screen's size where Gamescope shows one window.
+
+        Gamescope (Steam Game Mode) scales the one window it shows to the
+        whole screen, and there is no window manager to resize it with: on
+        a Steam Deck the 1120x700 window was stretched to 1280x800, its text
+        soft, with no room gained for it. The screen's own size is drawn one
+        to one.
+        """
+        if not single_window_session():
+            return
+        screen = self.screen()
+        if screen is None:
+            return
+        size = screen.availableGeometry().size()
+        minimum = self.minimumSize()
+        if size.width() >= minimum.width() and \
+                size.height() >= minimum.height():
+            self.resize(size)
 
     # ------------------------------------------------------------ icon
     def _load_icon(self):
@@ -5240,7 +5261,7 @@ class MainWindow(QMainWindow):
         t = self.theme
         return f"""
         body {{
-            font-family: -apple-system, "Segoe UI", "Inter", sans-serif;
+            font-family: -apple-system, "Segoe UI", "Inter", "Noto Sans", sans-serif;
             font-size: 13.5px;
             line-height: 1.55;
             color: {t.fg};
