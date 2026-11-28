@@ -93,6 +93,24 @@
   others) and follows it the moment you change it in the settings.
   Settings ▸ General ▸ In the game turns it off to get the game's own tab
   back.
+- **Shortcuts to a game, a version and a profile (#392).** A new Shortcuts
+  page makes as many app menu and desktop shortcuts as you like, one per
+  thing you play: Minecraft Bedrock (Latest), Preview 1.26.70.24, Education,
+  the Windows 10 edition, Dungeons, Legends, in any profile. Each has its
+  own name and icon (the game's picture with the version on it, the
+  launcher's, or a picture of your own), and its own options: Bedrock
+  Editor, hidden window, install the newest build first, extra environment
+  variables. A shortcut opens the launcher, which starts its game by itself
+  and shows the progress, or starts the game alone; either way it plays the
+  build it names and never downloads one unasked, and the game-only kind
+  puts back the build that was selected. The page offers a shortcut for
+  each build already installed, in one click. The files follow the launcher
+  when it moves (an AppImage put somewhere else, a new .pyz), go when the
+  shortcut is removed, and follow a profile that is renamed. The Flatpak
+  adds them through the desktop's own dialog (the DynamicLauncher portal),
+  to the app menu only. From the command line: `bedrock-on-linux shortcuts
+  list|create|edit|remove|run|command|refresh`; `shortcuts command` prints
+  the line to give Steam.
 
 ### Fixed
 

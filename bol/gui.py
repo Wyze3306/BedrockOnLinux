@@ -1865,6 +1865,7 @@ class MainWindow(QMainWindow):
         # Built the first time they are opened: most sessions never do.
         self.mods_page = None
         self.content_page = None
+        self.shortcuts_page = None
         self.stack.addWidget(self.hero_page)
         self.stack.addWidget(self.settings_page)
         self.stack.addWidget(self.changelog_page)
@@ -2081,6 +2082,9 @@ class MainWindow(QMainWindow):
                               "LeviLamina mods: browse, install, import")
         item("profiles", "profiles", "Profiles", self.open_profiles,
              "Separate sign-ins, worlds and settings")
+        item("shortcuts", "shortcuts", "Shortcuts", self.open_shortcuts,
+             "App menu and desktop shortcuts to one game, version and "
+             "profile each")
         item("settings", "settings", "Settings", self.open_settings,
              "Launcher and game settings")
         item("changelog", "news", "What's New", self.open_changelog,
@@ -2210,14 +2214,15 @@ class MainWindow(QMainWindow):
     # Page name shown above it, by page.
     _PAGE_TITLES = {
         "home": "Play", "content": "Add-ons & Maps", "mods": "Mods",
-        "profiles": "Profiles", "settings": "Settings",
-        "changelog": "What's New",
+        "profiles": "Profiles", "shortcuts": "Shortcuts",
+        "settings": "Settings", "changelog": "What's New",
     }
 
     def _page_key(self, page=None):
         page = self.stack.currentWidget() if page is None else page
         for key, attr in (("home", "hero_page"), ("content", "content_page"),
                           ("mods", "mods_page"), ("profiles", "profiles_page"),
+                          ("shortcuts", "shortcuts_page"),
                           ("settings", "settings_page"),
                           ("changelog", "changelog_page")):
             if page is not None and page is getattr(self, attr, None):
@@ -2256,6 +2261,17 @@ class MainWindow(QMainWindow):
         if self.mods_page is None or \
                 self.stack.currentWidget() is not self.mods_page:
             self.toggle_mods()
+
+    def open_shortcuts(self):
+        """The Shortcuts page (bol.gui_shortcuts, #392)."""
+        if self.shortcuts_page is None:
+            from .gui_shortcuts import ShortcutsPage  # noqa: PLC0415
+            self.shortcuts_page = ShortcutsPage(self)
+            self.stack.addWidget(self.shortcuts_page)
+        if self.stack.currentWidget() is not self.shortcuts_page:
+            self.stack.setCurrentWidget(self.shortcuts_page)
+            self._nav_follow_page(self.shortcuts_page)
+        self.shortcuts_page.opened()
 
     # Files dropped anywhere on the window are imported into the game, the
     # way the Add-ons & Maps page imports them.
@@ -4881,6 +4897,10 @@ class MainWindow(QMainWindow):
                                     "Minecraft version."))
 
         shortcuts = card_section(v, "Shortcuts")
+        shortcuts.addWidget(tool_row("Shortcuts to a game, a version or a profile…",
+                                 self.open_shortcuts,
+                                 tip="Make app menu and desktop shortcuts "
+                                     "that each start one Minecraft."))
         shortcuts.addWidget(tool_row("Create direct launch shortcut (skips this window)…",
                                  self._do_play_shortcut,
                                  tip="Make a desktop/Steam shortcut that starts Minecraft "
@@ -6021,4 +6041,7 @@ def gui():
         return
 
     window.show()
+    # Opened by a shortcut that starts its game from the launcher (#392).
+    from .gui_shortcuts import start_pending
+    start_pending(window)
     app.exec()
