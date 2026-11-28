@@ -182,6 +182,20 @@ class LicenceTests(unittest.TestCase):
             self.assertTrue(Path(keys).name == "keys")
             self.assertFalse(Path(keys).parent.exists())
 
+    def test_the_keys_folder_xodus_cli_writes_is_a_grant(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._cli(td, 'mkdir -p "$3" && printf k > "$3/1234.cik"\n')
+            self.assertTrue(xodus.require_licence(UWP["content_id"]))
+
+    def test_an_empty_keys_folder_is_no_grant(self):
+        # A folder's own size is never 0: it is what it holds that counts.
+        with tempfile.TemporaryDirectory() as td:
+            self._cli(td, 'mkdir -p "$3"\n')
+            with self.assertRaises(xodus.XodusError) as caught:
+                xodus.require_licence(UWP["content_id"])
+            self.assertNotIsInstance(caught.exception, xodus.NotOwned)
+            self.assertIn("did not confirm", str(caught.exception))
+
     def test_a_copy_the_account_lacks_is_not_owned(self):
         with tempfile.TemporaryDirectory() as td:
             self._cli(td, 'echo "Error: not entitled to this content" >&2\n'

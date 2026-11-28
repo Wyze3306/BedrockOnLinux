@@ -1404,10 +1404,7 @@ def require_licence(content_id, title=None, timeout=120):
                 "Microsoft's licensing service did not answer, so the "
                 "launcher could not check that this account owns "
                 f"{title or 'Minecraft'}. Try again in a moment.") from exc
-        try:
-            granted = proc.returncode == 0 and keys.stat().st_size > 0
-        except OSError:
-            granted = False
+        granted = proc.returncode == 0 and _holds_keys(keys)
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")
     if granted and not _NOT_OWNED.search(text):
         return True
@@ -1423,6 +1420,19 @@ def require_licence(content_id, title=None, timeout=120):
     raise XodusError(
         "Microsoft's licensing service did not confirm that this account "
         f"owns {title or 'Minecraft'} ({detail[:300]}).")
+
+
+def _holds_keys(keys):
+    """Whether ``xodus-cli license`` wrote a content key at ``keys``: a
+    folder of ``<key id>.cik`` files, one per key the licence carries. The
+    size of the folder itself says nothing -- it is never 0."""
+    try:
+        if keys.is_dir():
+            return any(item.suffix == ".cik" and item.stat().st_size > 0
+                       for item in keys.iterdir())
+        return keys.stat().st_size > 0
+    except OSError:
+        return False
 
 
 def _raise_unretryable(text, dest=None, needed=0, title=None):
