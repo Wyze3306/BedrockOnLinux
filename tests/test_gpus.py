@@ -158,11 +158,21 @@ class EnvironmentTests(unittest.TestCase):
 
 
 class HybridAdviceTests(unittest.TestCase):
-    def _advice(self, cards, settings=None, environ=None):
+    def _advice(self, cards, settings=None, environ=None, renderer="wined3d"):
         with tempfile.TemporaryDirectory() as td:
             drm, ids = _sysfs(td, cards)
             found = gpus.list_gpus(drm, ids)
-        return gpus.hybrid_gpu_problem(settings or {}, environ or {}, found)
+        return gpus.hybrid_gpu_problem(settings or {}, environ or {}, found,
+                                       renderer=renderer)
+
+    def test_the_d3d12_path_already_takes_the_discrete_card(self):
+        # DXVK ranks a discrete adapter first and vkd3d-proton renders on
+        # DXGI's first one: nothing to warn about (#333).
+        self.assertIsNone(self._advice(_OPTIMUS, renderer="d3d12"))
+        self.assertIsNone(self._advice(_AMD_LAPTOP, renderer=None))
+
+    def test_the_advice_names_the_legacy_renderer(self):
+        self.assertIn("Legacy renderer", self._advice(_OPTIMUS))
 
     def test_an_intel_laptop_with_a_geforce_is_told_where_the_choice_is(self):
         advice = self._advice(_OPTIMUS)
@@ -189,6 +199,101 @@ class HybridAdviceTests(unittest.TestCase):
     def test_a_desktop_on_its_discrete_card_is_left_alone(self):
         # The enabled iGPU beside it is the slower one; nothing to suggest.
         self.assertIsNone(self._advice(_DESKTOP_WITH_IGPU))
+
+
+class DriverFileTests(unittest.TestCase):
+    """A driver list naming files that are not here gives no Vulkan (#333)."""
+
+    def test_missing_entries_are_dropped_and_present_ones_kept(self):
+        here = {"/run/host/nvidia_icd.json"}
+        env = {"VK_ICD_FILENAMES": "/a/missing.json:/run/host/nvidia_icd.json",
+               "VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/nvidia_icd.json",
+               "OTHER": "kept"}
+        dropped = gpus.drop_missing_driver_files(env, exists=here.__contains__)
+        self.assertEqual(env, {"VK_ICD_FILENAMES": "/run/host/nvidia_icd.json",
+                               "OTHER": "kept"})
+        self.assertEqual(dropped, {
+            "VK_DRIVER_FILES": ["/usr/share/vulkan/icd.d/nvidia_icd.json"],
+            "VK_ICD_FILENAMES": ["/a/missing.json"]})
+
+    def test_nothing_to_drop_says_nothing(self):
+        env = {"VK_DRIVER_FILES": "/x.json"}
+        self.assertEqual(gpus.drop_missing_driver_files(
+            env, exists=lambda path: True), {})
+        self.assertEqual(env, {"VK_DRIVER_FILES": "/x.json"})
+        self.assertIsNone(gpus.missing_driver_files_problem({}))
+
+    def test_the_problem_names_the_file_and_the_flatpak(self):
+        message = gpus.missing_driver_files_problem(
+            {"VK_DRIVER_FILES": ["/usr/share/vulkan/icd.d/nvidia_icd.json"]},
+            flatpak=True)
+        self.assertIn("VK_DRIVER_FILES: /usr/share/vulkan/icd.d/nvidia_icd.json",
+                      message)
+        self.assertIn("GL extensions", message)
+        self.assertNotIn("Flatpak", gpus.missing_driver_files_problem(
+            {"VK_DRIVER_FILES": ["/x.json"]}))
+
+
+# What the engine's winevulkan writes on its vkdevice channel.
+_GEFORCE_LINE = (b'0118:011c:trace:vkdevice:vkCreateDevice '
+                 b'"NVIDIA GeForce RTX 3050 Laptop GPU", vendor 0x10de, '
+                 b'device 0x25a2, driver 0x89b28100.\n')
+_INTEL_LINE = (b'0118:011c:trace:vkdevice:vkCreateDevice '
+               b'"Intel(R) UHD Graphics 630 (CFL GT2)", vendor 0x8086, '
+               b'device 0x3e9b, driver 0x6400007.\n')
+
+
+class RenderedOnTests(unittest.TestCase):
+    """Which card the game really drew with, from its own log (#333)."""
+
+    def _logs(self, td, **files):
+        for name, (data, age) in files.items():
+            path = Path(td) / name
+            path.write_bytes(data)
+            os.utime(path, (1_000_000 - age, 1_000_000 - age))
+        return td
+
+    def test_the_device_line_names_the_card(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._logs(td, **{"minecraft.log": (
+                b"info:vkd3d-proton:x\n" + _GEFORCE_LINE * 2, 0)})
+            self.assertEqual(gpus.rendered_on(td), [
+                ("NVIDIA GeForce RTX 3050 Laptop GPU", "10de:25a2")])
+
+    def test_the_newest_log_answers(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._logs(td, **{"minecraft.log": (_INTEL_LINE, 100),
+                              "proton.log": (_GEFORCE_LINE, 0)})
+            self.assertEqual(gpus.rendered_on(td)[0][1], "10de:25a2")
+
+    def test_an_engine_that_does_not_say_is_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._logs(td, **{"minecraft.log": (b"info:vkd3d-proton:x\n", 0)})
+            self.assertEqual(gpus.rendered_on(td), [])
+            self.assertIn("unknown", gpus.rendered_on_summary(td, gpus=[]))
+
+    def test_the_summary_says_which_kind_of_card_it_was(self):
+        with tempfile.TemporaryDirectory() as td:
+            drm, ids = _sysfs(Path(td) / "sys", _OPTIMUS)
+            cards = gpus.list_gpus(drm, ids)
+            self._logs(td, **{"minecraft.log": (_GEFORCE_LINE, 0)})
+            self.assertEqual(
+                gpus.rendered_on_summary(td, gpus=cards),
+                "NVIDIA GeForce RTX 3050 Laptop GPU [10de:25a2] — the "
+                "discrete GPU")
+            self._logs(td, **{"minecraft.log": (_INTEL_LINE, 0)})
+            self.assertIn("the integrated GPU",
+                          gpus.rendered_on_summary(td, gpus=cards))
+
+    def test_a_lone_card_needs_no_label(self):
+        with tempfile.TemporaryDirectory() as td:
+            drm, ids = _sysfs(Path(td) / "sys", _DESKTOP)
+            cards = gpus.list_gpus(drm, ids)
+            self._logs(td, **{"minecraft.log": (
+                b'trace:vkdevice:vkCreateDevice "NVIDIA GeForce RTX 4060", '
+                b'vendor 0x10de, device 0x2882, driver 0x1.\n', 0)})
+            self.assertEqual(gpus.rendered_on_summary(td, gpus=cards),
+                             "NVIDIA GeForce RTX 4060 [10de:2882]")
 
 
 if __name__ == "__main__":

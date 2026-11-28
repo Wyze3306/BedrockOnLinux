@@ -84,6 +84,20 @@
 
 ### Fixed
 
+- **Laptops with two graphics cards: doctor says which card the game used
+  (#333).** On Automatic the game already renders on the discrete card: DXVK
+  and vkd3d-proton rank it before the integrated one. Both cards look busy
+  while it plays because the integrated card shows on the laptop screen what
+  the other one draws. The launcher's warning and the Graphics card tooltip
+  said the opposite; the warning now only comes with the Legacy renderer,
+  which does start on the card the screen runs on. `doctor` and the problem
+  report gain a "rendered on" line, read from the last launch log, once the
+  engine names the device it creates (patch `0031`). A `VK_DRIVER_FILES`,
+  `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES` in the custom environment that
+  names a file which does not exist, such as `/usr/share/vulkan/icd.d/
+  nvidia_icd.json` inside the Flatpak, left the game with no Vulkan driver
+  and it closed; such entries are now left out with a warning that points
+  to Settings ▸ Advanced ▸ Graphics card.
 - **"Report a problem" is offered only for what the launcher may have got
   wrong.** When PLAY stops on something the player fixes from the message
   itself (a Microsoft account that does not own the game, the ten-device

@@ -4398,9 +4398,12 @@ class MainWindow(QMainWindow):
         """Settings ▸ Advanced ▸ Graphics card (#275)."""
         row = QHBoxLayout()
         label = QLabel("Graphics card:")
-        tip = ("Which graphics card Minecraft renders on. Automatic leaves it "
-               "to the system, which on a laptop is the integrated one; pick "
-               "the discrete card to play on it.")
+        tip = ("Which graphics card Minecraft renders on. Automatic takes "
+               "the discrete card over the integrated one, except with the "
+               "Legacy renderer, which uses the card your screen runs on. "
+               "On a laptop both cards look busy while you play: the "
+               "integrated one shows what the other draws. Doctor says "
+               "which card the game used.")
         label.setToolTip(tip)
         row.addWidget(label)
         combo = SettingComboBox()

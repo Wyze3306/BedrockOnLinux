@@ -9,7 +9,9 @@
  *
  * It answers four questions, in the order they gate Minecraft's Ray Traced
  * graphics mode:
- *   1. which adapter does DXGI hand the game, under which name/vendor id;
+ *   1. which adapter does DXGI hand the game, under which name/vendor id,
+ *      and which one the default D3D12 device is created on (its LUID
+ *      matches one adapter's), for a laptop with two GPUs (#333);
  *   2. does D3D12 report D3D12_RAYTRACING_TIER_1_1 (Minecraft needs 1.1,
  *      not 1.0) plus shader model 6.5 and wave ops;
  *   3. does the ray-tracing path actually work, or is the tier only
@@ -35,6 +37,8 @@
 
 #define COBJMACROS
 #define INITGUID
+/* GetAdapterLuid returns a struct: the C wrapper for it needs this. */
+#define WIDL_C_INLINE_WRAPPERS
 
 #include <windows.h>
 #include <initguid.h>
@@ -70,6 +74,38 @@ static const char *raytracing_tier_name(D3D12_RAYTRACING_TIER tier)
     }
 }
 
+/* A game may ask DXGI for "the fast card" instead of taking adapter 0, so
+ * on a laptop with two GPUs both answers matter (#333). */
+static void describe_preference(IDXGIFactory1 *factory1,
+                                DXGI_GPU_PREFERENCE preference,
+                                const char *label)
+{
+    IDXGIFactory6 *factory6 = NULL;
+    IDXGIAdapter1 *adapter = NULL;
+    DXGI_ADAPTER_DESC1 desc;
+    char name[256] = "";
+
+    if (FAILED(IDXGIFactory1_QueryInterface(factory1, &IID_IDXGIFactory6,
+                                            (void **)&factory6)))
+    {
+        printf("dxgi.preference.%s: no IDXGIFactory6\n", label);
+        return;
+    }
+    if (SUCCEEDED(IDXGIFactory6_EnumAdapterByGpuPreference(factory6, 0,
+            preference, &IID_IDXGIAdapter1, (void **)&adapter))
+            && SUCCEEDED(IDXGIAdapter1_GetDesc1(adapter, &desc)))
+    {
+        WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name,
+                            sizeof(name), NULL, NULL);
+        printf("dxgi.preference.%s: %s\n", label, name);
+    }
+    else
+        printf("dxgi.preference.%s: FAILED\n", label);
+    if (adapter)
+        IDXGIAdapter1_Release(adapter);
+    IDXGIFactory6_Release(factory6);
+}
+
 static void describe_adapters(pfn_CreateDXGIFactory1 create_factory)
 {
     IDXGIFactory1 *factory = NULL;
@@ -103,11 +139,18 @@ static void describe_adapters(pfn_CreateDXGIFactory1 create_factory)
                    (unsigned long long)(desc.DedicatedVideoMemory >> 20));
             printf("adapter[%u].software: %s\n", index,
                    (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) ? "yes" : "no");
+            printf("adapter[%u].luid: %08lx:%08lx\n", index,
+                   (long)desc.AdapterLuid.HighPart,
+                   (unsigned long)desc.AdapterLuid.LowPart);
         }
         IDXGIAdapter1_Release(adapter);
         adapter = NULL;
     }
 
+    describe_preference(factory, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+                        "high_performance");
+    describe_preference(factory, DXGI_GPU_PREFERENCE_MINIMUM_POWER,
+                        "minimum_power");
     IDXGIFactory1_Release(factory);
 }
 
@@ -361,6 +404,12 @@ int main(int argc, char **argv)
         return 1;
     }
     printf("d3d12.device: ok\n");
+    {
+        LUID luid = ID3D12Device_GetAdapterLuid(device);
+
+        printf("d3d12.device.adapter_luid: %08lx:%08lx\n",
+               (long)luid.HighPart, (unsigned long)luid.LowPart);
+    }
 
     describe_device(device);
     probe_command_signature(device, serialize_root_signature);

@@ -259,6 +259,13 @@ def doctor(acknowledge_gpu_crash=False):
     rt_problem = ray_tracing_problem()
     if rt_problem:
         warn(rt_problem)
+    # And which card that was. On a laptop both cards look busy while the
+    # game runs, since the integrated one shows what the discrete one draws,
+    # so only the engine's own record of the device it opened settles which
+    # one Minecraft rendered on (#333).
+    from .gpus import rendered_on_summary
+
+    print(f"  {'rendered on':12} : {rendered_on_summary()}")
     # The same "it lags" report, from causes outside the engine entirely:
     # no memory, no disk, windowed vsync, a render distance past the main
     # thread. Prefix-scoped, so it is imported next to the other Wine module.
