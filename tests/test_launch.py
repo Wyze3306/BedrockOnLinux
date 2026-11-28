@@ -2027,3 +2027,110 @@ class ContainerLocalesLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.assertEqual(self.started_env["LOCPATH"], "/kept/locales")
         self.assertEqual(
             self.started_env["PRESSURE_VESSEL_GENERATE_LOCALES"], "0")
+
+
+class XboxSigninExplainedLaunchTests(ReadyLaunchHarness, unittest.TestCase):
+    """#375: the game says only "Drowned"; the launcher says why.
+
+    Minecraft names E_FAIL "Drowned", and E_FAIL is all the engine's XUser
+    answers when the launcher prepared no Xbox Live session. The log a player
+    attaches is the game's own output, so it has to carry the pre-auth's
+    verdict, and the window explains the session once the game has closed.
+    """
+
+    REFUSED = {"stage": "sisu-profile", "category": "account",
+               "http_status": 401, "error_code": 0x8015DC09}
+    ADVICE = ("This Microsoft account has no Xbox profile yet. "
+              "(Xbox error 0x8015DC09)")
+
+    def _play(self, preauth=True, diagnostic=None, advice=None,
+              signed_out=False, account=None):
+        notices = []
+
+        def popen(_command, **kwargs):
+            # The game writes through its own descriptor, not the launcher's
+            # buffered file object.
+            os.write(kwargs["stdout"].fileno(), b"INFO: umu-launcher\n")
+            proc = mock.Mock()
+            proc.wait.return_value = 0
+            return proc
+
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(launch, "xbl_preauth_diagnostic",
+                                  return_value=diagnostic), \
+                mock.patch.object(launch, "xbl_preauth_error_message",
+                                  return_value=advice):
+            rc = self._exercise_ready_launch(
+                Path(td), popen, lambda: "owned-token", lambda _token: True,
+                preauth=preauth, signed_out=signed_out, notices=notices,
+                account=account)
+            log = (Path(td) / "logs" / "minecraft.log").read_text()
+        self.assertEqual(rc, 0)
+        return log, notices
+
+    def test_a_refused_session_is_named_at_the_top_of_the_game_log(self):
+        log, _notices = self._play(preauth=False, diagnostic=self.REFUSED,
+                                   advice=self.ADVICE)
+        lines = log.splitlines()
+        self.assertEqual(lines[0], "[BedrockOnLinux] BedrockOnLinux "
+                         + launch.VERSION)
+        self.assertTrue(lines[1].startswith(
+            "[BedrockOnLinux] Xbox Live: session NOT prepared "
+            "(stage: sisu-profile, HTTP 401). This Microsoft account has no "
+            "Xbox profile yet. (Xbox error 0x8015DC09)"), lines[1])
+        self.assertIn("Error Code: Drowned", lines[1])
+        # Before the game's own output, not after it.
+        self.assertEqual(lines[2], "INFO: umu-launcher")
+        warning = "\n".join(self._warnings())
+        self.assertIn("stage: sisu-profile, HTTP 401", warning)
+        self.assertIn("Error Code: Drowned", warning)
+
+    def test_a_prepared_session_says_so_and_leaves_nothing_to_explain(self):
+        log, notices = self._play()
+        self.assertIn("[BedrockOnLinux] Xbox Live: session prepared for the "
+                      "linked Microsoft account.\n", log)
+        self.assertNotIn("Drowned", log)
+        self.assertEqual(notices, [])
+
+    def test_no_linked_account_is_told_apart_from_a_refused_one(self):
+        log, notices = self._play(account={}, signed_out=True)
+        self.assertIn("[BedrockOnLinux] Xbox Live: no Microsoft account is "
+                      "linked for online play", log)
+        self.assertNotIn("Drowned", log)
+        self.assertEqual(notices, [])
+
+    def test_the_window_gets_the_cause_instead_of_the_version_advice(self):
+        _log, notices = self._play(preauth=False, diagnostic=self.REFUSED,
+                                   advice=self.ADVICE, signed_out=True)
+        self.assertEqual(len(notices), 1)
+        self.assertNotEqual(notices[0], launch.saves.SIGNED_OUT_NOTICE)
+        self.assertIn("Error Code: Drowned", notices[0])
+        self.assertIn("no Xbox profile yet", notices[0])
+        self.assertIn("still in your account's folder", notices[0])
+        self.assertNotIn("version of Minecraft", notices[0])
+
+    def test_a_refusal_is_explained_even_when_no_world_went_missing(self):
+        _log, notices = self._play(preauth=False, diagnostic=self.REFUSED,
+                                   advice=self.ADVICE, signed_out=False)
+        self.assertEqual(
+            notices, [launch.XboxSigninFailure(self.REFUSED,
+                                               self.ADVICE).notice()])
+
+    def test_playing_offline_on_purpose_is_not_a_dialog_every_time(self):
+        unreachable = {"stage": "device-auth", "category": "network"}
+        log, notices = self._play(preauth=False, diagnostic=unreachable,
+                                  advice="Xbox Live could not be reached.")
+        self.assertIn("session NOT prepared (stage: device-auth). Xbox Live "
+                      "could not be reached.", log)
+        self.assertEqual(notices, [])
+        # Unless the session also hid the player's worlds.
+        _log, notices = self._play(preauth=False, diagnostic=unreachable,
+                                   advice="Xbox Live could not be reached.",
+                                   signed_out=True)
+        self.assertEqual(len(notices), 1)
+        self.assertIn("could not be reached", notices[0])
+
+    def test_a_failure_without_a_diagnostic_still_reads_sensibly(self):
+        log, _notices = self._play(preauth=False)
+        self.assertIn("session NOT prepared. Check the Microsoft "
+                      "account/network connection and try again.", log)
