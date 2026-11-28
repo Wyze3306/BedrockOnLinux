@@ -459,9 +459,10 @@ class StoreTitleLaunchTests(ReadyLaunchHarness, unittest.TestCase):
                 mock.patch.object(launch, "start_auto_inject") as inject, \
                 mock.patch.object(launch.xodus, "wrap_encrypted_launch",
                                   side_effect=lambda cmd, *a, **k:
-                                  ["xodus-cli", "run"] + list(cmd)):
+                                  ["xodus-cli", "run"] + list(cmd)) as wrap:
             self._exercise_ready_launch(root, popen, lambda: "token",
                                         lambda _token: True, **kwargs)
+        self.wrap = wrap
         return started, self.launch_mocks["proton_umu_cmd"], levi, inject
 
     def test_starts_the_declared_executable_without_bedrock_steps(self):
@@ -485,6 +486,15 @@ class StoreTitleLaunchTests(ReadyLaunchHarness, unittest.TestCase):
             self.assertEqual(self.xbl_calls, [])
             # The account still goes into the prefix, for the engine's XUser.
             self.launch_mocks["wine_reg_set_refresh_token"].assert_called_once()
+
+    def test_dungeons_starts_from_the_executable_the_store_made(self):
+        # #383: Dungeons checks its own file and stopped on "File corrupted!"
+        # once the launcher had raised its stack reserve, Minecraft's #27 fix.
+        with tempfile.TemporaryDirectory() as tmp:
+            self._launch(Path(tmp))
+        self.assertFalse(
+            self.wrap.call_args.kwargs["raise_stack_reserve"])
+        self.launch_mocks["bump_stack_reserve"].assert_not_called()
 
     def test_bedrock_editor_is_refused_for_dungeons(self):
         with tempfile.TemporaryDirectory() as tmp:

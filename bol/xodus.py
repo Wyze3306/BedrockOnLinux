@@ -1968,6 +1968,11 @@ ARGV = json.loads({argv!r})
 GAME_ARGS = json.loads({game_args!r})
 LAUNCHER_PATH = {launcher_path!r}
 EXE_NAME = {exe_name!r}
+# Whether the staged copy gets Minecraft's 16 MB stack reserve (#27). Only
+# Minecraft's own executable does: another title's is its own, and one that
+# checks itself reads an edited header as a tampered file -- Minecraft Dungeons
+# stopped on Themida's "File corrupted!" dialog (#383).
+RAISE_STACK_RESERVE = {raise_stack_reserve!r}
 STAGE_DIR = {stage_dir!r}
 PYCACHE_PREFIX = {pycache_prefix!r}
 # What the game's environment looked like before it was adjusted for
@@ -2039,19 +2044,22 @@ for fd_number, _mapped in ENTRIES:
 # The loader reads the field when it maps the image, so it has to happen
 # before the exec below. Never fatal: a game that starts with a 1 MB stack
 # still beats one that does not start at all.
-try:
-    sys.path.insert(0, LAUNCHER_PATH)
-    # Where the launcher keeps its bytecode when it is installed read-only
-    # (see the bedrock-on-linux script), so this import is not a compilation.
-    if PYCACHE_PREFIX:
-        sys.pycache_prefix = PYCACHE_PREFIX
-    from bol.fixups import _raise_stack_reserve
+if RAISE_STACK_RESERVE:
+    try:
+        sys.path.insert(0, LAUNCHER_PATH)
+        # Where the launcher keeps its bytecode when it is installed
+        # read-only (see the bedrock-on-linux script), so this import is not
+        # a compilation.
+        if PYCACHE_PREFIX:
+            sys.pycache_prefix = PYCACHE_PREFIX
+        from bol.fixups import _raise_stack_reserve
 
-    if nt_name in staged:
-        with open(staged[nt_name], "r+b") as image:
-            _raise_stack_reserve(image.fileno())
-except Exception as exc:                                  # noqa: BLE001
-    print("bol: could not raise the stack reserve: %s" % exc, file=sys.stderr)
+        if nt_name in staged:
+            with open(staged[nt_name], "r+b") as image:
+                _raise_stack_reserve(image.fileno())
+    except Exception as exc:                              # noqa: BLE001
+        print("bol: could not raise the stack reserve: %s" % exc,
+              file=sys.stderr)
 
 if staged:
     os.environ["WINE_DLL_FILE_MAP"] = "|".join(
@@ -2083,7 +2091,8 @@ def _wrapper_interpreter(executable=None):
 
 
 def wrap_encrypted_launch(argv, game_dir: Path, work_dir: Path,
-                          launcher_path=None, env=None, game_args=()):
+                          launcher_path=None, env=None, game_args=(),
+                          raise_stack_reserve=True):
     """Turn a launch command into one that can start an encrypted executable.
 
     The returned command runs ``xodus-cli run`` outermost. It holds the license
@@ -2092,6 +2101,11 @@ def wrap_encrypted_launch(argv, game_dir: Path, work_dir: Path,
     rather than a file. ``argv``'s last element is the executable path, which
     the wrapper replaces with the NT name Xodus assigns; ``game_args`` go to
     the game after it.
+
+    ``raise_stack_reserve`` gives the decrypted image Minecraft's 16 MB stack
+    reserve (#27), and is for Minecraft's executable alone: the image is then
+    no longer the one the package holds, and a title that checks its own
+    integrity refuses to start over that edited header (#383).
 
     ``env`` is the environment the game will be started with. Since xodus-cli
     is the outermost process, a host without WebKitGTK needs the bundled
@@ -2159,6 +2173,7 @@ def wrap_encrypted_launch(argv, game_dir: Path, work_dir: Path,
                         game_args=json.dumps([str(a) for a in game_args]),
                         launcher_path=launcher_path,
                         exe_name=Path(argv[-1]).name,
+                        raise_stack_reserve=bool(raise_stack_reserve),
                         stage_dir=str(stage_dir),
                         pycache_prefix=sys.pycache_prefix,
                         webview_env=json.dumps(restore or {})),
