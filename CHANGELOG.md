@@ -33,7 +33,9 @@
   checked against a pin, and builds a Wine prefix of the profile's own.
   wine-uwp tells every app it holds a full licence, so the launcher asks
   the Store instead: the signed-in Microsoft account must own Minecraft for
-  Windows, before a build is installed and again at each start. Needs
+  Windows, before a build is installed and again at each start, asked while
+  the prefix is checked (the Store's licence lapses within a minute, so
+  there is nothing to keep from one start to the next). Needs
   glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39); the Flatpak
   brings its own. 1.21.51 plays; how far back the others go is up to
   wine-uwp, and 1.20.81 still crashes a few seconds after its title screen.

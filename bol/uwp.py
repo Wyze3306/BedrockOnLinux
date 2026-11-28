@@ -796,16 +796,16 @@ def read_package(path):
         with open(path, "rb") as handle:
             magic = handle.read(4)
     except OSError as exc:
-        raise UwpError(f"{path.name} could not be read ({exc}).") from exc
+        raise UwpError(f"The file could not be read ({exc}).") from exc
     if magic in _ENCRYPTED_MAGIC:
         raise UwpError(
-            f"{path.name} is an encrypted Store package. Import the .appx "
-            "of the build instead, or install it from the list of versions.")
+            "This is an encrypted Store package. Import the .appx of the "
+            "build instead, or install it from the list of versions.")
     try:
         archive = zipfile.ZipFile(path)
     except (zipfile.BadZipFile, OSError) as exc:
-        raise UwpError(f"{path.name} is not an app package (.appx, .msix "
-                       "or a bundle of them).") from exc
+        raise UwpError("This file is not an app package (.appx, .msix or "
+                       "a bundle of them).") from exc
     with archive:
         bundle_text = _zip_text(archive, "AppxMetadata/AppxBundleManifest.xml")
         if bundle_text is not None:
@@ -828,7 +828,7 @@ def read_package(path):
             text = _zip_text(archive, "AppxManifest.xml")
             identity = re.search(r"<Identity\b[^>]*>", text or "", re.S)
             if identity is None:
-                raise UwpError(f"{path.name} has no app manifest: it is not "
+                raise UwpError("This file has no app manifest: it is not "
                                "an app package.")
             attrs = _xml_attrs(identity.group(0))
             found = {"name": attrs.get("Name"),
@@ -840,18 +840,21 @@ def read_package(path):
                               for item in archive.infolist())
     if found["name"] != FAMILY.split("_")[0] \
             or found["publisher"] != _PUBLISHER:
-        raise UwpError(f"{path.name} is not Minecraft for Windows (it is "
+        raise UwpError(f"This package is not Minecraft for Windows (it is "
                        f"{found['name'] or 'an unnamed package'}).")
     if not _VERSION.fullmatch(found["version"] or ""):
-        raise UwpError(f"{path.name} does not say which build of Minecraft "
-                       "it is.")
+        raise UwpError("This package does not say which build of "
+                       "Minecraft it is.")
     found["build"] = build_of_package_version(found["version"])
     if (found["arch"] or "").lower() not in ("x64", "neutral"):
+        arch = (found["arch"] or "").lower()
+        kind = ("the 32-bit (x86) build" if arch == "x86"
+                else f"the {found['arch'] or 'unknown'} build")
         raise UwpError(
-            f"{path.name} is Minecraft {found['build']} for "
-            f"{found['arch'] or 'another processor'} (32-bit builds are "
-            "x86). wine-uwp runs the x64 builds only: import the x64 package "
-            "of that version, or install it from the list of versions.")
+            f"This package is {kind} of Minecraft {found['build']}. "
+            "wine-uwp runs only the 64-bit (x64) builds: import the x64 "
+            f"package of {found['build']}, or install it from the list of "
+            "versions.")
     found["path"] = path
     return found
 

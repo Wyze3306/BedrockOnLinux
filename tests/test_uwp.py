@@ -7,6 +7,7 @@ import io
 import os
 import stat
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -544,13 +545,14 @@ class PackageFileTests(unittest.TestCase):
 
     def test_a_32_bit_build_is_refused_with_the_reason(self):
         manifest = _APPX_MANIFEST.replace('"x64"', '"x86"')
-        with self.assertRaisesRegex(uwp.UwpError, "x64 builds only") as got:
+        with self.assertRaisesRegex(uwp.UwpError, "only the 64-bit") as got:
             uwp.read_package(_package(self.dir / "mc.appx", manifest))
-        self.assertIn("1.18.12.1 for x86", str(got.exception))
+        self.assertIn("32-bit (x86) build of Minecraft 1.18.12.1",
+                      str(got.exception))
         bundle = _BUNDLE_MANIFEST.replace(
             '<Package Type="application" Version="1.16.4002.0" '
             'Architecture="x64" FileName="x64.appx" />', "")
-        with self.assertRaisesRegex(uwp.UwpError, "x64 builds only"):
+        with self.assertRaisesRegex(uwp.UwpError, "only the 64-bit"):
             uwp.read_package(_package(self.dir / "b.appxbundle",
                                       bundle=bundle))
 
@@ -674,6 +676,55 @@ class LaunchTests(unittest.TestCase):
                                    build / "Minecraft.Windows.exe")
             popen.assert_not_called()
             armed.assert_not_called()
+
+    def test_the_store_is_asked_while_the_prefix_is_readied(self):
+        with tempfile.TemporaryDirectory() as td:
+            build = _write_build(Path(td) / "uwp" / "1.21.51.1")
+            readied = []
+
+            def refused(_edition):
+                # The answer comes once the prefix step has started.
+                for _ in range(200):
+                    if readied:
+                        break
+                    time.sleep(0.01)
+                raise xodus.NotOwned("no copy")
+
+            with mock.patch.object(launch.uwp, "require_ownership",
+                                   side_effect=refused), \
+                    mock.patch.object(launch.uwp, "check_ready",
+                                      return_value=None), \
+                    mock.patch.object(launch.uwp, "prepare") as prepared, \
+                    mock.patch.object(launch.uwp, "before_launch",
+                                      side_effect=lambda env:
+                                      readied.append(env)), \
+                    mock.patch.object(launch,
+                                      "retire_idle_current_boot_marker"), \
+                    mock.patch.object(launch, "require_safe_graphics_session"), \
+                    mock.patch.object(launch, "load_settings",
+                                      return_value={}), \
+                    mock.patch.object(launch.subprocess, "Popen") as popen, \
+                    mock.patch.object(launch, "arm_gpu_launch") as armed, \
+                    self.assertRaises(xodus.NotOwned):
+                launch._launch_uwp((), UWP, str(build),
+                                   build / "Minecraft.Windows.exe")
+            self.assertEqual(len(readied), 1)
+            prepared.assert_not_called()
+            popen.assert_not_called()
+            armed.assert_not_called()
+
+    def test_nothing_is_prepared_for_a_copy_not_owned(self):
+        with tempfile.TemporaryDirectory() as td:
+            build = _write_build(Path(td) / "uwp" / "1.21.51.1")
+            with mock.patch.object(launch.uwp, "require_ownership",
+                                   side_effect=xodus.NotOwned("no copy")), \
+                    mock.patch.object(launch.uwp, "check_ready",
+                                      return_value="no prefix yet"), \
+                    mock.patch.object(launch.uwp, "prepare") as prepared, \
+                    self.assertRaises(xodus.NotOwned):
+                launch._launch_uwp((), UWP, str(build),
+                                   build / "Minecraft.Windows.exe")
+            prepared.assert_not_called()
 
     def test_the_editor_is_not_offered(self):
         with mock.patch.object(launch.uwp, "require_ownership") as owned, \
