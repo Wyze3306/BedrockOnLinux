@@ -410,6 +410,15 @@ _DIAG_RULES = [
 ]
 
 
+# The launcher's own lines at the top of minecraft.log (bol.launch): what it
+# knew before the game started, for whoever reads a log a player attached.
+# They are not the game's output, so diagnose() does not read them: a
+# sentence explaining a refused sign-in must not come back as a cause of its
+# own.
+GAME_LOG_TAG = "[BedrockOnLinux]"
+_GAME_LOG_TAG_LINES = re.compile(r"(?m)^" + re.escape(GAME_LOG_TAG) + r" .*$")
+
+
 def diagnose(quiet=False):
     """Scan game logs and surface a likely cause.
 
@@ -435,7 +444,8 @@ def diagnose(quiet=False):
                         stream.seek(-edge, 2)
                         raw += b"\n[... log middle omitted ...]\n"
                         raw += stream.read(edge)
-                blobs.append(raw.decode("utf-8", "ignore"))
+                blobs.append(_GAME_LOG_TAG_LINES.sub(
+                    "", raw.decode("utf-8", "ignore")))
             except Exception:
                 pass
     text = "\n".join(blobs)

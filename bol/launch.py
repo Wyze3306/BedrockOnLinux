@@ -43,7 +43,7 @@ from . import (
     xodus,
 )
 from .branding import apply_branding
-from .config import CONTENT, DATA, HOME, LOGS, WINEGDK_BUILD_REV
+from .config import CONTENT, DATA, HOME, LOGS, VERSION, WINEGDK_BUILD_REV
 from .deps import ensure_login_deps
 from .dgc import dgc_warning_message, intel_dgpus_on_legacy_driver
 from .gpus import apply_gpu_choice, hybrid_gpu_problem
@@ -55,8 +55,9 @@ from .fixups import (
 from .gameinput import builtin_gameinput_override, install_gameinput
 from .games import (build_version, edition_title, game_executable, is_bedrock,
                     mc_version_str, selected_edition, uses_xbox_live)
-from .gamesetup import (LICENCE_REFUSED, LICENCE_SERVICE_REFUSED,
-                        LICENCE_UNREACHABLE, STORE_SESSION_REFUSED, diagnose)
+from .gamesetup import (GAME_LOG_TAG, LICENCE_REFUSED,
+                        LICENCE_SERVICE_REFUSED, LICENCE_UNREACHABLE,
+                        STORE_SESSION_REFUSED, diagnose)
 from .gpu_safety import (
     acknowledge_gpu_crash_command,
     arm_gpu_launch,
@@ -124,6 +125,91 @@ _OFFLINE_MODE_NOTICE = (
     "servers, the Marketplace and Xbox friends stay unavailable until "
     "Xbox Live sign-in succeeds."
 )
+
+# How Minecraft shows a launch whose Xbox Live session was not prepared. Its
+# error table (Minecraft.Windows.exe 1.26.65.1) names 0x80004005, E_FAIL,
+# "Drowned", and E_FAIL is what the engine's XUserAddAsync answers when the
+# launcher gave it no session to sign in with, or when Microsoft refused one
+# of the requests the engine made itself (#307, #375). A code the table does
+# not list reads "Llama (0x...)". So "Drowned" never says why; the launcher's
+# pre-auth knows, and this is how its answer is tied to what the player saw.
+GAME_SIGNIN_ERROR = '"Failed to login" with Error Code: Drowned'
+
+XBOX_SIGNIN_FAILED_NOTICE = (
+    "Minecraft could not sign in to Xbox Live this time, which it shows as "
+    + GAME_SIGNIN_ERROR + ". {detail}"
+)
+
+# Appended when that session also opened the signed-out profile: the cause is
+# known, so saves.SIGNED_OUT_NOTICE's advice about the game version is not.
+XBOX_SIGNIN_WORLDS_KEPT = (
+    " Your worlds, settings and servers are still in your account's folder: "
+    "the game shows them again as soon as it signs in."
+)
+
+_XBOX_SIGNIN_GENERIC = (
+    "Check the Microsoft account/network connection and try again."
+)
+
+
+class XboxSigninFailure:
+    """Why a linked account's Xbox Live session was not prepared.
+
+    Read from the pre-auth's sanitized diagnostic, so nothing in it can be a
+    credential: a stage name, an HTTP status, an Xbox error code and the
+    advice that goes with them.
+    """
+
+    def __init__(self, diagnostic=None, detail=None):
+        diagnostic = diagnostic or {}
+        self.stage = diagnostic.get("stage")
+        self.http_status = diagnostic.get("http_status")
+        self.category = diagnostic.get("category")
+        self.detail = detail or _XBOX_SIGNIN_GENERIC
+
+    @classmethod
+    def current(cls):
+        """The failure the last xbl_preauth() recorded."""
+        return cls(xbl_preauth_diagnostic(), xbl_preauth_error_message())
+
+    def where(self):
+        """`` (stage: sisu-profile, HTTP 401)``, or nothing."""
+        facts = []
+        if self.stage:
+            facts.append(f"stage: {self.stage}")
+        if self.http_status:
+            facts.append(f"HTTP {self.http_status}")
+        return f" ({', '.join(facts)})" if facts else ""
+
+    def notice(self, signed_out=False):
+        """What the window says once the game has closed."""
+        return (XBOX_SIGNIN_FAILED_NOTICE.format(detail=self.detail)
+                + (XBOX_SIGNIN_WORLDS_KEPT if signed_out else ""))
+
+    def worth_a_notice(self, signed_out=False):
+        """Whether the player is told after the game, not only in the log.
+
+        Not being able to reach Xbox Live is what playing offline looks like,
+        and a dialog after every offline session would say what the player
+        already knows -- unless the session also hid their worlds.
+        """
+        return signed_out or self.category != "network"
+
+
+def _game_log_preamble(xbox_signin=None):
+    """The launcher's lines at the top of minecraft.log.
+
+    A player attaches minecraft.log, which holds only the game's own output:
+    #375 came with a log that said nothing about the sign-in its screenshot
+    was about. These lines say which launcher started the game and what
+    became of the Xbox Live session it prepared, so "Drowned" in a report
+    comes with its cause.
+    """
+    lines = [f"BedrockOnLinux {VERSION}"]
+    if xbox_signin:
+        lines.append("Xbox Live: " + xbox_signin)
+    return "".join(f"{GAME_LOG_TAG} {line}\n" for line in lines)
+
 
 # Minecraft Education's sign-in is the game's own (#351): a Microsoft 365
 # school or work account, in a window the game opens, never the Xbox Live
@@ -1327,9 +1413,14 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     # never for the game itself. Neither a missing account nor an unreachable
     # Xbox Live may keep single-player and LAN worlds from starting (#160).
     online = False
+    # What minecraft.log says about it, and why a linked account went without.
+    xbox_signin = None
+    xbox_failure = None
     if not xbox_live:
         info(EDUCATION_SIGNIN_NOTICE)
     elif not tok:
+        xbox_signin = ("no Microsoft account is linked for online play, so "
+                       "the game starts signed out.")
         # A token from before #386 can still sit in the prefix, and without a
         # pre-auth the engine's XUser would refresh it on its own: "no
         # account" has to mean offline mode, so it goes.
@@ -1366,18 +1457,20 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
                              refresh_unreachable=refresh_unreachable,
                              device_rps=(fresh or {}).get("device_rps"),
                              client_id=app_id)
-        if not online:
-            detail = xbl_preauth_error_message()
-            diagnostic = xbl_preauth_diagnostic() or {}
-            stage = diagnostic.get("stage")
-            suffix = f" (stage: {stage})" if stage else ""
+        if online:
+            xbox_signin = "session prepared for the linked Microsoft account."
+        else:
+            xbox_failure = XboxSigninFailure.current()
+            xbox_signin = (
+                "session NOT prepared" + xbox_failure.where() + ". "
+                + xbox_failure.detail
+                + " The game shows this as " + GAME_SIGNIN_ERROR + ".")
             warn(
                 "Could not prepare a complete Xbox Live multiplayer session"
-                + suffix + ". "
-                + (detail or
-                   "Check the Microsoft account/network connection and try "
-                   "again.")
+                + xbox_failure.where() + ". "
+                + xbox_failure.detail
                 + " Minecraft starts in " + _OFFLINE_MODE_NOTICE
+                + " In the game this shows as " + GAME_SIGNIN_ERROR + "."
             )
     exe = str(CONTENT / game_exe.relative_to(gd))
     # A Microsoft Store package keeps the executable encrypted at rest, so
@@ -1587,6 +1680,10 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
     if hasattr(lock_fds, "share"):
         lock_fds.share()
     glog = open(LOGS / "minecraft.log", "w")
+    # Flushed now: the game writes to the same file through its own
+    # descriptor, and a buffered preamble would land after its output.
+    glog.write(_game_log_preamble(xbox_signin))
+    glog.flush()
     # Everything above that writes a settings file has written it by now, so
     # what is written after this is the game's.
     session_started = time.time()
@@ -1810,13 +1907,20 @@ def _launch_once(lock_fds=(), on_started=None, notices=None, editor=False,
         if env.get("XCURL_LOG") == "1":
             _collect_xcurl_log(Path(gd))
         ok(f"Game closed (exit {rc}).")
-        if signed_out:
+        session_notice = None
+        if (xbox_failure is not None and game_returned
+                and xbox_failure.worth_a_notice(signed_out)):
+            # The game said only "Drowned"; the launcher knows why (#375).
+            session_notice = xbox_failure.notice(signed_out)
+        elif signed_out:
             # "My worlds stayed on the old version": a build that did not
             # sign in shows the signed-out profile, and nothing else says
             # where everything went.
-            warn(saves.SIGNED_OUT_NOTICE)
+            session_notice = saves.SIGNED_OUT_NOTICE
+        if session_notice:
+            warn(session_notice)
             if notices is not None:
-                notices.append(saves.SIGNED_OUT_NOTICE)
+                notices.append(session_notice)
         hits = diagnose()
     # Diagnose only; never reset or relaunch a GPU process automatically.
     broken = any("prefix broken" in h.lower() for h in hits)

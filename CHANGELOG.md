@@ -84,6 +84,20 @@
 
 ### Fixed
 
+- **"Error Code: Drowned" now comes with its cause (#375).** Minecraft shows
+  "Failed to login … Error Code: Drowned" for any Xbox Live sign-in that
+  did not happen: Drowned is its name for the generic failure code, and the
+  engine answers with it when the launcher could not prepare an Xbox Live
+  session, whatever the reason. The reason was only in the launcher's own
+  output, which no log kept, so a report showed the screenshot and nothing
+  else. The launcher now writes its version and the outcome of the Xbox
+  Live sign-in at the top of `minecraft.log`, with the stage, the HTTP
+  status, the Xbox error code and what to do about it, and once the game
+  has closed the window says why it could not sign in, instead of
+  suggesting an older version of Minecraft. Not reaching Xbox Live at all
+  stays a log line unless the session also hid your worlds. Since #386 the
+  engine no longer renews a Microsoft token of its own, which is how a
+  launcher that had prepared everything could still end at Drowned.
 - **"Report a problem" is offered only for what the launcher may have got
   wrong.** When PLAY stops on something the player fixes from the message
   itself (a Microsoft account that does not own the game, the ten-device

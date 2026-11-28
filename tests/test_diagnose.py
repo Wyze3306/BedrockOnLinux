@@ -443,3 +443,37 @@ class OnlineDiagnosisTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LauncherLinesInTheGameLogTests(unittest.TestCase):
+    """bol.launch writes its own lines at the top of minecraft.log (#375).
+
+    They explain a refused sign-in in words the rules also look for, so they
+    must not come back from diagnose() as a cause of their own.
+    """
+
+    LINE = ("Xbox Live: session NOT prepared (stage: microsoft-token). "
+            "Microsoft login failed with invalid_grant.")
+
+    def _diagnose(self, log):
+        with tempfile.TemporaryDirectory() as td:
+            logs = Path(td)
+            (logs / "minecraft.log").write_text(log, encoding="utf-8")
+            with mock.patch.object(gamesetup, "LOGS", logs), \
+                    mock.patch.object(gamesetup, "msa_signed_in",
+                                      return_value=True), \
+                    mock.patch.object(gamesetup, "load_settings",
+                                      return_value={}), \
+                    mock.patch.object(gamesetup, "warn"), \
+                    mock.patch.object(gamesetup, "info"):
+                return gamesetup.diagnose(quiet=True)
+
+    def test_the_launchers_lines_are_not_read_as_the_games(self):
+        self.assertEqual(
+            self._diagnose(gamesetup.GAME_LOG_TAG + " " + self.LINE + "\n"
+                           "INFO: umu-launcher version 1.4.3\n"), [])
+
+    def test_the_same_words_from_the_game_still_count(self):
+        hits = self._diagnose(self.LINE + "\n")
+        self.assertTrue(any("sign-in failed in-game" in hit for hit in hits),
+                        hits)
