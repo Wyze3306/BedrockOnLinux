@@ -151,6 +151,19 @@ _XBOX_SIGNIN_GENERIC = (
     "Check the Microsoft account/network connection and try again."
 )
 
+# The window shows each post-game notice under a title; the signed-out one has
+# always been "Your worlds are safe", which an Xbox Live refusal is not about.
+SIGNED_OUT_NOTICE_TITLE = "Your worlds are safe"
+XBOX_SIGNIN_NOTICE_TITLE = "Xbox Live sign-in failed"
+_XBOX_SIGNIN_NOTICE_LEAD = XBOX_SIGNIN_FAILED_NOTICE.split("{", 1)[0]
+
+
+def session_notice_title(message):
+    """The title over a notice _launch_once handed back after the game."""
+    if message.startswith(_XBOX_SIGNIN_NOTICE_LEAD):
+        return XBOX_SIGNIN_NOTICE_TITLE
+    return SIGNED_OUT_NOTICE_TITLE
+
 
 class XboxSigninFailure:
     """Why a linked account's Xbox Live session was not prepared.

@@ -7,7 +7,7 @@ from unittest import mock
 
 from PySide6.QtWidgets import QLabel, QMessageBox
 
-from bol import gui
+from bol import gui, launch
 from tests.guiharness import headless_window, qt_app
 
 
@@ -97,6 +97,23 @@ class SessionNoticeTests(unittest.TestCase):
                 mock.patch.object(window, "info_box") as shown:
             window._show_session_notice("signed out")
         shown.assert_called_once_with("Your worlds are safe", "signed out")
+
+    def test_an_xbox_live_refusal_is_not_titled_as_a_worlds_notice(self):
+        # #375: the notice explains "Drowned"; no world has to be missing.
+        refused = launch.XboxSigninFailure(detail="Sign in again.").notice()
+        with headless_window() as window, \
+                mock.patch.object(window, "info_box") as shown:
+            window._show_session_notice(refused)
+        shown.assert_called_once_with("Xbox Live sign-in failed", refused)
+
+    def test_the_desktop_notification_gets_the_same_title(self):
+        refused = launch.XboxSigninFailure().notice(signed_out=True)
+        with headless_window() as window, \
+                mock.patch.object(gui, "desktop_notify") as notify, \
+                mock.patch.object(window, "info_box"):
+            window.ui_state["window_gone"] = True
+            window._show_session_notice(refused)
+        self.assertEqual(notify.call_args.args[1], "Xbox Live sign-in failed")
 
     def test_with_the_window_gone_it_goes_to_the_desktop(self):
         with headless_window() as window, \

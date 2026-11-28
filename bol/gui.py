@@ -47,7 +47,8 @@ from . import betterrtx, engine_arch, gpus
 from .inject import run_injector
 from . import icons
 from .gui_profiles import ProfilesPage
-from .launch import direct_launch_readiness, launch, single_window_session
+from .launch import (direct_launch_readiness, launch, session_notice_title,
+                     single_window_session)
 from . import saves
 from .navigation import ControllerNav
 from . import log, supervision
@@ -3631,10 +3632,11 @@ class MainWindow(QMainWindow):
         return box.clickedButton() is copy
 
     def _show_session_notice(self, message):
+        title = session_notice_title(message)
         if self.ui_state.get("window_gone"):
-            desktop_notify(message[:400], "Your worlds are safe")
+            desktop_notify(message[:400], title)
             return
-        self.info_box("Your worlds are safe", message)
+        self.info_box(title, message)
 
     def _close_for_game(self):
         """The player asked for this in Settings ▸ General: the window goes

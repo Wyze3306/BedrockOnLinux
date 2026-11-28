@@ -93,8 +93,9 @@
   else. The launcher now writes its version and the outcome of the Xbox
   Live sign-in at the top of `minecraft.log`, with the stage, the HTTP
   status, the Xbox error code and what to do about it, and once the game
-  has closed the window says why it could not sign in, instead of
-  suggesting an older version of Minecraft. Not reaching Xbox Live at all
+  has closed the window says why it could not sign in, under an "Xbox
+  Live sign-in failed" title, instead of suggesting an older version of
+  Minecraft. Not reaching Xbox Live at all
   stays a log line unless the session also hid your worlds. Since #386 the
   engine no longer renews a Microsoft token of its own, which is how a
   launcher that had prepared everything could still end at Drowned.
