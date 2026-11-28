@@ -388,14 +388,15 @@ MC_PRODUCTS = (
     # game (issue #351, bol.wustore). Its own "title": none of Bedrock's
     # fixups apply, and hiding Bedrock's sign-in button would take away the
     # only way into it. "xbox_live": False keeps the Xbox Live account and
-    # its pre-auth away from it.
+    # its pre-auth away from it. "gameinput": False: it neither uses
+    # GameInput nor ships its redist, and its mouse works without it.
     {"id": "education", "product": "9NBLGGH4R2R6", "channel": "education",
      "source": "windows-update",
      "family": "Microsoft.MinecraftEducationEdition_8wekyb3d8bbwe",
      "wu_category": "df31e196-d4c7-4a25-8e23-2788c261f328",
      "content_id": "ad6a119f-978a-62c1-5f10-c017dde2343a",
      "name": "Minecraft Education", "beta": False, "xbox_live": False,
-     "title": "education", "catalogue": "windows-update",
+     "gameinput": False, "title": "education", "catalogue": "windows-update",
      "short": "Education", "exe": "Minecraft.Windows.exe"},
     # Minecraft for Windows as it shipped up to 1.21.51: UWP packages, which
     # Windows Update still serves, run on wine-uwp (#387, bol.uwp). The same

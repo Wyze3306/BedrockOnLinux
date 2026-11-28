@@ -69,6 +69,13 @@ class EditionTests(unittest.TestCase):
                 self.assertTrue(games.uses_xbox_live(bedrock))
                 self.assertTrue(games.uses_xbox_live(bare))
 
+                # Education does not use GameInput: no redist to install,
+                # no mouse to warn about.
+                self.assertFalse(games.uses_gameinput(managed))
+                self.assertFalse(games.uses_gameinput(dropped))
+                self.assertTrue(games.uses_gameinput(bedrock))
+                self.assertTrue(games.uses_gameinput(bare))
+
 
 class VersionListingTests(unittest.TestCase):
     def test_education_builds_come_from_windows_update(self):
@@ -162,7 +169,9 @@ class SetupTests(unittest.TestCase):
                      "hide_signin_button"):
             with self.subTest(step=name):
                 mocks[name].assert_not_called()
-        mocks["install_gameinput"].assert_called_once()
+        # It ships no GameInput redist: installing it only warned that the
+        # mouse would not work, while the game's own input works (#351).
+        mocks["install_gameinput"].assert_not_called()
         self.assertIn("school or work account",
                       mocks["ok"].call_args[0][0])
 
@@ -171,7 +180,7 @@ class SetupTests(unittest.TestCase):
             mocks = self._setup(_write_game(Path(td) / "mc",
                                             manifest=BEDROCK_MANIFEST))
         for name in ("install_gdk_xbox_dlls", "fix_curl_ssl",
-                     "hide_signin_button"):
+                     "hide_signin_button", "install_gameinput"):
             with self.subTest(step=name):
                 mocks[name].assert_called_once()
 

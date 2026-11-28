@@ -28,6 +28,7 @@ from .games import (
     selected_edition,
     prune_legacy_game_archives,
     use_game_dir,
+    uses_gameinput,
     uses_xbox_live,
     version_dir,
 )
@@ -187,7 +188,8 @@ def _do_setup(game_dir=None, mc_edition=None, mc_version=None, proton_tag=None,
             "setup stopped before installing GameInput"))
         exc.player_fixable = prefix_mod.LAST_BOOT_FIXABLE
         raise exc
-    install_gameinput(active_prefix(), gd)
+    if uses_gameinput(gd):
+        install_gameinput(active_prefix(), gd)
     if not xbox_live:
         ok("Setup complete — click PLAY, then sign in to Minecraft Education "
            "with your school or work account.")

@@ -172,7 +172,7 @@ class ReadyLaunchHarness:
                              "hide_signin_button", "apply_branding",
                              "msa_refresh", "seed_default_servers",
                              "_prefix_stably_idle_after_wrapper",
-                             "proton_umu_cmd")
+                             "install_gameinput", "proton_umu_cmd")
             }
             self.launch_mocks["msal_flights.start"] = launch.msal_flights.start
             return launch._launch_once(lock_fds=lock_fds,
@@ -924,7 +924,7 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         for name in ("msa_refresh", "wine_reg_set_refresh_token",
                      "ensure_login_deps", "xbl_preauth",
                      "hide_signin_button", "apply_branding",
-                     "seed_default_servers"):
+                     "seed_default_servers", "install_gameinput"):
             with self.subTest(step=name):
                 self.launch_mocks[name].assert_not_called()
         self.assertEqual(self.xbl_calls, [])
@@ -958,6 +958,7 @@ class GraphicsEngineLaunchTests(ReadyLaunchHarness, unittest.TestCase):
         self.launch_mocks["hide_signin_button"].assert_called_once()
         self.launch_mocks["apply_branding"].assert_called_once()
         self.launch_mocks["seed_default_servers"].assert_called_once()
+        self.launch_mocks["install_gameinput"].assert_called_once()
         self.launch_mocks["msal_flights.start"].assert_not_called()
 
     def test_unusable_preauth_payload_is_withheld_from_the_engine(self):
