@@ -1223,6 +1223,27 @@ class NativeAuthCancellationTests(unittest.TestCase):
                 token, _epoch = auth.msa_session_snapshot()
         self.assertEqual(token, {})
 
+    def test_only_a_legacy_token_was_signed_out_by_the_update(self):
+        # #396: the launcher has to tell "this update signed you out" from
+        # "you never signed in", or the account's skin packs missing in-game
+        # read as content lost.
+        cases = (
+            ({"refresh_token": "M.C5xx-legacy"}, True),
+            ({"refresh_token": auth.XODUS_XBL_TOKEN}, False),
+            ({}, False),
+            (None, False),
+        )
+        for stored, expected in cases:
+            with self.subTest(stored=stored), \
+                    tempfile.TemporaryDirectory() as td:
+                msa = Path(td) / "msa"
+                msa.mkdir()
+                if stored is not None:
+                    (msa / "token.json").write_text(json.dumps(stored))
+                with mock.patch.object(auth, "MSA_DIR", msa):
+                    self.assertEqual(auth.msa_signed_out_by_update(),
+                                     expected)
+
     def test_msa_refresh_result_xodus_xbl_uses_xodus_tickets(self):
         with mock.patch.object(
             auth, "_xodus_xbl_tickets",

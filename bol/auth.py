@@ -90,6 +90,18 @@ def msa_signed_in():
     return msa_load().get("refresh_token") == XODUS_XBL_TOKEN
 
 
+def msa_signed_out_by_update():
+    """Whether the account on file is one an earlier version linked.
+
+    Its token predates #386 and is no account to this version, so the update
+    signs the player out once. Nothing looks wrong until the game runs
+    without Xbox Live, and then what the account owns is missing from it: the
+    skin packs in the Dressing Room, free ones included (#396).
+    """
+    token = msa_load().get("refresh_token")
+    return bool(token) and token != XODUS_XBL_TOKEN
+
+
 def msa_gamertag():
     if not msa_signed_in():
         return None

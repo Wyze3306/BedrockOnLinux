@@ -46,6 +46,9 @@ def headless_window(store_signed_in=False, **settings):
     patches = [
         mock.patch.object(gui, "NativeAuth"),
         mock.patch.object(gui, "msa_signed_in", return_value=False),
+        # The real token.json must not decide which warning a test sees.
+        mock.patch.object(gui, "msa_signed_out_by_update",
+                          return_value=False),
         mock.patch.object(gui, "msa_gamertag", return_value=None),
         mock.patch.object(gui, "current_profile_name", return_value="Default"),
         mock.patch.object(gui, "current_profile_info", return_value={"path": None}),

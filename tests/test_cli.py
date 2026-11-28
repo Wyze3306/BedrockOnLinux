@@ -51,6 +51,8 @@ class CliTests(unittest.TestCase):
         output = io.StringIO()
         with mock.patch.object(sys, "argv", ["bedrock-on-linux", "play"]), \
                 mock.patch.object(cli, "msa_signed_in", return_value=False), \
+                mock.patch.object(cli, "msa_signed_out_by_update",
+                                  return_value=False), \
                 mock.patch.object(cli, "_plays_xbox_live", return_value=True), \
                 mock.patch.object(cli, "launch") as launch, \
                 contextlib.redirect_stdout(output):
@@ -60,6 +62,28 @@ class CliTests(unittest.TestCase):
         self.assertTrue(launch.called)
         printed = output.getvalue()
         self.assertIn("Not signed in for online play", printed)
+        # What a player notices first in-game (#396).
+        self.assertIn("skin packs", printed)
+        self.assertIn("login", printed)
+
+    def test_play_says_the_update_signed_the_account_out(self):
+        # #396: an account an earlier version linked is signed out once by
+        # this one (#386). "Not signed in" would read as the launcher having
+        # lost it, and the skin packs missing in-game as content gone.
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", ["bedrock-on-linux", "play"]), \
+                mock.patch.object(cli, "msa_signed_in", return_value=False), \
+                mock.patch.object(cli, "msa_signed_out_by_update",
+                                  return_value=True), \
+                mock.patch.object(cli, "_plays_xbox_live", return_value=True), \
+                mock.patch.object(cli, "launch") as launch, \
+                contextlib.redirect_stdout(output):
+            cli.main()
+
+        self.assertTrue(launch.called)
+        printed = output.getvalue()
+        self.assertIn("Signed out by this update", printed)
+        self.assertIn("skin packs", printed)
         self.assertIn("login", printed)
 
     def test_play_says_nothing_when_the_account_is_there(self):
