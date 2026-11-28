@@ -281,7 +281,7 @@ def ensure_proton(tag=None, force=False, progress=None):
             # cannot modify or remove the active engine.
             patch_proton(root, strict=False)
             target = _installation_target(cur, "GDK-Proton-custom")
-            updated = dict(s)
+            updated = s.copy()
             updated["proton"], updated["proton_tag"] = str(target), want
             _activate_proton(
                 root, target, commit=lambda: save_settings(updated))
@@ -318,7 +318,7 @@ def ensure_proton(tag=None, force=False, progress=None):
         root = _find_proton_root(staging)
         patch_proton(root)
         target = _installation_target(cur, "GDK-Proton-stock")
-        updated = dict(s)
+        updated = s.copy()
         updated["proton"], updated["proton_tag"] = str(target), tag
         _activate_proton(root, target, commit=lambda: save_settings(updated))
     except Exception as exc:

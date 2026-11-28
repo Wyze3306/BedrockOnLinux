@@ -135,6 +135,15 @@
 
 ### Fixed
 
+- **Turning off "Keep the mouse inside the window" always removes its
+  virtual desktop.** The launcher remembered that it had set Wine's virtual
+  desktop in settings.json, and any stale write of the settings could reset
+  that, so the game kept running in a fixed-size desktop window for good.
+  The launcher now marks the desktop it sets in the prefix's registry, next
+  to it, and removes only a marked one; a virtual desktop set up by hand in
+  winecfg is left alone. Saving the settings also writes back only the
+  values that changed, so a copy kept during a download or by the window no
+  longer undoes what another part of the launcher saved meanwhile (#324).
 - **Minecraft Education keeps signing in after its next update.** The
   switch that keeps a school account out of Windows' account broker was
   only found in the one build the launcher had been measured on

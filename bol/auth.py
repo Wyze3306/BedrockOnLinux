@@ -29,11 +29,25 @@ from .log import BolError, die, err, info, ok, warn
 from .prefix import active_prefix, prefix_operation_lock
 from .util import http_post_form, load_settings, save_settings
 from .wine_registry import (
+    read_user_string,
     reg_delete,
     reg_dword,
     reg_sz,
     update_prefix_registry,
 )
+
+# "Keep the mouse inside the window" runs the game in Wine's virtual desktop,
+# set in the prefix's user hive. The mark next to it says the launcher set
+# that desktop, so the launcher takes it away again when the setting is
+# turned off. A desktop set up by hand (winecfg) has no mark and is left
+# alone. The mark used to be "_confine_applied" in settings.json, far from
+# the values it stood for: any stale write of the settings put it back to
+# False, and the desktop then stayed for good (#324: a 1600x900 desktop
+# left in a prefix from 2026-11-12 to 2026-11-28).
+_EXPLORER_KEY = r"Software\Wine\Explorer"
+_DESKTOPS_KEY = r"Software\Wine\Explorer\Desktops"
+_DESKTOP_MARK = "BedrockOnLinux"
+_DESKTOP_MARK_VALUE = "confine_cursor"
 
 _MSA_APP_ID = re.compile(r"<MSAAppId>\s*([0-9A-Fa-f]{16})\s*</MSAAppId>")
 
@@ -1941,41 +1955,52 @@ def wine_apply_winegdk_prereqs():
     # This remains opt-in because it changes windowing for the whole prefix.
     from . import virtual_desktop
     from .util import _screen_wh
+    prefix = active_prefix()
     confine = virtual_desktop.requested()
-    applied = load_settings().get("_confine_applied", False)
-    if confine:
+    ours = read_user_string(prefix, _EXPLORER_KEY, _DESKTOP_MARK) is not None
+    hand_set = (not ours and read_user_string(
+        prefix, _EXPLORER_KEY, "Desktop") is not None)
+    # Launchers before 3.0.0 kept their mark in settings.json only; it moves
+    # to the registry once this launch has written the registry.
+    settings = load_settings()
+    legacy = "_confine_applied" in settings
+    if settings.get("_confine_applied"):
+        ours, hand_set = True, False
+    wh = None
+    if confine and not hand_set:
         # Re-ensure every launch (not just on the enable edge) so the keys
         # survive a prefix reset, which recreates the prefix and would wipe
         # them.
         wh = _screen_wh() or ("1920", "1080")
         user.extend([
-            reg_sz(r"Software\Wine\Explorer", "Desktop", "Default"),
-            reg_sz(r"Software\Wine\Explorer\Desktops", "Default",
-                   f"{wh[0]}x{wh[1]}"),
+            reg_sz(_EXPLORER_KEY, "Desktop", "Default"),
+            reg_sz(_DESKTOPS_KEY, "Default", f"{wh[0]}x{wh[1]}"),
+            reg_sz(_EXPLORER_KEY, _DESKTOP_MARK, _DESKTOP_MARK_VALUE),
         ])
-    elif applied:
+    elif not confine and ours:
         user.extend([
-            reg_delete(r"Software\Wine\Explorer", "Desktop"),
-            reg_delete(r"Software\Wine\Explorer\Desktops", "Default"),
+            reg_delete(_EXPLORER_KEY, "Desktop"),
+            reg_delete(_DESKTOPS_KEY, "Default"),
+            reg_delete(_EXPLORER_KEY, _DESKTOP_MARK),
         ])
 
     try:
-        update_prefix_registry(active_prefix(), machine=machine, user=user)
+        update_prefix_registry(prefix, machine=machine, user=user)
     except Exception as e:
         die("Could not configure the offline WineGDK registry safely "
             f"({type(e).__name__}). Repair the managed Wine prefix and try "
             "again.")
 
-    if confine:
-        if not applied:
-            s2 = load_settings()
-            s2["_confine_applied"] = True
-            save_settings(s2)
-        ok(f"Cursor confinement ON (virtual desktop {wh[0]}x{wh[1]}).")
-    elif applied:
+    if legacy:
         s2 = load_settings()
-        s2["_confine_applied"] = False
+        s2.pop("_confine_applied", None)
         save_settings(s2)
+    if wh is not None:
+        ok(f"Cursor confinement ON (virtual desktop {wh[0]}x{wh[1]}).")
+    elif confine:
+        ok("Cursor confinement ON (the Wine virtual desktop already set up "
+           "in the prefix).")
+    elif ours:
         ok("Cursor confinement OFF (virtual desktop removed).")
     ok("WineGDK prereqs applied offline (ConsoleMode=8, TLS 1.2 forced, "
        "UI muted)")
