@@ -80,6 +80,10 @@ def main():
     from .hostarch import relaunch_in_muvm
     relaunch_in_muvm()
     relaunch_in_profile()
+    # Before the first HTTPS request: an OpenSSL from Guix or Nix finds no
+    # certificates of its own (#249).
+    from .util import use_system_certificates
+    use_system_certificates()
     if len(sys.argv) > 1 and sys.argv[1] == "optiscaler":
         from .optiscaler import cli_main
         entry = lambda: cli_main(sys.argv[2:])

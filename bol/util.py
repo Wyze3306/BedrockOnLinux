@@ -261,6 +261,54 @@ def launcher_command(*arguments, environ=None, argv=None,
     return command(APP)
 
 
+def _pem_file(path):
+    try:
+        with open(path, "rb") as stream:
+            return b"-----BEGIN CERTIFICATE-----" in stream.read(1 << 16)
+    except OSError:
+        return False
+
+
+def _pem_dir(path):
+    try:
+        with os.scandir(path) as entries:
+            return any(entry.name.lower().endswith((".pem", ".crt", ".0"))
+                       and _pem_file(entry.path) for entry in entries)
+    except OSError:
+        return False
+
+
+def use_system_certificates(environ=None):
+    """Give OpenSSL the system's CA bundle when its own defaults hold none.
+
+    Python checks every HTTPS request of the launcher against the
+    certificates OpenSSL finds by default. A Python built against Guix's or
+    Nix's OpenSSL looks in that OpenSSL's own store directory, which is
+    empty: those systems export SSL_CERT_FILE / SSL_CERT_DIR instead. A
+    session that does not (Guix on another distribution), or whose settings
+    name a profile the sandbox cannot see (~/.guix-profile under nonguix's
+    sandbox home), failed the very first request with
+    CERTIFICATE_VERIFY_FAILED, before any sign-in (#249). Set in the
+    environment, the bundle is also what xodus-cli and the game inherit.
+    Returns the bundle chosen, or None when nothing had to change.
+    """
+    environ = os.environ if environ is None else environ
+    import ssl
+    paths = ssl.get_default_verify_paths()
+    cafile = environ.get(paths.openssl_cafile_env) or paths.openssl_cafile
+    capath = environ.get(paths.openssl_capath_env) or paths.openssl_capath
+    if _pem_file(cafile) or any(_pem_dir(folder) for folder
+                                in (capath or "").split(os.pathsep)
+                                if folder):
+        return None
+    from .fixups import _system_ca_bundle
+    bundle = _system_ca_bundle()
+    if bundle is None:
+        return None
+    environ[paths.openssl_cafile_env] = str(bundle)
+    return bundle
+
+
 def http_json(url, timeout=10):
     # Never forward ambient credentials to these public endpoints.
     headers = {"User-Agent": APP, "Accept": "application/vnd.github+json"}
